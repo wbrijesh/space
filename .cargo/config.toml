@@ -1,0 +1,3 @@
+# GPUI compiles Metal shaders; use full Xcode without changing the global xcode-select.
+[env]
+DEVELOPER_DIR = "/Applications/Xcode.app/Contents/Developer"
