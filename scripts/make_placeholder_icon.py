@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Draw Space's PLACEHOLDER app icon (the real logo is yet to come).
 
-A neutral graphite tile with a dashed inner frame and three primitive shapes (circle, square,
+A neutral light-grey tile with a dashed inner frame and three primitive shapes (circle, square,
 triangle): deliberately generic, so nobody mistakes it for a logo.
 
 Writes to crates/space-app/resources/:
@@ -21,18 +21,27 @@ DEVELOPER_DIR = "/Applications/Xcode.app/Contents/Developer"
 S = 4          # supersampling
 N = 1024 * S   # full-bleed canvas
 
-TOP, BOTTOM = (74, 76, 82), (36, 37, 41)
-FRAME = (205, 207, 213, 170)
-INK = (232, 234, 239, 255)
+# Light grey, like an "image goes here" box. macOS 26 draws a bright glass rim around every app
+# icon; on a dark tile it reads as a silver frame, on a light one it disappears.
+TOP, BOTTOM = (238, 239, 242), (208, 210, 216)
+FRAME = (126, 129, 138, 210)
+INK = (72, 75, 84, 255)
 
 
-def art():
-    """Full-bleed square artwork (the system applies the squircle mask)."""
+def background():
+    """The graphite gradient (only for the pre-masked PNG; the .icon uses a fill for this)."""
     img = Image.new("RGBA", (N, N))
     d = ImageDraw.Draw(img)
     for y in range(N):
         t = y / N
         d.line([(0, y), (N, y)], fill=tuple(int(a + (b - a) * t) for a, b in zip(TOP, BOTTOM)) + (255,))
+    return img.resize((1024, 1024), Image.LANCZOS)
+
+
+def glyphs():
+    """Dashed frame and shapes on transparency, full-bleed coordinates (the system masks the tile)."""
+    img = Image.new("RGBA", (N, N), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
 
     # Dashed inner frame ("something goes here"), inside the mask's safe area.
     fi, fr = 168 * S, 120 * S
@@ -62,7 +71,6 @@ def art():
     d.rounded_rectangle([c - q, c - q, c + q, c + q], 6 * S, outline=INK, width=sw)
     tx, h = c + gapx, r * 2.0
     top, right, left = (tx, c - h * 0.56), (tx + h * 0.56, c + h * 0.44), (tx - h * 0.56, c + h * 0.44)
-    d.polygon([top, right, left], outline=None)
     d.line([top, right, left, top, right], fill=INK, width=sw, joint="curve")
     return img.resize((1024, 1024), Image.LANCZOS)
 
@@ -80,16 +88,22 @@ def squircle_png(full):
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    full = art()
+    marks = glyphs()
+    full = background()
+    full.alpha_composite(marks)
     squircle_png(full).save(OUT / "AppIcon.png")
 
     bundle = OUT / "AppIcon.icon"
     shutil.rmtree(bundle, ignore_errors=True)
     (bundle / "Assets").mkdir(parents=True)
-    full.convert("RGB").save(bundle / "Assets" / "art.png")
+    marks.save(bundle / "Assets" / "art.png")
+    srgb = lambda c: "srgb:" + ",".join(f"{v / 255:.5f}" for v in c) + ",1.00000"
     (bundle / "icon.json").write_text(json.dumps({
+        # Our own background. Without a fill, macOS paints its default light gradient, which
+        # shows as a grey band around the artwork.
+        "fill": {"linear-gradient": [srgb(TOP), srgb(BOTTOM)]},
         "groups": [{
-            "layers": [{"image-name": "art.png", "name": "art"}],
+            "layers": [{"image-name": "art.png", "name": "art", "glass": False}],
             "shadow": {"kind": "none", "opacity": 0},
             "translucency": {"enabled": False, "value": 0},
             "specular": False,

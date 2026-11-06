@@ -1,10 +1,17 @@
 {
+  "fill": {
+    "linear-gradient": [
+      "srgb:0.93333,0.93725,0.94902,1.00000",
+      "srgb:0.81569,0.82353,0.84706,1.00000"
+    ]
+  },
   "groups": [
     {
       "layers": [
         {
           "image-name": "art.png",
-          "name": "art"
+          "name": "art",
+          "glass": false
         }
       ],
       "shadow": {
