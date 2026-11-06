@@ -262,7 +262,7 @@ pub fn permission_row(permission: NotificationPermission, h: &SettingsHandlers) 
                 ),
             )
         }
-        NotificationPermission::Unbundled => ("Unavailable outside the app bundle — run with `just run`.", None),
+        NotificationPermission::Unbundled => ("Unavailable in this build. Launch Space with just run to turn them on.", None),
     };
     row("macOS permission", desc, control)
 }
