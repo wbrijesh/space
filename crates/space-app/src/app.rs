@@ -220,7 +220,7 @@ impl SpaceApp {
     fn new(host: Host, mut events: EventReceiver, options: Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx).placeholder("Describe a task or ask a question");
-            state.set_auto_grow(1, 12, cx);
+            state.set_auto_grow(1, 10, cx);
             state.set_submit_on_enter(true, cx);
             state
         });

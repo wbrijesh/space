@@ -10,6 +10,7 @@
 //! move 120 300        move the mouse to window coordinates (logical px)
 //! click 120 300       move + left mouse down + up
 //! key cmd-n           dispatch a keystroke
+//! type some text      type text into the focused element
 //! resize 1280 820     resize the window (logical px)
 //! shot name           run `$SPACE_SHOT_CMD name` (e.g. a script calling `screencapture -l`)
 //! quit                quit the app
@@ -91,6 +92,21 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                             window.refresh();
                         });
                     }
+                }
+                "type" => {
+                    let text = line.strip_prefix("type").unwrap_or("").trim_start().to_string();
+                    let _ = window.update(cx, |_, window, cx| {
+                        for ch in text.chars() {
+                            let key = if ch == ' ' { "space".to_string() } else { ch.to_string() };
+                            let stroke = Keystroke {
+                                modifiers: Modifiers::default(),
+                                key,
+                                key_char: Some(ch.to_string()),
+                            };
+                            window.dispatch_keystroke(stroke, cx);
+                        }
+                        window.refresh();
+                    });
                 }
                 "shot" => {
                     // Let a frame render before capturing.

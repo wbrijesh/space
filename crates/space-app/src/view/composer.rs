@@ -47,7 +47,7 @@ pub fn render(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -
     let send: AnyElement = if running {
         div()
             .id("stop")
-            .size(px(30.))
+            .size(px(BUTTON))
             .flex_none()
             .rounded_full()
             .flex()
@@ -63,7 +63,7 @@ pub fn render(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -
     } else {
         div()
             .id("send")
-            .size(px(30.))
+            .size(px(BUTTON))
             .flex_none()
             .rounded_full()
             .flex()
@@ -83,16 +83,44 @@ pub fn render(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -
             .into_any_element()
     };
 
+    // One row: [+] [text, grows up to 10 lines] [send]. Buttons stay pinned to the bottom
+    // as the text grows. 8px padding + 32px buttons = a 50px card for one line.
+    // No gap after "+": its icon already has 8px of air, plus the editor's 4px.
+    let row = div()
+        .flex()
+        .items_end()
+        .child(
+            icon_button("attach", IconName::Plus, true, false)
+                .size(px(BUTTON))
+                .rounded_full()
+                .tooltip(tip("Attach files or folders"))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.focus_composer(window, cx);
+                    this.attach_files(cx);
+                })),
+        )
+        .child(
+            // Line height 20 + 6px top/bottom = the 32px button height, so a single line
+            // sits on the buttons' center line.
+            div()
+                .flex_1()
+                .min_w_0()
+                .py(px((BUTTON - LINE) / 2.))
+                .child(
+                    // XSmall: no vertical editor padding, 4px horizontal.
+                    Textarea::new(&app.input).appearance(false).xsmall().text_size(theme::TEXT_BODY),
+                ),
+        )
+        .child(div().flex_none().ml_1p5().child(send));
+
     let card = div()
         .id("composer-card")
         .w_full()
         .flex()
         .flex_col()
-        .gap_1()
-        .px_2()
-        .pt_2p5()
-        .pb_2()
-        .rounded(px(16.))
+        .gap_2()
+        .p(px(PAD))
+        .rounded(px(18.))
         .bg(theme::surface())
         .border_1()
         .border_color(if focused { theme::border_strong() } else { theme::border() })
@@ -101,29 +129,21 @@ pub fn render(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -
         // Clicking the card's padding focuses the input, like a real text field.
         .on_click(cx.listener(|this, _, window, cx| this.focus_composer(window, cx)))
         .when(has_attachments, |d| d.child(chips))
-        .child(
-            div()
-                .px_1p5()
-                .text_size(theme::TEXT_BODY)
-                .line_height(relative(1.5))
-                .child(Textarea::new(&app.input).appearance(false)),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    icon_button("attach", IconName::Plus, true, false)
-                        .rounded_full()
-                        .tooltip(tip("Attach files or folders"))
-                        .on_click(cx.listener(|this, _, _, cx| this.attach_files(cx))),
-                )
-                .child(send),
-        );
+        .child(row);
 
-    div().w_full().flex().flex_col().gap_1p5().child(card).child(controls(app, window, cx))
+    div().w_full().flex().flex_col().gap_2().child(card).child(controls(app, window, cx))
 }
+
+/// Card padding, button size and text line height (logical px).
+const PAD: f32 = 8.;
+const BUTTON: f32 = 32.;
+/// The textarea's line height: 1.25rem.
+const LINE: f32 = 20.;
+/// Horizontal inset of the control row so its first icon centers under "+" (card border 1 +
+/// padding 8 + half the button 16 = 25; minus half the 14px folder icon and the menu
+/// button's 8px padding) and the context ring's right edge meets the send button's (1 + 8).
+const ROW_INSET_LEFT: f32 = 1. + PAD + BUTTON / 2. - 7. - 8.;
+const ROW_INSET_RIGHT: f32 = 1. + PAD;
 
 fn menu_trigger(id: &'static str, window: &Window) -> Button {
     Button::new(id)
@@ -250,45 +270,65 @@ fn controls(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> 
         });
     }
 
-    if let (Some(tokens), Some(window_size)) = (status.context_tokens, status.context_window)
-        && window_size > 0
-        && tokens > 0
-    {
-        let frac = (tokens as f32 / window_size as f32).clamp(0., 1.);
-        let pct = (frac * 100.).round() as u32;
-        let color = if frac > 0.85 {
-            theme::red()
-        } else if frac > 0.6 {
-            theme::yellow()
-        } else {
-            theme::text_3()
-        };
-        right = right.child(
-            div()
-                .id("context-meter")
-                .flex()
-                .items_center()
-                .gap_1p5()
-                .h(px(24.))
-                .px_2()
-                .rounded(px(7.))
-                .hover(|s| s.bg(theme::hover()))
-                .child(
-                    div()
-                        .w(px(28.))
-                        .h(px(4.))
-                        .rounded_full()
-                        .bg(theme::pressed())
-                        .child(div().h_full().rounded_full().bg(color).w(px((28. * frac).max(2.)))),
-                )
-                .child(div().font_family(theme::MONO_FONT).text_size(theme::TEXT_XS).text_color(theme::text_3()).child(if pct == 0 { "<1%".to_string() } else { format!("{pct}%") }))
-                .tooltip(tip(format!(
-                    "Context: {} of {} tokens",
-                    format::compact_tokens(tokens),
-                    format::compact_tokens(window_size)
-                ))),
-        );
-    }
+    // Context usage: always shown; exact numbers on hover.
+    let tokens = status.context_tokens.unwrap_or(0);
+    let tooltip = match status.context_window.filter(|w| *w > 0) {
+        Some(window_size) => {
+            let pct = tokens as f64 / window_size as f64 * 100.;
+            let pct = if tokens > 0 && pct < 1. { "<1%".to_string() } else { format!("{pct:.0}%") };
+            format!(
+                "Context: {} / {} tokens · {pct}",
+                format::compact_tokens(tokens),
+                format::compact_tokens(window_size)
+            )
+        }
+        None => "Context usage not reported yet".to_string(),
+    };
+    let frac = status.context_window.filter(|w| *w > 0).map_or(0., |w| tokens as f32 / w as f32);
+    right = right.child(div().id("context-ring").ml_2().child(context_ring(frac)).tooltip(tip(tooltip)));
 
-    div().flex().items_center().justify_between().px_0p5().child(folder).child(right)
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .pl(px(ROW_INSET_LEFT))
+        .pr(px(ROW_INSET_RIGHT))
+        .child(folder)
+        .child(right)
+}
+
+/// 16px ring: muted track, accent arc from 12 o'clock clockwise for `frac` of the circle.
+fn context_ring(frac: f32) -> impl IntoElement {
+    const SIZE: f32 = 16.;
+    const STROKE: f32 = 2.;
+    let frac = frac.clamp(0., 1.);
+    // Any usage at all gets a visible sliver.
+    let sweep = if frac > 0. { frac.max(0.04) } else { 0. };
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let center = bounds.center();
+            let r = (SIZE - STROKE) / 2.;
+            let arc = |from: f32, to: f32| {
+                let steps = ((to - from) * 64.).ceil().max(2.) as usize;
+                let mut path = PathBuilder::stroke(px(STROKE));
+                for i in 0..=steps {
+                    let t = from + (to - from) * i as f32 / steps as f32;
+                    let a = -std::f32::consts::FRAC_PI_2 + t * std::f32::consts::TAU;
+                    let p = point(center.x + px(r * a.cos()), center.y + px(r * a.sin()));
+                    if i == 0 { path.move_to(p) } else { path.line_to(p) }
+                }
+                path.build().ok()
+            };
+            if let Some(track) = arc(0., 1.) {
+                window.paint_path(track, theme::border_strong());
+            }
+            if sweep > 0.
+                && let Some(progress) = arc(0., sweep)
+            {
+                window.paint_path(progress, theme::accent());
+            }
+        },
+    )
+    .size(px(SIZE))
 }

@@ -61,11 +61,13 @@ plugin list; the agent's status sits in the sidebar footer.
   yellow: waiting for your input). ⌘B hides the sidebar.
 - **Title bar**: sidebar toggle, back/forward through the threads you visited (⌘[ / ⌘]), new
   thread (⌘N), and the current thread's title and folder. Drag it to move the window.
-- **Composer**: Enter sends, Shift+Enter adds a newline; while the agent works the send button
+- **Composer**: one row, **+** · text · send. The text area starts one line tall and grows up to
+  ten lines before it scrolls; Enter sends, Shift+Enter adds a newline. While the agent works, send
   becomes Stop (`session/cancel`). **+** attaches files or folders (sent as ACP `resource_link`s).
-  Below the card: the project folder (switch it while the thread is empty, otherwise pick a folder to
-  start a new thread there), the model and the thinking effort (both switch the session through
-  `_space/session/configure`, and new threads inherit your last choice), and context usage.
+  Below the card: the project folder (switch it while the thread is empty, otherwise pick a folder
+  to start a new thread there), the model and thinking effort (both switch the session through
+  `_space/session/configure`, and new threads inherit your last choice), and a context ring
+  (hover for token counts).
 - **Transcript**: your messages as bubbles, replies as markdown, thinking collapsed as
   "Thought for Ns", tool calls as compact rows that expand to their output, permission cards
   (Allow/Reject).
