@@ -272,8 +272,14 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
             draft: t.draft.clone(),
         })
         .collect();
-    let options =
-        Options { project_dir: project_dir.to_path_buf(), agent: Some("stub".into()), seed, select: scenario.select };
+    let options = Options {
+        project_dir: project_dir.to_path_buf(),
+        agent: Some("stub".into()),
+        seed,
+        select: scenario.select,
+        // Scripted turns end instantly; alerts only on request (`SPACE_NOTIFY=1`).
+        notify: std::env::var("SPACE_NOTIFY").is_ok_and(|v| v == "1"),
+    };
     Ok((host, options))
 }
 

@@ -17,9 +17,13 @@ build-plugin:
         echo "skipping {{plugin}}: no package.json"
     fi
 
-# Launch the desktop app on a project directory
-run dir=project: build
-    cargo run -p space-app -- {{dir}}
+# Wrap the built binary in target/<profile>/Space.app (bundle id, icon; needed for notifications)
+bundle profile="debug":
+    scripts/bundle.sh {{profile}}
+
+# Launch the desktop app on a project directory (from the .app bundle, so notifications work)
+run dir=project: build (bundle "debug")
+    ./target/debug/Space.app/Contents/MacOS/Space {{dir}}
 
 # Launch and send a prompt in the first thread (billed when using pi-agent)
 demo prompt="": build
@@ -28,16 +32,19 @@ demo prompt="": build
 # Dev: component gallery (tokens, every component state, animation clock controls)
 gallery:
     cargo build --workspace
-    ./target/debug/Space --gallery
+    scripts/bundle.sh debug >/dev/null
+    ./target/debug/Space.app/Contents/MacOS/Space --gallery
 
 # Dev: boot the real app into a scripted state (stub agent); `just scenario name=list`
 scenario name="many-threads":
     cargo build --workspace
-    ./target/debug/Space --scenario {{name}} {{project}}
+    scripts/bundle.sh debug >/dev/null
+    ./target/debug/Space.app/Contents/MacOS/Space --scenario {{name}} {{project}}
 
 # Release build without dev tooling (no gallery, scenarios or clock controls)
 release:
     cargo build --release -p space-app --no-default-features
+    scripts/bundle.sh release
 
 # Run all Rust tests (uses the space-stub-agent, no model calls)
 test:

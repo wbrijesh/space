@@ -31,3 +31,12 @@ tracing-subscriber.workspace = true
 # GPUI via gpui-kit 0.9.0: re-exports gpui-pre 0.3.11 (crates.io snapshot of Zed's GPUI),
 # its macOS platform, and gpui-component. Renamed to `gpui` so GPUI macro output resolves.
 gpui = { package = "gpui-kit", version = "0.9.0" }
+# macOS: "agent finished" notifications, sounds, Dock icon (src/notify.rs). Same versions GPUI uses.
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSBundle", "NSData", "NSError", "NSString"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSSound", "NSResponder"] }
+objc2-user-notifications = { version = "0.3", features = [
+    "block2", "UNUserNotificationCenter", "UNNotification", "UNNotificationContent", "UNNotificationRequest",
+    "UNNotificationResponse", "UNNotificationSound", "UNNotificationTrigger",
+] }

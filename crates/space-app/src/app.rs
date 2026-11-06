@@ -41,6 +41,9 @@ pub struct Options {
     pub seed: Vec<SeedThread>,
     /// Index into `seed` of the thread to select (default: the last).
     pub select: Option<usize>,
+    /// Notify (sound, plus a system notification when not watching) when a turn finishes.
+    /// Off for scenarios; `SPACE_NOTIFY=0` turns it off too.
+    pub notify: bool,
 }
 
 /// A thread opened at launch: an optional prompt sent once its session exists and an
@@ -115,6 +118,9 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
         })
         .detach();
 
+        // Dock icon (and notification registration when bundled), for the gallery too.
+        let clicks = crate::notify::init();
+
         let options = match launch {
             Launch::App(options) => options,
             Launch::Gallery => {
@@ -142,7 +148,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             ..Default::default()
         };
         let (handle, _) = gpui::open_window(window_options, cx, |window, cx| {
-            cx.new(|cx| SpaceApp::new(host, events, options, window, cx))
+            cx.new(|cx| SpaceApp::new(host, events, options, clicks, window, cx))
         })
         .expect("failed to open window");
         #[cfg(feature = "dev")]
@@ -237,6 +243,7 @@ pub struct SpaceApp {
     pub(crate) agent: Option<AgentHandle>,
     pub(crate) agent_status: PluginStatus,
     pub(crate) agent_title: String,
+    notify: bool,
     pub(crate) logs: VecDeque<String>,
     pub(crate) threads: Vec<Thread>,
     next_key: u64,
@@ -258,7 +265,14 @@ pub struct SpaceApp {
 }
 
 impl SpaceApp {
-    fn new(host: Host, mut events: EventReceiver, options: Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        host: Host,
+        mut events: EventReceiver,
+        options: Options,
+        mut clicks: futures::channel::mpsc::UnboundedReceiver<u64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let input = cx.new(|cx| composer::new_input(window, cx));
         let sub = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
             #[cfg(feature = "dev")]
@@ -276,6 +290,24 @@ impl SpaceApp {
                 _ => {}
             }
         });
+
+        // A clicked "finished" notification: bring the window forward on that thread.
+        cx.spawn_in(window, async move |this, cx| {
+            use futures::StreamExt as _;
+            while let Some(key) = clicks.next().await {
+                let alive = this.update_in(cx, |this, window, cx| {
+                    cx.activate(true);
+                    window.activate_window();
+                    if this.thread(key).is_some() {
+                        this.select_thread(key, window, cx);
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
 
         cx.spawn(async move |this, cx| {
             while let Some(first) = events.recv().await {
@@ -309,6 +341,7 @@ impl SpaceApp {
         let mut this = Self {
             agent_id: agent_plugin.map(|p| p.id().to_string()),
             agent_title: agent_plugin.map(|p| p.manifest.name.clone()).unwrap_or_else(|| "No agent".into()),
+            notify: options.notify,
             host,
             project_dir: options.project_dir.clone(),
             agent: None,
@@ -416,6 +449,18 @@ impl SpaceApp {
         }
         if selected && !matches!(event, SessionEvent::Status(_)) {
             self.transcript_scroll.scroll_to_bottom();
+        }
+        if let SessionEvent::TurnEnded { stop_reason } = event
+            && self.notify
+            && stop_reason != "cancelled"
+            && let Some(thread) = self.thread(key)
+        {
+            let body = match format::thread_preview(&thread.state) {
+                _ if stop_reason == "error" => "Stopped with an error".to_string(),
+                format::Preview::Text(text) => text,
+                _ => String::new(),
+            };
+            crate::notify::turn_finished(key, &thread.title(), &body, selected && crate::notify::app_active());
         }
     }
 

@@ -30,7 +30,8 @@ plugins/pi-agent        TypeScript ACP agent on the pi SDK (Claude CLI subscript
 | | |
 |---|---|
 | `just build` | `cargo build --workspace` + `pnpm install && pnpm build` in `plugins/pi-agent` |
-| `just run [DIR]` | open the app on a project directory (default: this repo) |
+| `just run [DIR]` | open the app on a project directory (default: this repo), from `target/debug/Space.app` |
+| `just bundle [debug\|release]` | wrap the built binary in `target/<profile>/Space.app` (bundle id `dev.brijesh.space`, icon) |
 | `just demo "Reply with exactly: pong"` | open the app and send the prompt in the first thread |
 | `just gallery` | dev: component gallery: tokens, every component state, animation-clock controls |
 | `just scenario name=many-threads` | dev: the real app in a held, scripted state (`name=list` lists them) |
@@ -40,7 +41,7 @@ plugins/pi-agent        TypeScript ACP agent on the pi SDK (Claude CLI subscript
 | `just smoke ["PROMPT"]` | headless end-to-end run against pi-agent, printing events (billed) |
 | `just smoke-stub` | the same headless run against the stub agent (free) |
 
-Without just, run `cargo run -p space-app -- [PROJECT_DIR]` or
+Without just, run `cargo run -p space-app -- [PROJECT_DIR]` (no bundle: no system notifications, sound only) or
 `cargo run -p space-app -- --smoke "PROMPT" [--plugin ID] [--allow] [PROJECT_DIR]`.
 
 Environment:
@@ -49,10 +50,18 @@ Environment:
 - `SPACE_PLUGIN_DIRS=dir1:dir2` replaces the bundled plugin roots (`<repo>/plugins`).
   `~/.space/plugins` and `<project>/.space/plugins` are still scanned.
 - `SPACE_AUTOPROMPT="…"` sends that prompt in the first thread once its session is up.
+- `SPACE_NOTIFY=0` turns off the "agent finished" alert. When a turn ends, Space plays a sound if you're
+  watching that thread, otherwise it posts a macOS notification (bundled app only); clicking it opens
+  the thread. Scenarios are silent unless `SPACE_NOTIFY=1`.
 - `RUST_LOG=space_core=debug` turns on logging (stderr).
 - Dev builds: `SPACE_CLOCK=paused|pin:0.35|speed:0.25` starts the animation clock in that state;
   `SPACE_GALLERY_PAGE=<name>` opens a gallery page; `SPACE_SCRIPT=<file>` replays input. See
   [docs/ui-development.md](docs/ui-development.md) for the gallery, scenarios and the clock.
+
+## App icon
+
+`crates/space-app/resources/AppIcon.{png,icns}` is a **placeholder** (graphite tile, dashed frame,
+circle/square/triangle) until there's a real logo. Regenerate with `python3 scripts/make_placeholder_icon.py`.
 
 ## Using the app
 

@@ -18,6 +18,7 @@ mod app;
 mod dev;
 #[cfg(feature = "dev")]
 mod devscript;
+mod notify;
 #[cfg(feature = "dev")]
 mod scenarios;
 mod view;
@@ -105,6 +106,7 @@ fn main() -> Result<()> {
             .map(|p| vec![SeedThread { prompt: Some(p), ..Default::default() }])
             .unwrap_or_default(),
         select: None,
+        notify: std::env::var("SPACE_NOTIFY").map_or(true, |v| v != "0"),
     };
     #[cfg(feature = "dev")]
     if let Some(name) = &args.scenario {
