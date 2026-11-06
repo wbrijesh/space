@@ -1,5 +1,5 @@
 //! Composer: the input card (+ · text · send/stop) and the control row below it (project
-//! folder, model, effort, context ring).
+//! folder, Write / Read-only toggle, model, effort, context ring).
 //!
 //! One visual line: a single row. More (a newline, or text wider than the single-row text
 //! column): two zones, text across the full width over a row with + and send.
@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 use gpui::component::input::{Textarea, TextareaState};
 use gpui::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui::assets::IconName as Lucide;
 use gpui::component::{Disableable as _, Icon, IconName, Sizable as _};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -16,9 +17,11 @@ use space_core::protocol::{ConfigureSession, ModelInfo, SpaceStatus};
 
 use super::loaders::ContextRing;
 use super::transcript::attachment_chip;
-use super::widgets::{icon_button, menu_trigger, tip};
+use super::widgets::{icon_button, menu_trigger, tip, tip_action};
+use crate::actions::ToggleReadOnly;
+use crate::clock::AnimationClock;
 use crate::format;
-use crate::theme::{color, radius, size, space, text};
+use crate::theme::{color, motion, radius, size, space, text};
 
 /// Card padding.
 const PAD: f32 = space::MD;
@@ -49,6 +52,7 @@ pub type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 pub type IndexHandler = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 pub type PathHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 pub type ConfigureHandler = Rc<dyn Fn(ConfigureSession, &mut Window, &mut App)>;
+pub type BoolHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
 
 /// Callbacks; every one defaults to a no-op.
 #[derive(Clone)]
@@ -61,6 +65,8 @@ pub struct ComposerHandlers {
     pub on_pick_dir: PathHandler,
     pub on_choose_folder: Handler,
     pub on_configure: ConfigureHandler,
+    /// The Write / Read-only toggle: `true` for read-only.
+    pub on_read_only: BoolHandler,
 }
 
 impl Default for ComposerHandlers {
@@ -75,6 +81,7 @@ impl Default for ComposerHandlers {
             on_pick_dir: Rc::new(|_, _, _| {}),
             on_choose_folder: noop,
             on_configure: Rc::new(|_, _, _| {}),
+            on_read_only: Rc::new(|_, _, _| {}),
         }
     }
 }
@@ -90,6 +97,16 @@ pub struct ComposerControls {
     pub status: SpaceStatus,
     /// Model and effort can't change now (turn running or no session).
     pub locked: bool,
+    /// The Write / Read-only toggle; `None` hides it (the agent has no such modes).
+    pub mode: Option<ModeControl>,
+}
+
+/// State of the Write / Read-only toggle.
+#[derive(Clone, Copy, Default)]
+pub struct ModeControl {
+    pub read_only: bool,
+    /// Identifies the thread, so switching threads jumps instead of sliding the knob.
+    pub scope: u64,
 }
 
 #[derive(IntoElement)]
@@ -270,7 +287,7 @@ impl RenderOnce for Composer {
             .flex_col()
             .gap_2()
             .child(card)
-            .children(controls.map(|c| control_row(c, &h, window)))
+            .children(controls.map(|c| control_row(c, &h, running, window)))
     }
 }
 
@@ -304,7 +321,7 @@ fn is_expanded(input: &Entity<TextareaState>, was_expanded: bool, window: &mut W
     window.text_system().shape_line(value, text::BODY, &[run], None).width > available
 }
 
-fn control_row(c: ComposerControls, h: &ComposerHandlers, window: &Window) -> Div {
+fn control_row(c: ComposerControls, h: &ComposerHandlers, running: bool, window: &Window) -> Div {
     let status = c.status.clone();
     let folder = {
         let (dirs, cwd, empty) = (c.dirs.clone(), c.cwd.clone(), c.thread_empty);
@@ -370,14 +387,175 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers, window: &Window) -> Di
             .tooltip(tip(format::context_usage(tokens, window_size))),
     );
 
+    let toggle = c.mode.map(|m| {
+        let on_change = h.on_read_only.clone();
+        ModeToggle::new(("mode-toggle", m.scope), m.read_only)
+            .running(running)
+            .on_change(move |read_only, w, cx| on_change(read_only, w, cx))
+    });
+
     div()
         .flex()
         .items_center()
         .justify_between()
         .pl(px(ROW_INSET_LEFT))
         .pr(px(ROW_INSET_RIGHT))
-        .child(folder)
+        .child(div().flex().items_center().gap_1().min_w_0().child(folder).children(toggle))
         .child(right)
+}
+
+/// Segment width and track inset of the [`ModeToggle`].
+const SEGMENT_W: f32 = 26.;
+const SEGMENT_H: f32 = 20.;
+const TRACK_INSET: f32 = space::XXS;
+
+/// Write / Read-only segmented toggle: a pill track with a pencil and an eye, and a raised
+/// knob under the selected one that slides over ([`motion::TOGGLE_SLIDE`]) when it changes.
+/// Read-only also tints the eye yellow and shows a muted "Read-only" label, so it reads at a
+/// glance without looking like a warning.
+#[derive(IntoElement)]
+pub struct ModeToggle {
+    id: ElementId,
+    read_only: bool,
+    /// A turn is running: a switch applies from the next message (said in the tooltip).
+    running: bool,
+    /// Gallery: draw the unselected segment hovered.
+    force_hover: bool,
+    on_change: Option<BoolHandler>,
+}
+
+impl ModeToggle {
+    pub fn new(id: impl Into<ElementId>, read_only: bool) -> Self {
+        Self { id: id.into(), read_only, running: false, force_hover: false, on_change: None }
+    }
+
+    pub fn running(mut self, running: bool) -> Self {
+        self.running = running;
+        self
+    }
+
+    pub fn force_hover(mut self, on: bool) -> Self {
+        self.force_hover = on;
+        self
+    }
+
+    pub fn on_change(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_change = Some(Rc::new(f));
+        self
+    }
+}
+
+/// Knob position (0 = Write, 1 = Read) and when it last started moving (animation time).
+struct Knob {
+    read_only: bool,
+    from: f32,
+    to: f32,
+    since: Option<f64>,
+}
+
+impl Knob {
+    /// Position at animation time `now` (`pinned`: the clock's pinned phase).
+    fn at(&self, now: f64, pinned: Option<f32>) -> (f32, bool) {
+        let Some(since) = self.since else { return (self.to, false) };
+        let t = match pinned {
+            Some(p) => p,
+            None => ((now - since) / motion::TOGGLE_SLIDE.as_secs_f64()).clamp(0., 1.) as f32,
+        };
+        (self.from + (self.to - self.from) * motion::ease_out(t), t < 1.)
+    }
+}
+
+impl RenderOnce for ModeToggle {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Self { id, read_only, running, force_hover, on_change } = self;
+        let target = if read_only { 1. } else { 0. };
+        let clock = AnimationClock::global(cx).clone();
+        let (now, pinned) = (clock.now(), clock.pinned());
+        let knob = window.use_keyed_state((id.clone(), "knob"), cx, |_, _| Knob {
+            read_only,
+            from: target,
+            to: target,
+            since: None,
+        });
+        // A new choice: slide from wherever the knob is now (also mid-slide).
+        if knob.read(cx).read_only != read_only {
+            let from = knob.read(cx).at(now, pinned).0;
+            knob.update(cx, |k, _| *k = Knob { read_only, from, to: target, since: Some(now) });
+        }
+        let (pos, moving) = if cx.reduce_motion() { (target, false) } else { knob.read(cx).at(now, pinned) };
+        if moving && clock.is_running() {
+            window.request_animation_frame();
+        }
+
+        let segment = |read: bool| {
+            let selected = read == read_only;
+            let (icon, label) = if read {
+                (Lucide::Eye, "Read-only: the agent investigates without changing anything")
+            } else {
+                (Lucide::Pencil, "Write: the agent can edit files")
+            };
+            let label =
+                if running && !selected { format!("{label} (from the next message)") } else { label.to_string() };
+            let on_change = on_change.clone();
+            let fg = match (selected, read) {
+                (true, true) => color::yellow(),
+                (true, false) => color::text(),
+                (false, _) if force_hover => color::text_2(),
+                (false, _) => color::text_3(),
+            };
+            div()
+                .id(if read { "read" } else { "write" })
+                .w(px(SEGMENT_W))
+                .h(px(SEGMENT_H))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .text_color(fg)
+                .when(!selected, |d| d.cursor_pointer().hover(|s| s.text_color(color::text_2())))
+                // Plain div, and the mouse-down stops here: the composer keeps its focus.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(Icon::new(icon).size(size::ICON_SM))
+                .tooltip(tip_action(label, &ToggleReadOnly))
+                .when_some(on_change.filter(|_| !selected), |d, f| d.on_click(move |_, w, cx| f(read, w, cx)))
+        };
+
+        let track = div()
+            .id(id)
+            .relative()
+            .flex_none()
+            .flex()
+            .items_center()
+            .p(px(TRACK_INSET))
+            .rounded_full()
+            .bg(color::bg_sidebar())
+            .border_1()
+            .border_color(color::border())
+            // The knob first, so the icons paint over it.
+            .child(
+                div()
+                    .absolute()
+                    .top(px(TRACK_INSET))
+                    .left(px(TRACK_INSET + pos * SEGMENT_W))
+                    .w(px(SEGMENT_W))
+                    .h(px(SEGMENT_H))
+                    .rounded_full()
+                    .bg(color::pressed())
+                    .border_1()
+                    .border_color(color::border_strong())
+                    .shadow_xs(),
+            )
+            .child(segment(false))
+            .child(segment(true));
+
+        div()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .child(track)
+            // Calm, not alarming: the eye carries the color, the label stays quiet.
+            .when(read_only, |d| d.child(div().text_size(text::SM).text_color(color::text_3()).child("Read-only")))
+    }
 }
 
 /// Model picker contents (used by the dropdown and the gallery).
@@ -465,7 +643,19 @@ pub mod fixtures {
 
     pub fn controls(tokens: u64, locked: bool) -> ComposerControls {
         let cwd = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("projects/space");
-        ComposerControls { dirs: vec![cwd.clone()], cwd, thread_empty: false, status: status(tokens), locked }
+        ComposerControls {
+            dirs: vec![cwd.clone()],
+            cwd,
+            thread_empty: false,
+            status: status(tokens),
+            locked,
+            mode: Some(ModeControl::default()),
+        }
+    }
+
+    pub fn read_only(mut c: ComposerControls) -> ComposerControls {
+        c.mode = Some(ModeControl { read_only: true, scope: 0 });
+        c
     }
 }
 
@@ -514,6 +704,37 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 c.attachments(vec![PathBuf::from("Cargo.toml"), PathBuf::from("README.md")])
             }),
             example("agent starting (locked)", "", |c| c.queued(true).controls(fixtures::controls(0, true))),
+            example("read-only", "Why does the composer flicker when it grows?", |c| {
+                c.controls(fixtures::read_only(fixtures::controls(18_200, false)))
+            }),
+            example("agent without modes (no toggle)", "", |c| {
+                c.controls(ComposerControls { mode: None, ..fixtures::controls(18_200, false) })
+            }),
+        ]),
+        ComponentPreview::new(
+            Area::Composer,
+            "Mode toggle",
+            "Write / Read-only, under the input. Read-only is per thread and applies from the next message.",
+        )
+        .examples([
+            Example::new("write", |_, _| ModeToggle::new("p-write", false).into_any_element()),
+            Example::new("read-only", |_, _| ModeToggle::new("p-read", true).into_any_element()),
+            Example::new("write, hover read", |_, _| {
+                ModeToggle::new("p-hover-read", false).force_hover(true).into_any_element()
+            }),
+            Example::new("read-only, hover write", |_, _| {
+                ModeToggle::new("p-hover-write", true).force_hover(true).into_any_element()
+            }),
+            Example::new("interactive", |window, cx| {
+                let read = window.use_keyed_state("p-interactive-mode", cx, |_, _| false);
+                let value = *read.read(cx);
+                ModeToggle::new("p-interactive", value)
+                    .on_change(move |v, _, cx| read.update(cx, |r, cx| {
+                        *r = v;
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            }),
         ]),
         ComponentPreview::new(Area::Composer, "Menus", "Dropdown contents, rendered open.").examples([
             menu("model", |m| model_menu(m, &fixtures::status(0).available_models.unwrap(), "claude-opus-5-5", Rc::new(|_, _, _| {}))),

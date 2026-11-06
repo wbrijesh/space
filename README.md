@@ -42,7 +42,7 @@ plugins/pi-agent        TypeScript ACP agent on the pi SDK (Claude CLI subscript
 | `just smoke-stub` | the same headless run against the stub agent (free) |
 
 Without just, run `cargo run -p space-app -- [PROJECT_DIR]` (no bundle: no system notifications, sound only) or
-`cargo run -p space-app -- --smoke "PROMPT" [--plugin ID] [--allow] [PROJECT_DIR]`.
+`cargo run -p space-app -- --smoke "PROMPT" [--plugin ID] [--allow] [--mode read] [PROJECT_DIR]`.
 
 Environment:
 
@@ -92,7 +92,11 @@ plugin list; the agent's status sits in the sidebar footer.
   Below the card: the project folder (switch it while the thread is empty, otherwise pick a folder
   to start a new thread there), the model and thinking effort (both switch the session through
   `_space/session/configure`; new threads start with the defaults from Settings), and a context ring
-  (hover for token counts).
+  (hover for token counts). Next to the folder, a **Write / Read-only** toggle (pencil / eye, ⇧⌘R): in
+  Read-only the agent investigates (reads files, runs inspecting commands) but doesn't change anything. It
+  is per thread, every new thread starts in Write, and a switch during a turn applies from the next message.
+  It's an ACP session mode (`session/set_mode`); the instruction goes to the agent's system prompt, never
+  into your message, so the transcript doesn't show it. The toggle is hidden for agents without these modes.
 - **Transcript**: your messages as bubbles, replies as markdown, thinking collapsed as
   "Thought for Ns", tool calls as compact rows that expand to their output, permission cards
   (Allow/Reject).

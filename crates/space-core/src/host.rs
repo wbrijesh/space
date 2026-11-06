@@ -393,7 +393,8 @@ impl AgentHandle {
         if let Some(modes) = &modes {
             host.emit_session(&id, SessionEvent::Modes(modes.clone()));
         }
-        Ok(Session { inner: Arc::new(SessionInner { id, agent: self.clone(), running: AtomicBool::new(false), modes }) })
+        let inner = SessionInner { id, agent: self.clone(), running: AtomicBool::new(false), modes };
+        Ok(Session { inner: Arc::new(inner) })
     }
 
     /// Answer a `session/request_permission` from this agent.

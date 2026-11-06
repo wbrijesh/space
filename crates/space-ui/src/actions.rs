@@ -2,7 +2,18 @@
 
 gpui::actions!(
     space,
-    [NewThread, ToggleSidebar, GoBack, GoForward, ToggleLogs, FocusComposer, OpenSettings, CloseSettings, Quit]
+    [
+        NewThread,
+        ToggleSidebar,
+        GoBack,
+        GoForward,
+        ToggleLogs,
+        FocusComposer,
+        OpenSettings,
+        CloseSettings,
+        ToggleReadOnly,
+        Quit
+    ]
 );
 
 /// Dev tooling (gallery window, animation clock).

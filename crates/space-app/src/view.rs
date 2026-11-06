@@ -6,7 +6,7 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::PluginStatus;
-use space_ui::components::composer::{Composer, ComposerControls, ComposerHandlers, Handler};
+use space_ui::components::composer::{Composer, ComposerControls, ComposerHandlers, Handler, ModeControl};
 use space_ui::components::settings::{Catalog, SettingsHandlers, SettingsPage};
 use space_ui::components::shell::{AgentFooter, AgentState, LogsPanel, banner, empty_heading, problem_card, scroll_fade, sidebar_column};
 use space_ui::components::thread_row::{RowIndicator, ThreadRow};
@@ -18,7 +18,7 @@ use space_ui::ClickHandler;
 
 use crate::app::{
     CloseSettings, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, SpaceApp, Thread, ToggleLogs,
-    ToggleSidebar,
+    ToggleReadOnly, ToggleSidebar,
 };
 
 /// A click callback that runs `f` on the app.
@@ -76,6 +76,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &ToggleLogs, _, cx| this.toggle_logs(cx)))
         .on_action(cx.listener(|this, _: &FocusComposer, window, cx| this.focus_composer(window, cx)))
         .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.toggle_settings(window, cx)))
+        .on_action(cx.listener(|this, _: &ToggleReadOnly, _, cx| this.toggle_read_only(cx)))
         // Only while the page is open, so Esc is free otherwise.
         .when(app.show_settings, |d| {
             d.on_action(cx.listener(|this, _: &CloseSettings, window, cx| this.close_settings(window, cx)))
@@ -303,6 +304,12 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         on_pick_dir: pick_dir,
         on_choose_folder: handler(cx, |this, w, cx| this.choose_folder(w, cx)),
         on_configure: configure,
+        on_read_only: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |read_only, _: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| this.set_read_only(read_only, cx));
+            })
+        },
     };
     Composer::new("composer", &app.input)
         .running(thread.state.running)
@@ -314,6 +321,9 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
             thread_empty: thread.is_empty(),
             status: thread.state.status.clone(),
             locked: thread.state.running || thread.live_session().is_none(),
+            mode: app
+                .mode_toggle_available(thread)
+                .then_some(ModeControl { read_only: thread.read_only, scope: thread.key }),
         })
         .handlers(handlers)
         .into_any_element()

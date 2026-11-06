@@ -390,7 +390,8 @@ mod tests {
         s.apply(&SessionEvent::ModeChanged { mode_id: "read".into() });
         assert!(s.modes.is_none(), "no modes advertised: nothing to change");
         let mode = |id: &str| ModeInfo { id: id.into(), name: id.into(), description: None };
-        s.apply(&SessionEvent::Modes(SessionModes { current: "write".into(), available: vec![mode("write"), mode("read")] }));
+        let available = vec![mode("write"), mode("read")];
+        s.apply(&SessionEvent::Modes(SessionModes { current: "write".into(), available }));
         s.apply(&SessionEvent::ModeChanged { mode_id: "read".into() });
         let modes = s.modes.as_ref().unwrap();
         assert_eq!(modes.current, "read");

@@ -35,6 +35,8 @@ pub struct ScenarioThread {
     /// Project-relative folder for the thread (default: the project).
     pub subdir: Option<&'static str>,
     pub draft: Option<String>,
+    /// The thread is in read-only mode (set before its prompt is sent).
+    pub read_only: bool,
 }
 
 // ----- step helpers -------------------------------------------------------------------------
@@ -215,6 +217,13 @@ pub fn all() -> Vec<Scenario> {
             ..Default::default()
         },
         Scenario {
+            name: "read-mode",
+            description: "A thread in read-only mode with a finished investigation.",
+            threads: vec![read_only_thread()],
+            select: None,
+            ..Default::default()
+        },
+        Scenario {
             name: "settings",
             description: "The Settings page (⌘,) with the stub's models and a saved default.",
             threads: vec![explain_thread()],
@@ -225,6 +234,30 @@ pub fn all() -> Vec<Scenario> {
             ..Default::default()
         },
     ]
+}
+
+/// A read-only investigation: inspect-only tools and a reply that describes the fix.
+fn read_only_thread() -> ScenarioThread {
+    ScenarioThread {
+        read_only: true,
+        ..thread(
+            "Why do tool updates sometimes land out of order?",
+            vec![
+                thought("Read-only: inspect the reducer and its tests, change nothing."),
+                tool("t1", "grep: ToolCallUpdate", "search", "completed", Some("crates/space-core/src/session.rs:184")),
+                tool("t2", "read: crates/space-core/src/session.rs", "read", "completed", Some("350 lines")),
+                tool("t3", "bash: git log --oneline -5 -- crates/space-core/src/session.rs", "execute", "completed", Some(
+                    "a1c2e3f Fold tool updates by id\n9b8d7c6 Session reducer",
+                )),
+                say("An update for a tool call the reducer hasn't seen yet is materialized **at the end** of the \
+                     transcript (`SessionState::apply`, the `ToolCallUpdate` arm), so a late `tool_call` shows up \
+                     after text that streamed in between.\n\nA fix, which I haven't made: keep the position of each \
+                     tool call when its first event arrives, and insert late ones there. Switch to Write and I'll \
+                     do it."),
+                context(36_000),
+            ],
+        )
+    }
 }
 
 /// The explain reply three times over, so the transcript always overflows the window.
@@ -304,6 +337,7 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
             prompt: t.prompt.map(Into::into),
             cwd: t.subdir.map(|d| project_dir.join(d)),
             draft: t.draft.clone(),
+            read_only: t.read_only,
         })
         .collect();
     let options = Options {
@@ -344,6 +378,7 @@ mod tests {
             "error",
             "many-threads",
             "long-composer",
+            "read-mode",
             "settings",
         ] {
             assert!(find(wanted).is_some(), "missing scenario {wanted}");

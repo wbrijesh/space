@@ -22,7 +22,7 @@ for these.
 | `size` | Control heights, icon sizes, layout widths (`size::THREAD_ROW_H`, `size::SPINNER_LG`, …) |
 | `radius` | Corner radii (`radius::MD` for buttons and rows, `radius::CARD` for the composer) |
 | `text` | Type scale (`text::MD`, `text::BODY`, …), line heights, `UI_FONT` / `MONO_FONT` |
-| `motion` | Animation cycles and curves: spinner (1.6 s, 8 spokes), dots (1.3 s, 16% stagger) |
+| `motion` | Animation cycles and curves: spinner (1.6 s, 8 spokes), dots (1.3 s, 16% stagger), toggle slide (180 ms, ease-out) |
 
 `theme::install` maps the tokens onto gpui-component's theme, so stock widgets (textarea, popup
 menus, tooltips, scrollbars) match. The gallery's **Tokens** page shows all of them.
@@ -103,12 +103,13 @@ until you cancel it. Nothing in the UI is faked. `Space --scenario list` prints 
 | `many-threads` | nine threads in mixed states (working, waiting, unread, error) |
 | `long-composer` | finished thread with a 12-line draft |
 | `long-transcript` | thread longer than the window, scrolled to the end (bottom fade) |
+| `read-mode` | a thread in Read-only mode with a finished investigation (toggle under the composer) |
 | `settings` | the Settings page, with the stub's models and a saved default model and thinking level |
 
 **Adding a scenario:** in `crates/space-app/src/scenarios.rs`, append a `Scenario` to `all()`.
 Give it a name, a description and its threads. Each thread has a `prompt` and the `steps` the
 stub streams back (`thought`, `say`, `tool(...)`, `Step::Permission`, `context(...)`,
-`Step::Hold`, `Step::Fail`). Optionally set a `subdir` or a composer `draft`. Prompts must be
+`Step::Hold`, `Step::Fail`). Optionally set a `subdir`, a composer `draft` or `read_only`. Prompts must be
 unique within a scenario (the stub matches on prompt text); a unit test checks this. The stub
 binary must be built (`cargo build --workspace` does it).
 

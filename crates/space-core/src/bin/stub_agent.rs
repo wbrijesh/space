@@ -175,7 +175,9 @@ async fn main() -> acp::Result<()> {
         .on_receive_request(
             {
                 let state = state.clone();
-                async move |req: SetSessionModeRequest, responder: Responder<SetSessionModeResponse, acp::V1>, _cx: Conn| {
+                async move |req: SetSessionModeRequest,
+                            responder: Responder<SetSessionModeResponse, acp::V1>,
+                            _cx: Conn| {
                     eprintln!("space-stub-agent: set_mode {} {}", req.session_id.0, req.mode_id.0);
                     let mut sessions = state.sessions.lock().unwrap();
                     match sessions.get_mut(&*req.session_id.0) {

@@ -26,7 +26,14 @@ async fn main() -> anyhow::Result<()> {
     }
     let prompt = prompt.unwrap_or_else(|| "Reply with exactly: pong".into());
     let (host, events) = Host::new(tokio::runtime::Handle::current(), HostOptions::for_project(&cwd));
-    let opts = SmokeOptions { plugin_id, cwd, prompt, allow_permissions: allow, timeout: Duration::from_secs(120) };
+    let opts = SmokeOptions {
+        plugin_id,
+        cwd,
+        prompt,
+        allow_permissions: allow,
+        mode: None,
+        timeout: Duration::from_secs(120),
+    };
     let state = smoke::run(&host, events, opts).await?;
     println!("transcript items: {}", state.items.len());
     Ok(())

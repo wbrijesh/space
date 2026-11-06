@@ -23,6 +23,14 @@ pub const DOT_REST_OPACITY: f32 = 0.3;
 /// How far a dot lifts at the top of its pulse (px).
 pub const DOT_LIFT: f32 = 1.5;
 
+/// Segmented toggle (composer Write / Read-only): the knob slides to the chosen segment.
+pub const TOGGLE_SLIDE: Duration = Duration::from_millis(180);
+
+/// Fast start, gentle stop (cubic). Used for the toggle knob.
+pub fn ease_out(t: f32) -> f32 {
+    1. - (1. - t.clamp(0., 1.)).powi(3)
+}
+
 /// Smooth start and end (cubic). Used for the spinner's rotation.
 pub fn ease_in_out(t: f32) -> f32 {
     gpui::ease_in_out(t)
@@ -37,4 +45,5 @@ pub fn pulse(t: f32) -> f32 {
 pub const ALL: &[(&str, Duration, &str)] = &[
     ("SPINNER_CYCLE", SPINNER_CYCLE, "ease_in_out rotation, 8 spokes, 1.3px, 60–100% radius"),
     ("DOTS_CYCLE", DOTS_CYCLE, "sin² pulse, 16% stagger, 50% pulse window"),
+    ("TOGGLE_SLIDE", TOGGLE_SLIDE, "ease_out knob slide (composer Write / Read-only)"),
 ];
