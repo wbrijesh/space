@@ -10,8 +10,18 @@ license.workspace = true
 name = "Space"
 path = "src/main.rs"
 
+[features]
+# Dev tooling: component gallery (⌥⌘G, --gallery), scenarios (--scenario), animation-clock
+# controls, input scripts. On by default; ship with `--no-default-features` (`just release`).
+default = ["dev"]
+dev = ["space-ui/dev", "dep:serde", "dep:serde_json", "dep:schemars"]
+
 [dependencies]
 space-core.workspace = true
+space-ui.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
 space-protocol.workspace = true
 anyhow.workspace = true
 futures.workspace = true

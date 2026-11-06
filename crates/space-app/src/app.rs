@@ -11,11 +11,10 @@
 //! Thread selection and "new thread" explicitly focus the composer.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
 
 use gpui::component::input::{InputEvent, TextareaState};
-use gpui::component::{Theme, ThemeMode};
 use gpui::*;
 use space_core::protocol::{ConfigureSession, PluginKind};
 use space_core::{
@@ -23,9 +22,13 @@ use space_core::{
     SessionState, TranscriptItem,
 };
 
-use crate::{assets::SpaceAssets, devscript, format, theme};
+pub use space_ui::actions::{FocusComposer, GoBack, GoForward, NewThread, Quit, ToggleLogs, ToggleSidebar};
+use space_ui::assets::SpaceAssets;
+use space_ui::components::composer;
+use space_ui::format;
 
-gpui::actions!(space, [NewThread, ToggleSidebar, GoBack, GoForward, ToggleLogs, FocusComposer, Quit]);
+#[cfg(feature = "dev")]
+use crate::devscript;
 
 const MAX_LOG_LINES: usize = 2000;
 const DEFAULT_AGENT: &str = "pi-agent";
@@ -34,17 +37,34 @@ pub struct Options {
     pub project_dir: PathBuf,
     /// Plugin id of the agent to run (default `pi-agent`, else the first agent plugin).
     pub agent: Option<String>,
-    /// Dev only: seed a few threads with scripted prompts (meant for the stub agent).
-    pub demo: bool,
-    /// Prompt to send in the first thread once its session exists.
-    pub autoprompt: Option<String>,
+    /// Threads to open at launch (newest last); empty: one new thread.
+    pub seed: Vec<SeedThread>,
+    /// Index into `seed` of the thread to select (default: the last).
+    pub select: Option<usize>,
 }
 
-pub fn run(host: Host, events: EventReceiver, options: Options) {
+/// A thread opened at launch: an optional prompt sent once its session exists and an
+/// optional composer draft.
+#[derive(Debug, Clone, Default)]
+pub struct SeedThread {
+    pub prompt: Option<String>,
+    pub cwd: Option<PathBuf>,
+    pub draft: Option<String>,
+}
+
+/// What the process opens.
+pub enum Launch {
+    App(Options),
+    /// Dev only: just the component gallery.
+    Gallery,
+}
+
+pub fn run(host: Host, events: EventReceiver, launch: Launch) {
     gpui::application().with_assets(SpaceAssets).run(move |cx: &mut App| {
         gpui::init(cx);
-        Theme::change(ThemeMode::Dark, None, cx);
-        theme::install(cx);
+        space_ui::init(cx);
+        #[cfg(feature = "dev")]
+        crate::dev::init(cx);
         cx.bind_keys([
             KeyBinding::new("cmd-n", NewThread, None),
             KeyBinding::new("cmd-b", ToggleSidebar, None),
@@ -58,7 +78,8 @@ pub fn run(host: Host, events: EventReceiver, options: Options) {
             KeyBinding::new("cmd-q", Quit, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.set_menus(vec![
+        #[allow(unused_mut)]
+        let mut menus = vec![
             Menu {
                 name: "Space".into(),
                 items: vec![MenuItem::action("Quit Space", Quit)],
@@ -82,7 +103,29 @@ pub fn run(host: Host, events: EventReceiver, options: Options) {
                 ],
                 disabled: false,
             },
-        ]);
+        ];
+        #[cfg(feature = "dev")]
+        menus.push(crate::dev::menu());
+        cx.set_menus(menus);
+        // Quit when the last window closes (the gallery is a second window).
+        cx.on_window_closed(|cx, _| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
+
+        let options = match launch {
+            Launch::App(options) => options,
+            Launch::Gallery => {
+                #[cfg(feature = "dev")]
+                if let Some(handle) = space_ui::gallery::open(cx) {
+                    devscript::spawn_from_env(handle, cx);
+                }
+                cx.activate(true);
+                return;
+            }
+        };
 
         let bounds = Bounds::centered(None, size(px(1280.), px(820.)), cx);
         let window_options = WindowOptions {
@@ -102,8 +145,9 @@ pub fn run(host: Host, events: EventReceiver, options: Options) {
             cx.new(|cx| SpaceApp::new(host, events, options, window, cx))
         })
         .expect("failed to open window");
+        #[cfg(feature = "dev")]
         devscript::spawn_from_env(handle, cx);
-        cx.on_window_closed(|cx, _| cx.quit()).detach();
+        let _ = handle;
         cx.activate(true);
     });
 }
@@ -210,23 +254,14 @@ pub struct SpaceApp {
     pub(crate) banner: Option<String>,
     preferred_model: Option<(String, String)>,
     preferred_effort: Option<String>,
-    /// Mouse went down on the title bar's drag area; the next move starts a window move.
-    pub(crate) drag_pending: bool,
-    /// The composer shows its two-zone (multi-line) layout; decided each render.
-    pub(crate) composer_expanded: std::cell::Cell<bool>,
-    demo: bool,
     _subscriptions: Vec<Subscription>,
 }
 
 impl SpaceApp {
     fn new(host: Host, mut events: EventReceiver, options: Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| {
-            let mut state = TextareaState::new(window, cx).placeholder("Describe a task or ask a question");
-            state.set_auto_grow(1, 10, cx);
-            state.set_submit_on_enter(true, cx);
-            state
-        });
+        let input = cx.new(|cx| composer::new_input(window, cx));
         let sub = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
+            #[cfg(feature = "dev")]
             if devscript::active() {
                 match event {
                     InputEvent::Focus => eprintln!("script: composer focused"),
@@ -295,18 +330,9 @@ impl SpaceApp {
             banner,
             preferred_model: None,
             preferred_effort: None,
-            drag_pending: false,
-            composer_expanded: std::cell::Cell::new(false),
-            demo: options.demo,
             _subscriptions: vec![sub],
         };
-        let key = this.add_thread(options.project_dir);
-        this.selected = Some(key);
-        if let Some(prompt) = options.autoprompt
-            && let Some(t) = this.thread_mut(key)
-        {
-            t.queued = Some((prompt, Vec::new()));
-        }
+        this.seed_threads(options.seed, options.select, window, cx);
         this.ensure_agent(cx);
         let input = this.input.clone();
         input.update(cx, |s, cx| s.focus(window, cx));
@@ -421,9 +447,6 @@ impl SpaceApp {
                         this.agent = Some(agent);
                         this.agent_status = PluginStatus::Running;
                         this.create_pending_sessions(cx);
-                        if std::mem::take(&mut this.demo) {
-                            this.seed_demo(cx);
-                        }
                     }
                     Err(e) => {
                         this.agent_status = PluginStatus::Crashed(format!("{e:#}"));
@@ -513,31 +536,24 @@ impl SpaceApp {
         cx.notify();
     }
 
-    /// Dev-only: a handful of stub threads in varied states, for screenshots.
-    fn seed_demo(&mut self, cx: &mut Context<Self>) {
-        let sub = self.project_dir.join("crates/space-core");
-        let prompts: [(&str, Option<&Path>); 5] = [
-            ("Say hello and confirm the stub agent is wired up", None),
-            ("Fix the failing smoke test in space-core", Some(&sub)),
-            ("Clean the build cache, but ask permission before deleting anything", None),
-            ("Run the full test suite and wait for it to finish", None),
-            ("Explain how plugin discovery works, with a short code example", None),
-        ];
-        let first = self.selected;
-        let mut last = None;
-        for (text, dir) in prompts {
-            let key = match (first, last) {
-                // Reuse the empty launch thread for the first prompt.
-                (Some(k), None) if self.thread(k).is_some_and(Thread::is_empty) && dir.is_none() => k,
-                _ => self.add_thread(dir.map_or_else(|| self.project_dir.clone(), Path::to_path_buf)),
-            };
-            last = Some(key);
+    /// Open the launch threads (one empty thread when `seed` is empty). Prompts are queued
+    /// and sent once the agent is up.
+    fn seed_threads(&mut self, seed: Vec<SeedThread>, select: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        let seed = if seed.is_empty() { vec![SeedThread::default()] } else { seed };
+        let mut keys = Vec::new();
+        for s in seed {
+            let key = self.add_thread(s.cwd.unwrap_or_else(|| self.project_dir.clone()));
             if let Some(t) = self.thread_mut(key) {
-                t.queued = Some((text.to_string(), Vec::new()));
+                t.queued = s.prompt.map(|p| (p, Vec::new()));
+                t.draft = s.draft.unwrap_or_default();
             }
+            keys.push(key);
         }
-        self.create_pending_sessions(cx);
-        self.selected = last;
+        let key = select.and_then(|i| keys.get(i).copied()).or(keys.last().copied());
+        self.selected = key;
+        if let Some(draft) = key.and_then(|k| self.thread(k)).map(|t| t.draft.clone()).filter(|d| !d.is_empty()) {
+            self.input.update(cx, |s, cx| s.set_value(draft, window, cx));
+        }
     }
 
     // ----- user actions -----------------------------------------------------------------

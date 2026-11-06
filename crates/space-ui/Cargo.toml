@@ -1,0 +1,15 @@
+[package]
+name = "space-ui"
+description = "Space UI: design tokens, animation clock, components and (dev) their previews and gallery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# Dev tooling: component previews (fixtures), the gallery window, clock controls.
+# Off by default; space-app turns it on in its default `dev` feature.
+dev = []
+
+[dependencies]
+space-core.workspace = true
+gpui = { package = "gpui-kit", version = "0.9.0" }

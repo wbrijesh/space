@@ -197,6 +197,18 @@ pub fn tool_parts(title: &str) -> (String, String) {
     }
 }
 
+/// Context-ring tooltip: "Context: 18.2k / 1M tokens · 2%".
+pub fn context_usage(tokens: u64, window: Option<u64>) -> String {
+    match window {
+        Some(window) if window > 0 => {
+            let pct = tokens as f64 / window as f64 * 100.;
+            let pct = if tokens > 0 && pct < 1. { "<1%".to_string() } else { format!("{pct:.0}%") };
+            format!("Context: {} / {} tokens · {pct}", compact_tokens(tokens), compact_tokens(window))
+        }
+        _ => "Context usage not reported yet".to_string(),
+    }
+}
+
 /// 18234 → "18.2k", 1000000 → "1M".
 pub fn compact_tokens(n: u64) -> String {
     if n >= 1_000_000 {
