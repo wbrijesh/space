@@ -13,6 +13,7 @@ version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin" "$app/Contents/MacOS/Space"
 cp "$root/crates/space-app/resources/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
+cp "$root/crates/space-app/resources/Assets.car" "$app/Contents/Resources/Assets.car"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -23,6 +24,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>Space</string>
   <key>CFBundleExecutable</key><string>Space</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleIconName</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$version</string>

@@ -62,8 +62,12 @@ Environment:
 
 ## App icon
 
-`crates/space-app/resources/AppIcon.{png,icns}` is a **placeholder** (graphite tile, dashed frame,
-circle/square/triangle) until there's a real logo. Regenerate with `python3 scripts/make_placeholder_icon.py`.
+`crates/space-app/resources/AppIcon.icon` is a **placeholder** (graphite tile, dashed frame,
+circle/square/triangle) until there's a real logo. It's an Icon Composer bundle with one full-bleed
+layer; macOS 26 masks it to the system shape. A legacy `.icns` that doesn't match that shape gets put
+on a grey plate. `python3 scripts/make_placeholder_icon.py` redraws it and compiles `Assets.car` +
+`AppIcon.icns` with Xcode's `actool`. `AppIcon.png` is only the Dock icon for a bare `cargo run`
+binary.
 
 ## Using the app
 

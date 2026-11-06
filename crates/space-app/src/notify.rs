@@ -78,7 +78,7 @@ define_class!(
     }
 );
 
-/// Set the Dock icon and, when bundled, register for notifications. Returns the stream of
+/// Set the Dock icon (bare binary only) and, when bundled, register for notifications. Returns the stream of
 /// thread keys whose notification was clicked. Call once, on the main thread.
 pub fn init() -> UnboundedReceiver<u64> {
     let (tx, rx) = unbounded();
@@ -205,7 +205,12 @@ fn center() -> Option<Retained<UNUserNotificationCenter>> {
     Some(UNUserNotificationCenter::currentNotificationCenter())
 }
 
+/// A bare binary has no icon of its own, so set one. A bundle uses its compiled AppIcon, which
+/// macOS masks and renders itself; overriding it at runtime would bring back the grey plate.
 fn set_dock_icon() {
+    if NSBundle::mainBundle().bundleIdentifier().is_some() {
+        return;
+    }
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
