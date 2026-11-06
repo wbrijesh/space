@@ -9,6 +9,7 @@ import * as acp from "@agentclientprotocol/sdk";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { type AgentConfig, ensureClaudeOnPath, isolatePiConfig, loadConfig, log } from "./env.js";
 import { createPiSession, type PiSession } from "./pi.js";
+import { configureSession, parseConfigureParams, SPACE_CONFIGURE, SPACE_STATUS, sessionStatus } from "./status.js";
 import { promptText, textToolContent, toolKind, toolResultText, toolTitle } from "./translate.js";
 
 const VERSION: string = (() => {
@@ -19,9 +20,6 @@ const VERSION: string = (() => {
 		return "0.0.0";
 	}
 })();
-
-/** Space extension notification carrying the session's model info for the UI header. */
-const SPACE_STATUS = "_space/status";
 
 interface SessionState {
 	pi: PiSession;
@@ -85,12 +83,7 @@ const app = acp
 		// Sent after the response is written so the client already knows the sessionId.
 		setImmediate(() => {
 			client
-				.notify(SPACE_STATUS, {
-					sessionId,
-					provider: pi.provider,
-					model: pi.model,
-					thinkingLevel: pi.thinkingLevel,
-				})
+				.notify(SPACE_STATUS, sessionStatus(sessionId, pi.session))
 				.catch((error: unknown) => log("failed to send _space/status:", error));
 		});
 		return { sessionId };
@@ -159,6 +152,10 @@ const app = acp
 			state.turn = undefined;
 		}
 		await outbox;
+		// Context usage changed; the model may have too (e.g. a retry fallback).
+		await client
+			.notify(SPACE_STATUS, sessionStatus(sessionId, session))
+			.catch((error: unknown) => log("failed to send _space/status:", error));
 
 		if (turn.cancelled) return { stopReason: "cancelled" };
 		if (failure) {
@@ -177,6 +174,19 @@ const app = acp
 			default:
 				return { stopReason: "end_turn" };
 		}
+	})
+	.onRequest(SPACE_CONFIGURE, parseConfigureParams, async ({ params }) => {
+		const state = sessions.get(params.sessionId);
+		if (!state) throw acp.RequestError.sessionNotFound(params.sessionId);
+		if (state.turn) throw acp.RequestError.invalidRequest(undefined, "Cannot reconfigure while a prompt is running");
+		try {
+			await configureSession(state.pi.session, params);
+		} catch (error) {
+			throw acp.RequestError.invalidParams(undefined, error instanceof Error ? error.message : String(error));
+		}
+		const status = sessionStatus(params.sessionId, state.pi.session);
+		log(`configure ${params.sessionId}: model=${status.provider}/${status.model} thinking=${status.thinkingLevel}`);
+		return status;
 	})
 	.onNotification(acp.methods.agent.session.cancel, async ({ params }) => {
 		const state = sessions.get(params.sessionId);

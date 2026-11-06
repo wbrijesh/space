@@ -13,5 +13,5 @@ pub use agent_client_protocol as acp;
 /// ACP v1 message types (`InitializeRequest`, `SessionNotification`, ...).
 pub use agent_client_protocol::v1::schema as acp_schema;
 
-pub use ext::SpaceStatus;
+pub use ext::{ConfigureSession, ModelInfo, SpaceStatus};
 pub use manifest::{Manifest, ManifestError, PluginKind, RunConfig, RunCwd, MANIFEST_FILE};

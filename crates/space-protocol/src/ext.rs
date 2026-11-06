@@ -3,17 +3,43 @@
 //! Extension methods use the `_space/` prefix (ACP reserves leading-underscore method
 //! names for extensions), so any ACP peer that does not know them can ignore them.
 
-use agent_client_protocol::JsonRpcNotification;
+use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Method name of the [`SpaceStatus`] notification (agent → client).
 pub const STATUS_METHOD: &str = "_space/status";
+/// Method name of the [`ConfigureSession`] request (client → agent).
+pub const CONFIGURE_METHOD: &str = "_space/session/configure";
 
-/// `_space/status` (agent → client notification): what the agent is currently running on.
-/// Shown in the session header. All fields except `sessionId` are optional so an agent can
-/// send partial updates; the client merges them.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcNotification)]
+/// A model the agent can switch a session to.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInfo {
+    pub provider: String,
+    pub id: String,
+    /// Display name as the provider reports it (e.g. `"Claude Opus 5.5"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// `_space/status` (agent → client notification, also the response of
+/// `_space/session/configure`): what the session is running on and what it could run on.
+///
+/// All fields except `sessionId` are optional so an agent can send partial updates; the
+/// client merges them.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    JsonRpcNotification,
+    JsonRpcResponse,
+)]
 #[notification(method = "_space/status")]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceStatus {
@@ -24,24 +50,64 @@ pub struct SpaceStatus {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<String>,
+    /// Models the session can be switched to with `_space/session/configure`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_models: Option<Vec<ModelInfo>>,
+    /// Thinking levels the current model supports (e.g. `["low", "medium", "high"]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_levels: Option<Vec<String>>,
+    /// Estimated tokens currently in the model context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u64>,
+    /// Context window of the current model, in tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
 }
 
 impl SpaceStatus {
     /// Overlay the fields present in `other` onto `self`.
     pub fn merge(&mut self, other: &SpaceStatus) {
+        fn take<T: Clone>(dst: &mut Option<T>, src: &Option<T>) {
+            if src.is_some() {
+                dst.clone_from(src);
+            }
+        }
         if !other.session_id.is_empty() {
             self.session_id.clone_from(&other.session_id);
         }
-        if other.provider.is_some() {
-            self.provider.clone_from(&other.provider);
-        }
-        if other.model.is_some() {
-            self.model.clone_from(&other.model);
-        }
-        if other.thinking_level.is_some() {
-            self.thinking_level.clone_from(&other.thinking_level);
-        }
+        take(&mut self.provider, &other.provider);
+        take(&mut self.model, &other.model);
+        take(&mut self.thinking_level, &other.thinking_level);
+        take(&mut self.available_models, &other.available_models);
+        take(&mut self.thinking_levels, &other.thinking_levels);
+        take(&mut self.context_tokens, &other.context_tokens);
+        take(&mut self.context_window, &other.context_window);
     }
+
+    /// The [`ModelInfo`] of the current model, if the agent listed it.
+    pub fn current_model(&self) -> Option<&ModelInfo> {
+        let model = self.model.as_deref()?;
+        self.available_models.as_ref()?.iter().find(|m| {
+            m.id == model && self.provider.as_deref().is_none_or(|p| p == m.provider)
+        })
+    }
+}
+
+/// `_space/session/configure` (client → agent request): change a session's model and/or
+/// thinking level. Omitted fields stay as they are. `provider` defaults to the session's
+/// current provider. The agent answers with the session's full [`SpaceStatus`] after the
+/// change (a thinking level the model does not support may be clamped).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
+#[request(method = "_space/session/configure", response = SpaceStatus)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigureSession {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
 }
 
 #[cfg(test)]
@@ -51,19 +117,44 @@ mod tests {
 
     #[test]
     fn status_wire_format() {
-        let json = r#"{"sessionId":"s1","model":"claude-opus-5-5","provider":"claude-cli","thinkingLevel":"high"}"#;
+        let json = r#"{"sessionId":"s1","model":"claude-opus-5-5","provider":"claude-cli","thinkingLevel":"high",
+            "availableModels":[{"provider":"claude-cli","id":"claude-opus-5-5","name":"Claude Opus 5.5"}],
+            "thinkingLevels":["low","high"],"contextTokens":1200,"contextWindow":1000000}"#;
         let s: SpaceStatus = serde_json::from_str(json).unwrap();
         assert_eq!(s.session_id, "s1");
         assert_eq!(s.thinking_level.as_deref(), Some("high"));
+        assert_eq!(s.current_model().and_then(|m| m.name.as_deref()), Some("Claude Opus 5.5"));
+        assert_eq!(s.thinking_levels.as_deref().map(<[String]>::len), Some(2));
+        assert_eq!(s.context_window, Some(1_000_000));
         assert_eq!(s.method(), STATUS_METHOD);
+    }
+
+    #[test]
+    fn configure_wire_format() {
+        let req = ConfigureSession {
+            session_id: "s1".into(),
+            model: Some("claude-sonnet-5-5".into()),
+            ..Default::default()
+        };
+        assert_eq!(req.method(), CONFIGURE_METHOD);
+        assert_eq!(
+            serde_json::to_value(&req).unwrap(),
+            serde_json::json!({"sessionId": "s1", "model": "claude-sonnet-5-5"})
+        );
     }
 
     #[test]
     fn status_merge() {
         let mut a = SpaceStatus { session_id: "s".into(), model: Some("m".into()), ..Default::default() };
-        a.merge(&SpaceStatus { session_id: String::new(), provider: Some("p".into()), ..Default::default() });
+        a.merge(&SpaceStatus {
+            session_id: String::new(),
+            provider: Some("p".into()),
+            thinking_levels: Some(vec!["low".into()]),
+            ..Default::default()
+        });
         assert_eq!(a.model.as_deref(), Some("m"));
         assert_eq!(a.provider.as_deref(), Some("p"));
+        assert_eq!(a.thinking_levels, Some(vec!["low".to_string()]));
         assert_eq!(a.session_id, "s");
     }
 }

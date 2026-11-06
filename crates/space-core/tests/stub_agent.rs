@@ -85,7 +85,7 @@ async fn full_turn_streams_and_ends() {
         .items
         .iter()
         .map(|i| match i {
-            TranscriptItem::User(t) => format!("user:{t}"),
+            TranscriptItem::User { text: t, .. } => format!("user:{t}"),
             TranscriptItem::Thought(t) => format!("thought:{t}"),
             TranscriptItem::Tool(t) => format!("tool:{}:{}:{}", t.kind, t.status.as_str(), t.output),
             TranscriptItem::Agent(t) => format!("agent:{t}"),
@@ -211,4 +211,39 @@ async fn unbuilt_plugin_fails_clearly() {
     let err = host.start_agent("nobuild").await.err().unwrap();
     assert!(format!("{err:#}").contains("is the plugin built"), "{err:#}");
     assert!(host.start_agent("missing").await.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn configure_switches_model_and_thinking() {
+    let root = stub_root();
+    let (host, mut events) = host(root.path());
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.new_session(root.path()).await.unwrap();
+    let mut state = SessionState::new(session.id());
+    let mut seen = Vec::new();
+
+    let status = session
+        .configure(space_core::protocol::ConfigureSession {
+            model: Some("stub-fast".into()),
+            thinking_level: Some("high".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(status.model.as_deref(), Some("stub-fast"));
+    assert_eq!(status.thinking_level.as_deref(), Some("high"));
+    assert_eq!(status.available_models.as_ref().map(Vec::len), Some(2));
+    // The response is also folded into session state.
+    until(&mut events, &mut state, &mut seen, |e| {
+        matches!(e, HostEvent::Session { event: SessionEvent::Status(s), .. } if s.model.as_deref() == Some("stub-fast"))
+    })
+    .await;
+    assert_eq!(state.status.thinking_level.as_deref(), Some("high"));
+    assert_eq!(state.status.current_model().and_then(|m| m.name.as_deref()), Some("Stub Fast"));
+
+    let err = session
+        .configure(space_core::protocol::ConfigureSession { model: Some("nope".into()), ..Default::default() })
+        .await
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("configure"), "{err:#}");
 }

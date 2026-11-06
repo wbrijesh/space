@@ -2,7 +2,8 @@
 // prompts against the real claude-cli provider (bills the signed-in Claude subscription).
 //
 // Run: pnpm smoke   (or: node scripts/smoke.ts after `pnpm build`)
-// Set SMOKE_SKIP_CANCEL=1 to skip the cancellation check.
+// Set SMOKE_SKIP_CANCEL=1 to skip the cancellation check, SMOKE_NO_PROMPTS=1 to run only the
+// checks that make no model requests (handshake, _space/status, _space/session/configure).
 
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
@@ -13,7 +14,15 @@ import * as acp from "@agentclientprotocol/sdk";
 const pluginDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(pluginDir, "..", "..");
 
-type Status = { sessionId: string; provider: string; model: string; thinkingLevel: string };
+type Status = {
+	sessionId: string;
+	provider: string;
+	model: string;
+	thinkingLevel: string;
+	availableModels?: { provider: string; id: string; name?: string }[];
+	thinkingLevels?: string[];
+	contextWindow?: number;
+};
 
 const failures: string[] = [];
 function check(ok: boolean, what: string): void {
@@ -88,6 +97,25 @@ await client.connectWith(stream, async (ctx) => {
 		status?.sessionId === sessionId && status.provider === "claude-cli" && status.model === "claude-opus-5-5",
 		"_space/status arrived with claude-cli / claude-opus-5-5",
 	);
+
+	const ids = status?.availableModels?.map((m) => m.id) ?? [];
+	check(ids.includes("claude-opus-5-5") && ids.includes("claude-sonnet-5-5"), `availableModels lists Opus/Sonnet 5.5 (${ids.length} models)`);
+	check((status?.thinkingLevels ?? []).includes("medium"), `thinkingLevels reported (${status?.thinkingLevels?.join(",")})`);
+
+	// _space/session/configure (no model request).
+	const configure = (params: Record<string, unknown>) =>
+		ctx.request<Status>("_space/session/configure", { sessionId, ...params });
+	const switched = await configure({ model: "claude-sonnet-5-5", thinkingLevel: "high" });
+	check(switched.model === "claude-sonnet-5-5" && switched.thinkingLevel === "high", "configure switched to sonnet-5-5 / high");
+	const back = await configure({ model: "claude-opus-5-5", thinkingLevel: "medium" });
+	check(back.model === "claude-opus-5-5" && back.thinkingLevel === "medium", "configure switched back to opus-5-5 / medium");
+	const rejected = await configure({ model: "no-such-model" }).then(
+		() => false,
+		() => true,
+	);
+	check(rejected, "configure rejects an unknown model");
+
+	if (process.env.SMOKE_NO_PROMPTS === "1") return;
 
 	// 1. Plain text turn.
 	const pong = await runPrompt(ctx, sessionId, "Reply with exactly: pong");

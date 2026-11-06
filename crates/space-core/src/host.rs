@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context as _, Result, anyhow, bail};
 use space_protocol::acp::{self, Agent, ByteStreams, Client};
 use space_protocol::acp_schema as schema;
-use space_protocol::{PluginKind, SpaceStatus};
+use space_protocol::{ConfigureSession, PluginKind, SpaceStatus};
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -426,13 +426,19 @@ impl Session {
     /// Send a text prompt and wait for the turn to end. Streams progress as
     /// [`HostEvent::Session`] events. Returns the ACP stop reason (`end_turn`, `cancelled`, ...).
     pub async fn prompt(&self, text: impl Into<String>) -> Result<String> {
+        self.prompt_with(text, Vec::new()).await
+    }
+
+    /// Like [`Session::prompt`], with files attached as ACP `resource_link` content blocks
+    /// (`file://` URIs; the agent decides whether and how to read them).
+    pub async fn prompt_with(&self, text: impl Into<String>, attachments: Vec<PathBuf>) -> Result<String> {
         let text = text.into();
         if self.inner.running.swap(true, Ordering::SeqCst) {
             bail!("a prompt is already running in this session");
         }
         let host = self.inner.agent.inner.shared.host.clone();
         let id = self.inner.id.clone();
-        host.emit_session(&id, SessionEvent::UserMessage { text: text.clone() });
+        host.emit_session(&id, SessionEvent::UserMessage { text: text.clone(), attachments: attachments.clone() });
         host.emit_session(&id, SessionEvent::TurnStarted);
 
         let agent = self.inner.agent.clone();
@@ -440,10 +446,15 @@ impl Session {
         let result = host
             .rt
             .spawn(async move {
-                let request = schema::PromptRequest::new(
-                    task_id,
-                    vec![schema::ContentBlock::Text(schema::TextContent::new(text))],
-                );
+                let mut blocks = vec![schema::ContentBlock::Text(schema::TextContent::new(text))];
+                for path in &attachments {
+                    let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+                    blocks.push(schema::ContentBlock::ResourceLink(schema::ResourceLink::new(
+                        name,
+                        format!("file://{}", path.display()),
+                    )));
+                }
+                let request = schema::PromptRequest::new(task_id, blocks);
                 agent
                     .inner
                     .conn
@@ -484,5 +495,32 @@ impl Session {
 
     pub fn resolve_permission(&self, request_id: u64, decision: PermissionDecision) -> Result<()> {
         self.inner.agent.resolve_permission(request_id, decision)
+    }
+
+    /// `_space/session/configure`: switch the session's model and/or thinking level.
+    /// `session_id` in `request` is filled in. On success the returned status is also
+    /// emitted as a [`SessionEvent::Status`], so folded state picks it up.
+    pub async fn configure(&self, mut request: ConfigureSession) -> Result<SpaceStatus> {
+        request.session_id.clone_from(&self.inner.id);
+        let agent = self.inner.agent.clone();
+        let host = agent.inner.shared.host.clone();
+        let mut status = host
+            .rt
+            .spawn(async move {
+                agent
+                    .inner
+                    .conn
+                    .send_request(request)
+                    .block_task()
+                    .await
+                    .map_err(|e| acp_error("_space/session/configure", e, &agent.inner.process))
+            })
+            .await
+            .map_err(|e| anyhow!("configure task failed: {e}"))??;
+        if status.session_id.is_empty() {
+            status.session_id.clone_from(&self.inner.id);
+        }
+        host.emit_session(&self.inner.id, SessionEvent::Status(status.clone()));
+        Ok(status)
     }
 }

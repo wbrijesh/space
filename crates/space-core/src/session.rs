@@ -103,8 +103,9 @@ pub struct PlanEntry {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionEvent {
     Created { plugin_id: String, cwd: PathBuf },
-    /// The user sent a prompt (emitted by the harness, not the agent).
-    UserMessage { text: String },
+    /// The user sent a prompt (emitted by the harness, not the agent). `attachments` are
+    /// the file paths sent along as ACP `resource_link` blocks.
+    UserMessage { text: String, attachments: Vec<PathBuf> },
     TurnStarted,
     AgentText { text: String },
     AgentThought { text: String },
@@ -123,7 +124,7 @@ pub enum SessionEvent {
 /// One entry in the rendered transcript.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TranscriptItem {
-    User(String),
+    User { text: String, attachments: Vec<PathBuf> },
     Agent(String),
     Thought(String),
     Tool(ToolCallInfo),
@@ -158,7 +159,9 @@ impl SessionState {
                 self.plugin_id.clone_from(plugin_id);
                 self.cwd.clone_from(cwd);
             }
-            SessionEvent::UserMessage { text } => self.items.push(TranscriptItem::User(text.clone())),
+            SessionEvent::UserMessage { text, attachments } => self
+                .items
+                .push(TranscriptItem::User { text: text.clone(), attachments: attachments.clone() }),
             SessionEvent::TurnStarted => self.running = true,
             SessionEvent::AgentText { text } => match self.items.last_mut() {
                 Some(TranscriptItem::Agent(buf)) => buf.push_str(text),
@@ -274,7 +277,7 @@ mod tests {
         let mut s = SessionState::new("s1");
         let ev = |e: SessionEvent| e;
         for e in [
-            ev(SessionEvent::UserMessage { text: "hi".into() }),
+            ev(SessionEvent::UserMessage { text: "hi".into(), attachments: vec![] }),
             ev(SessionEvent::TurnStarted),
             ev(SessionEvent::AgentThought { text: "think".into() }),
             ev(SessionEvent::AgentThought { text: "ing".into() }),

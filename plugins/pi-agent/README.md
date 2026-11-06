@@ -22,9 +22,14 @@ Space harness (ACP client) ──stdin/stdout NDJSON──▶ node dist/main.js
 | ACP | Behaviour |
 |---|---|
 | `initialize` | Returns `protocolVersion: 1`, `loadSession: false`, `agentInfo {name: "pi-agent", version}` |
-| `session/new {cwd}` | Creates an isolated pi session for `cwd`, then sends the `_space/status` notification `{sessionId, provider, model, thinkingLevel}` |
+| `session/new {cwd}` | Creates an isolated pi session for `cwd`, then sends the `_space/status` notification (`provider`, `model`, `thinkingLevel`, `availableModels`, `thinkingLevels`, context usage) |
 | `session/prompt` | Joins the text blocks (other block types are described inline) and runs `session.prompt()`. It streams pi events as `session/update` notifications and resolves with `end_turn`, `cancelled` or `max_tokens`. Provider errors become a JSON-RPC error (-32603) carrying pi's message, for example the claude-cli usage-credit stop. |
 | `session/cancel` | `session.abort()`; the pending prompt resolves with `cancelled` |
+| `_space/session/configure {sessionId, provider?, model?, thinkingLevel?}` | `session.setModel()` / `session.setThinkingLevel()` (session-only, pi clamps the level to the model), returns the new `_space/status` payload. Rejected while a prompt is running. |
+
+`availableModels` lists the current provider's models (for claude-cli: pi's built-in Anthropic catalog),
+without dated snapshot ids, grouped Opus / Sonnet / Haiku / Fable and newest first. `_space/status` is sent
+again after every turn with the updated `contextTokens` / `contextWindow` from `session.getContextUsage()`.
 
 How pi events map to `session/update`:
 
@@ -58,6 +63,7 @@ pnpm build        # tsc → dist/
 pnpm typecheck    # src + scripts
 pnpm start        # node dist/main.js (speaks ACP on stdio)
 pnpm smoke        # build, then run the end-to-end ACP client test (bills a few tiny requests)
+SMOKE_NO_PROMPTS=1 node scripts/smoke.ts   # only handshake/status/configure checks, no model requests
 ```
 
 Requires Node ≥ 24 and the Claude Code CLI, signed in to a Pro or Max plan (`claude auth login`).

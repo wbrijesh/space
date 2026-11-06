@@ -73,7 +73,29 @@ Space extensions (v0):
 
 | Direction | Method | Payload |
 |---|---|---|
-| agent → client | `_space/status` (notification) | `{ sessionId, model, provider, thinkingLevel }` — shown in the UI header |
+| agent → client | `_space/status` (notification) | `SpaceStatus` (below): what the session runs on, what it could run on, context usage |
+| client → agent | `_space/session/configure` (request) | `{ sessionId, provider?, model?, thinkingLevel? }` → the session's full `SpaceStatus` after the change |
+
+`SpaceStatus` (every field but `sessionId` optional; the client merges partial updates):
+
+```jsonc
+{
+  "sessionId": "…",
+  "provider": "claude-cli",
+  "model": "claude-opus-5-5",
+  "thinkingLevel": "medium",
+  "availableModels": [{ "provider": "claude-cli", "id": "claude-opus-5-5", "name": "Claude Opus 5.5" }, …],
+  "thinkingLevels": ["low", "medium", "high", "xhigh", "max"],   // levels the current model supports
+  "contextTokens": 18234,                                          // estimated tokens in context
+  "contextWindow": 1000000
+}
+```
+
+Agents send it after `session/new` and whenever it changes (pi-agent: after every turn). The app shows the
+model and thinking level in the composer and switches them with `_space/session/configure`; omitted
+fields are left unchanged, `provider` defaults to the current one, and an unsupported thinking level may
+be clamped by the agent. Invalid requests fail with a JSON-RPC error (`-32602`). Prompts may carry
+`resource_link` blocks (`file://…`) for files the user attached in the composer.
 
 Tools run inside the agent (pi's built-in tools: read, bash, edit, write, …) in v0. The ACP `fs/*` and
 `terminal/*` client capabilities are **not** advertised by the harness yet.
