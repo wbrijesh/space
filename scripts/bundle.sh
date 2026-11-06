@@ -8,6 +8,9 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 bin="$root/target/$profile/Space"
 app="$root/target/$profile/Space.app"
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)"
+# A fresh build number each time: macOS caches icons by bundle id + version, so without it a
+# changed icon keeps showing the old one.
+build="$(date +%s)"
 
 [ -x "$bin" ] || { echo "missing $bin (build first)" >&2; exit 1; }
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -27,7 +30,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleIconName</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
-  <key>CFBundleVersion</key><string>$version</string>
+  <key>CFBundleVersion</key><string>$build</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
