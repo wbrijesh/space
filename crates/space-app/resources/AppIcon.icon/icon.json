@@ -1,6 +1,6 @@
 {
   "fill": {
-    "solid": "srgb:0.35686,0.36078,0.90980,1.00000"
+    "solid": "srgb:1.00000,0.68627,0.32941,1.00000"
   },
   "groups": [
     {
@@ -15,20 +15,6 @@
         "opacity": 0.35
       },
       "specular": true
-    },
-    {
-      "layers": [
-        {
-          "image-name": "sunrise.png",
-          "name": "sunrise",
-          "glass": false
-        }
-      ],
-      "shadow": {
-        "kind": "none",
-        "opacity": 0
-      },
-      "specular": false
     }
   ],
   "supported-platforms": {

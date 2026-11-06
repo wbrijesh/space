@@ -62,11 +62,11 @@ Environment:
 
 ## App icon
 
-A black S (bottom bar, 68° stem, top bar of the same length, both ends square) on a sunrise
-gradient: an amber core below centre through orange, red, sage and periwinkle to violet-blue.
+A black S (bottom bar, 68° stem, top bar of the same length, both ends square) on a flat apricot
+tile, #FFAF54 (halfway between amber and orange).
 `python3 scripts/make_app_icon.py` draws it into `crates/space-app/resources/`:
 
-- `AppIcon.icon`: Icon Composer bundle (S layer over the gradient layer). macOS 26 masks and
+- `AppIcon.icon`: Icon Composer bundle (the tile colour as its fill, the S as its layer). macOS 26 masks and
   lights it, and uses it for the Dock, app switcher, Finder and notifications.
 - `Assets.car`: compiled from it with Xcode's `actool`; `scripts/bundle.sh` ships it.
 - `AppIcon.png`: flattened, pre-masked copy, set as the Dock icon only for a bare `cargo run`.
