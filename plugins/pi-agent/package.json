@@ -12,7 +12,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.check.json",
     "start": "node dist/main.js",
-    "smoke": "pnpm run build && node scripts/smoke.ts"
+    "smoke": "pnpm run build && node scripts/smoke.ts",
+    "test-mode": "pnpm run build && node scripts/mode-test.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.4.0",

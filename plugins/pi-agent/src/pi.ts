@@ -15,6 +15,7 @@ import {
 import claudeCli from "@pi-plugins/claude-cli";
 import type { AgentConfig } from "./env.js";
 import { log } from "./env.js";
+import { ModeControl } from "./mode.js";
 
 export interface PiSession {
 	runtime: AgentSessionRuntime;
@@ -22,9 +23,12 @@ export interface PiSession {
 	provider: string;
 	model: string;
 	thinkingLevel: string;
+	/** ACP session mode (read/write) and its pi hooks. */
+	mode: ModeControl;
 }
 
 export async function createPiSession(cwd: string, config: AgentConfig): Promise<PiSession> {
+	const mode = new ModeControl();
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
 		// No API keys: in-memory credentials, no models.json, in-memory settings. The only
 		// provider we use is claude-cli, which signs requests through the `claude` CLI.
@@ -47,7 +51,11 @@ export async function createPiSession(cwd: string, config: AgentConfig): Promise
 				noSkills: true,
 				noPromptTemplates: true,
 				noThemes: true,
-				extensionFactories: [{ name: "claude-cli", factory: claudeCli }],
+				extensionFactories: [
+					{ name: "claude-cli", factory: claudeCli },
+					// Read-only mode: hidden prompt section and bash guard (see mode.ts).
+					{ name: "space-mode", factory: mode.extension(), hidden: true },
+				],
 				// Project context files (AGENTS.md / CLAUDE.md walking up from cwd) still load.
 			},
 		});
@@ -82,6 +90,7 @@ export async function createPiSession(cwd: string, config: AgentConfig): Promise
 	const session = runtime.session;
 	// Emits session_start to extensions (claude-cli manages its CLI process per session).
 	await session.bindExtensions({});
+	mode.attach(session);
 	const model = session.model;
 	return {
 		runtime,
@@ -89,5 +98,6 @@ export async function createPiSession(cwd: string, config: AgentConfig): Promise
 		provider: model?.provider ?? config.provider,
 		model: model?.id ?? config.modelId,
 		thinkingLevel: session.thinkingLevel,
+		mode,
 	};
 }

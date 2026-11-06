@@ -3,7 +3,8 @@
 use space_protocol::acp_schema as acp;
 
 use crate::session::{
-    PermissionKind, PermissionOption, PlanEntry, SessionEvent, ToolCallInfo, ToolCallPatch, ToolStatus,
+    ModeInfo, PermissionKind, PermissionOption, PlanEntry, SessionEvent, SessionModes, ToolCallInfo, ToolCallPatch,
+    ToolStatus,
 };
 
 /// Max characters of tool output kept per tool call.
@@ -22,9 +23,21 @@ pub(crate) fn session_update(update: acp::SessionUpdate) -> Option<SessionEvent>
                 .map(|e| PlanEntry { content: e.content, status: wire_str(&e.status) })
                 .collect(),
         ),
-        // User message replays, mode/command/usage updates are not shown in v0.
+        U::CurrentModeUpdate(u) => SessionEvent::ModeChanged { mode_id: u.current_mode_id.0.to_string() },
+        // User message replays, command/usage updates are not shown in v0.
         _ => return None,
     })
+}
+
+pub(crate) fn modes(state: &acp::SessionModeState) -> SessionModes {
+    SessionModes {
+        current: state.current_mode_id.0.to_string(),
+        available: state
+            .available_modes
+            .iter()
+            .map(|m| ModeInfo { id: m.id.0.to_string(), name: m.name.clone(), description: m.description.clone() })
+            .collect(),
+    }
 }
 
 pub(crate) fn tool_call(call: acp::ToolCall) -> ToolCallInfo {
@@ -151,5 +164,21 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(session_update(update), Some(SessionEvent::AgentText { text: "hi".into() }));
+
+        let update: acp::SessionUpdate = serde_json::from_value(serde_json::json!({
+            "sessionUpdate": "current_mode_update",
+            "currentModeId": "read"
+        }))
+        .unwrap();
+        assert_eq!(session_update(update), Some(SessionEvent::ModeChanged { mode_id: "read".into() }));
+
+        let state: acp::SessionModeState = serde_json::from_value(serde_json::json!({
+            "currentModeId": "write",
+            "availableModes": [{"id": "write", "name": "Write"}, {"id": "read", "name": "Read-only", "description": "d"}]
+        }))
+        .unwrap();
+        let m = modes(&state);
+        assert_eq!(m.current, "write");
+        assert_eq!(m.available[1].description.as_deref(), Some("d"));
     }
 }

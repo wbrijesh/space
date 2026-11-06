@@ -247,3 +247,43 @@ async fn configure_switches_model_and_thinking() {
         .unwrap_err();
     assert!(format!("{err:#}").contains("configure"), "{err:#}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn set_mode_round_trips() {
+    let root = stub_root();
+    let (host, mut events) = host(root.path());
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.new_session(root.path()).await.unwrap();
+    let mut state = SessionState::new(session.id());
+    let mut seen = Vec::new();
+
+    // session/new advertised the modes; Write is current.
+    let modes = session.modes().cloned().expect("stub advertises modes");
+    assert_eq!(modes.current, "write");
+    assert!(modes.has("read") && modes.has("write"));
+    until(&mut events, &mut state, &mut seen, |e| {
+        matches!(e, HostEvent::Session { event: SessionEvent::Modes(_), .. })
+    })
+    .await;
+    assert_eq!(state.modes.as_ref().map(|m| m.current.as_str()), Some("write"));
+
+    session.set_mode("read").await.unwrap();
+    until(&mut events, &mut state, &mut seen, |e| {
+        matches!(e, HostEvent::Session { event: SessionEvent::ModeChanged { .. }, .. })
+    })
+    .await;
+    assert_eq!(state.modes.as_ref().map(|m| m.current.as_str()), Some("read"));
+
+    // The next prompt runs in read mode (the stub logs it).
+    assert_eq!(session.prompt("hello").await.unwrap(), "end_turn");
+    assert!(agent.logs().iter().any(|l| l.contains("prompt \"hello\" (mode read)")), "{:?}", agent.logs());
+
+    let err = session.set_mode("plan").await.unwrap_err();
+    assert!(format!("{err:#}").contains("set_mode"), "{err:#}");
+    session.set_mode("write").await.unwrap();
+    until(&mut events, &mut state, &mut seen, |e| {
+        matches!(e, HostEvent::Session { event: SessionEvent::ModeChanged { mode_id }, .. } if mode_id == "write")
+    })
+    .await;
+    assert_eq!(state.modes.unwrap().current, "write");
+}

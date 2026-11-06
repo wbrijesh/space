@@ -8,6 +8,7 @@ import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { type AgentConfig, ensureClaudeOnPath, isolatePiConfig, loadConfig, log } from "./env.js";
+import { isModeId, modeState } from "./mode.js";
 import { createPiSession, type PiSession } from "./pi.js";
 import { configureSession, parseConfigureParams, SPACE_CONFIGURE, SPACE_STATUS, sessionStatus } from "./status.js";
 import { promptText, textToolContent, toolKind, toolResultText, toolTitle } from "./translate.js";
@@ -86,7 +87,7 @@ const app = acp
 				.notify(SPACE_STATUS, sessionStatus(sessionId, pi.session))
 				.catch((error: unknown) => log("failed to send _space/status:", error));
 		});
-		return { sessionId };
+		return { sessionId, modes: modeState(pi.mode.mode) };
 	})
 	.onRequest(acp.methods.agent.session.prompt, async ({ params, client }) => {
 		const state = sessions.get(params.sessionId);
@@ -150,6 +151,8 @@ const app = acp
 		} finally {
 			unsubscribe();
 			state.turn = undefined;
+			// A mode switched mid-turn takes effect now, for the next prompt.
+			state.pi.mode.applyTools();
 		}
 		await outbox;
 		// Context usage changed; the model may have too (e.g. a retry fallback).
@@ -187,6 +190,17 @@ const app = acp
 		const status = sessionStatus(params.sessionId, state.pi.session);
 		log(`configure ${params.sessionId}: model=${status.provider}/${status.model} thinking=${status.thinkingLevel}`);
 		return status;
+	})
+	.onRequest(acp.methods.agent.session.setMode, async ({ params }) => {
+		const state = sessions.get(params.sessionId);
+		if (!state) throw acp.RequestError.sessionNotFound(params.sessionId);
+		if (!isModeId(params.modeId)) throw acp.RequestError.invalidParams(undefined, `Unknown mode "${params.modeId}"`);
+		const { mode } = state.pi;
+		mode.mode = params.modeId;
+		// Tools change between runs only; a running turn keeps its mode (applied when it ends).
+		if (!state.turn) mode.applyTools();
+		log(`set_mode ${params.sessionId}: ${mode.mode}${state.turn ? " (from the next prompt)" : ""}`);
+		return {};
 	})
 	.onNotification(acp.methods.agent.session.cancel, async ({ params }) => {
 		const state = sessions.get(params.sessionId);

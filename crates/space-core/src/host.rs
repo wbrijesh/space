@@ -20,7 +20,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use crate::convert;
 use crate::discovery::{self, DiscoveredPlugin, DiscoveryOptions, DiscoveryReport};
 use crate::process::{self, ExitKind, PluginProcess};
-use crate::session::{PermissionDecision, PermissionRequest, SessionEvent, SessionId};
+use crate::session::{PermissionDecision, PermissionRequest, SessionEvent, SessionId, SessionModes};
 
 type Conn = acp::v1::ConnectionTo<Agent>;
 
@@ -388,8 +388,12 @@ impl AgentHandle {
             })
             .await??;
         let id = response.session_id.0.to_string();
+        let modes = response.modes.as_ref().map(convert::modes);
         host.emit_session(&id, SessionEvent::Created { plugin_id: self.inner.plugin_id.clone(), cwd });
-        Ok(Session { inner: Arc::new(SessionInner { id, agent: self.clone(), running: AtomicBool::new(false) }) })
+        if let Some(modes) = &modes {
+            host.emit_session(&id, SessionEvent::Modes(modes.clone()));
+        }
+        Ok(Session { inner: Arc::new(SessionInner { id, agent: self.clone(), running: AtomicBool::new(false), modes }) })
     }
 
     /// Answer a `session/request_permission` from this agent.
@@ -408,6 +412,8 @@ struct SessionInner {
     id: SessionId,
     agent: AgentHandle,
     running: AtomicBool,
+    /// Modes from `session/new` (`None`: the agent has none).
+    modes: Option<SessionModes>,
 }
 
 impl Session {
@@ -421,6 +427,11 @@ impl Session {
 
     pub fn is_running(&self) -> bool {
         self.inner.running.load(Ordering::SeqCst)
+    }
+
+    /// The modes the agent offered in `session/new` (the current one as of then).
+    pub fn modes(&self) -> Option<&SessionModes> {
+        self.inner.modes.as_ref()
     }
 
     /// Send a text prompt and wait for the turn to end. Streams progress as
@@ -495,6 +506,29 @@ impl Session {
 
     pub fn resolve_permission(&self, request_id: u64, decision: PermissionDecision) -> Result<()> {
         self.inner.agent.resolve_permission(request_id, decision)
+    }
+
+    /// `session/set_mode`: switch the session to one of its modes. The agent applies it from the
+    /// next prompt if a turn is running. On success a [`SessionEvent::ModeChanged`] is emitted.
+    pub async fn set_mode(&self, mode_id: impl Into<String>) -> Result<()> {
+        let mode_id = mode_id.into();
+        let agent = self.inner.agent.clone();
+        let host = agent.inner.shared.host.clone();
+        let request = schema::SetSessionModeRequest::new(self.inner.id.clone(), mode_id.clone());
+        host.rt
+            .spawn(async move {
+                agent
+                    .inner
+                    .conn
+                    .send_request(request)
+                    .block_task()
+                    .await
+                    .map_err(|e| acp_error("session/set_mode", e, &agent.inner.process))
+            })
+            .await
+            .map_err(|e| anyhow!("set_mode task failed: {e}"))??;
+        host.emit_session(&self.inner.id, SessionEvent::ModeChanged { mode_id });
+        Ok(())
     }
 
     /// `_space/session/configure`: switch the session's model and/or thinking level.

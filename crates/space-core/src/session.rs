@@ -99,6 +99,27 @@ pub struct PlanEntry {
     pub status: String,
 }
 
+/// A mode the agent offers for a session (ACP `SessionMode`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModeInfo {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+/// The session's modes (ACP `SessionModeState`, from `session/new`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SessionModes {
+    pub current: String,
+    pub available: Vec<ModeInfo>,
+}
+
+impl SessionModes {
+    pub fn has(&self, id: &str) -> bool {
+        self.available.iter().any(|m| m.id == id)
+    }
+}
+
 /// Everything that can happen in a session.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionEvent {
@@ -113,6 +134,10 @@ pub enum SessionEvent {
     ToolCallUpdate(ToolCallPatch),
     Plan(Vec<PlanEntry>),
     Status(SpaceStatus),
+    /// The modes the agent offers, from `session/new` (only for agents that have modes).
+    Modes(SessionModes),
+    /// The current mode changed (`current_mode_update`, or a `session/set_mode` that succeeded).
+    ModeChanged { mode_id: String },
     PermissionRequested(PermissionRequest),
     PermissionResolved { request_id: u64, decision: PermissionDecision },
     /// The prompt request settled. `stop_reason` is the ACP stop reason (`end_turn`,
@@ -142,6 +167,8 @@ pub struct SessionState {
     pub plugin_id: String,
     pub cwd: PathBuf,
     pub status: SpaceStatus,
+    /// `None`: the agent has no session modes.
+    pub modes: Option<SessionModes>,
     pub items: Vec<TranscriptItem>,
     /// A prompt is in flight.
     pub running: bool,
@@ -205,6 +232,12 @@ impl SessionState {
                 }
             }
             SessionEvent::Status(status) => self.status.merge(status),
+            SessionEvent::Modes(modes) => self.modes = Some(modes.clone()),
+            SessionEvent::ModeChanged { mode_id } => {
+                if let Some(modes) = &mut self.modes {
+                    modes.current.clone_from(mode_id);
+                }
+            }
             SessionEvent::PermissionRequested(request) => {
                 self.items.push(TranscriptItem::Permission { request: request.clone(), resolved: None })
             }
@@ -349,5 +382,18 @@ mod tests {
         }));
         assert_eq!(s.status.model.as_deref(), Some("m"));
         assert_eq!(s.status.thinking_level.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn modes_fold() {
+        let mut s = SessionState::new("s1");
+        s.apply(&SessionEvent::ModeChanged { mode_id: "read".into() });
+        assert!(s.modes.is_none(), "no modes advertised: nothing to change");
+        let mode = |id: &str| ModeInfo { id: id.into(), name: id.into(), description: None };
+        s.apply(&SessionEvent::Modes(SessionModes { current: "write".into(), available: vec![mode("write"), mode("read")] }));
+        s.apply(&SessionEvent::ModeChanged { mode_id: "read".into() });
+        let modes = s.modes.as_ref().unwrap();
+        assert_eq!(modes.current, "read");
+        assert!(modes.has("write") && !modes.has("plan"));
     }
 }

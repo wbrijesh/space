@@ -3,7 +3,8 @@
 //
 // Run: pnpm smoke   (or: node scripts/smoke.ts after `pnpm build`)
 // Set SMOKE_SKIP_CANCEL=1 to skip the cancellation check, SMOKE_NO_PROMPTS=1 to run only the
-// checks that make no model requests (handshake, _space/status, _space/session/configure).
+// checks that make no model requests (handshake, _space/status, _space/session/configure,
+// session/set_mode).
 
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
@@ -90,8 +91,10 @@ await client.connectWith(stream, async (ctx) => {
 	console.log(`initialize -> protocolVersion=${init.protocolVersion} agentInfo=${JSON.stringify(init.agentInfo)}`);
 	check(init.protocolVersion === acp.PROTOCOL_VERSION, "protocol version negotiated");
 
-	const { sessionId } = await ctx.request(acp.methods.agent.session.new, { cwd: repoRoot, mcpServers: [] });
-	console.log(`session/new -> ${sessionId}`);
+	const { sessionId, modes } = await ctx.request(acp.methods.agent.session.new, { cwd: repoRoot, mcpServers: [] });
+	console.log(`session/new -> ${sessionId} modes=${JSON.stringify(modes)}`);
+	const modeIds = modes?.availableModes.map((m) => m.id) ?? [];
+	check(modes?.currentModeId === "write" && modeIds.includes("read") && modeIds.includes("write"), "session/new advertises write (current) and read modes");
 	await new Promise((r) => setTimeout(r, 200));
 	check(
 		status?.sessionId === sessionId && status.provider === "claude-cli" && status.model === "claude-opus-5-5",
@@ -114,6 +117,12 @@ await client.connectWith(stream, async (ctx) => {
 		() => true,
 	);
 	check(rejected, "configure rejects an unknown model");
+
+	// session/set_mode (no model request; the active tools per mode are checked by scripts/mode-test.ts).
+	const setMode = (modeId: string) => ctx.request(acp.methods.agent.session.setMode, { sessionId, modeId });
+	check(await setMode("read").then(() => true, () => false), "set_mode read accepted");
+	check(await setMode("write").then(() => true, () => false), "set_mode write accepted");
+	check(await setMode("nope").then(() => false, () => true), "set_mode rejects an unknown mode");
 
 	if (process.env.SMOKE_NO_PROMPTS === "1") return;
 

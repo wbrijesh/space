@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! Space [PROJECT_DIR]                 open the window (project defaults to the cwd)
-//! Space --smoke "PROMPT" [--plugin ID] [--allow] [PROJECT_DIR]
+//! Space --smoke "PROMPT" [--plugin ID] [--allow] [--mode ID] [PROJECT_DIR]
 //!                                     headless: start an agent, prompt once, print events
 //! Space --gallery                     dev: open the component gallery
 //! Space --scenario NAME|list [DIR]    dev: boot into a scripted state (stub agent)
@@ -39,6 +39,7 @@ struct Args {
     smoke: Option<String>,
     plugin: Option<String>,
     allow: bool,
+    mode: Option<String>,
     gallery: bool,
     scenario: Option<String>,
 }
@@ -48,6 +49,7 @@ fn parse_args() -> Result<Args> {
     let mut smoke = None;
     let mut plugin = None;
     let mut allow = false;
+    let mut mode = None;
     let mut gallery = false;
     let mut scenario = None;
     let mut args = std::env::args().skip(1);
@@ -56,11 +58,12 @@ fn parse_args() -> Result<Args> {
             "--smoke" => smoke = Some(args.next().context("--smoke needs a prompt")?),
             "--plugin" => plugin = Some(args.next().context("--plugin needs an id")?),
             "--allow" => allow = true,
+            "--mode" => mode = Some(args.next().context("--mode needs a mode id (e.g. read)")?),
             "--gallery" => gallery = true,
             "--scenario" => scenario = Some(args.next().context("--scenario needs a name (or `list`)")?),
             "-h" | "--help" => {
                 println!(
-                    "usage: Space [PROJECT_DIR]\n       Space --smoke PROMPT [--plugin ID] [--allow] [PROJECT_DIR]\n       \
+                    "usage: Space [PROJECT_DIR]\n       Space --smoke PROMPT [--plugin ID] [--allow] [--mode ID] [PROJECT_DIR]\n       \
                      Space --gallery\n       Space --scenario NAME|list [PROJECT_DIR]"
                 );
                 std::process::exit(0);
@@ -73,7 +76,7 @@ fn parse_args() -> Result<Args> {
         Some(p) => p.canonicalize().with_context(|| format!("project dir {}", p.display()))?,
         None => std::env::current_dir()?,
     };
-    Ok(Args { project_dir, smoke, plugin, allow, gallery, scenario })
+    Ok(Args { project_dir, smoke, plugin, allow, mode, gallery, scenario })
 }
 
 fn main() -> Result<()> {
@@ -130,6 +133,7 @@ fn main() -> Result<()> {
             cwd: args.project_dir,
             prompt,
             allow_permissions: args.allow,
+            mode: args.mode,
             timeout: Duration::from_secs(180),
         };
         let state = runtime.block_on(smoke::run(&host, events, opts))?;

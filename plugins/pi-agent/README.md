@@ -15,16 +15,18 @@ The contract with the harness (manifest, ACP subset, `_space/status`) is in
 Space harness (ACP client) ──stdin/stdout NDJSON──▶ node dist/main.js
                                                    ├─ @agentclientprotocol/sdk  agent() app, ACP v1
                                                    ├─ pi AgentSessionRuntime per ACP session (in memory)
-                                                   │    tools: read, bash, edit, write (run in-process)
+                                                   │    tools: read, bash, edit, write (run in-process;
+                                                   │    read mode: read, bash, grep, find, ls)
                                                    └─ claude-cli provider ──▶ `claude --print` (subscription)
 ```
 
 | ACP | Behaviour |
 |---|---|
 | `initialize` | Returns `protocolVersion: 1`, `loadSession: false`, `agentInfo {name: "pi-agent", version}` |
-| `session/new {cwd}` | Creates an isolated pi session for `cwd`, then sends the `_space/status` notification (`provider`, `model`, `thinkingLevel`, `availableModels`, `thinkingLevels`, context usage) |
+| `session/new {cwd}` | Creates an isolated pi session for `cwd` and returns its `modes` (`write`, current, and `read`), then sends the `_space/status` notification (`provider`, `model`, `thinkingLevel`, `availableModels`, `thinkingLevels`, context usage) |
 | `session/prompt` | Joins the text blocks (other block types are described inline) and runs `session.prompt()`. It streams pi events as `session/update` notifications and resolves with `end_turn`, `cancelled` or `max_tokens`. Provider errors become a JSON-RPC error (-32603) carrying pi's message, for example the claude-cli usage-credit stop. |
 | `session/cancel` | `session.abort()`; the pending prompt resolves with `cancelled` |
+| `session/set_mode {sessionId, modeId}` | `write` or `read` (see below). Applies from the next prompt; a running turn keeps its mode. |
 | `_space/session/configure {sessionId, provider?, model?, thinkingLevel?}` | `session.setModel()` / `session.setThinkingLevel()` (session-only, pi clamps the level to the model), returns the new `_space/status` payload. Rejected while a prompt is running. |
 
 `availableModels` lists the current provider's models (for claude-cli: pi's built-in Anthropic catalog),
@@ -37,6 +39,23 @@ How pi events map to `session/update`:
 - `thinking_delta` → `agent_thought_chunk`
 - `tool_execution_start` → `tool_call`. It carries the title (`bash: ls -la`, `read: src/x.ts`), `status: in_progress`, `rawInput`, and a kind: read→`read`, edit/write→`edit`, bash→`execute`, grep/find/ls→`search`, anything else→`other`.
 - `tool_execution_end` → `tool_call_update` with status `completed` or `failed`, plus the result text truncated to about 8k characters.
+
+### Read-only mode (`session/set_mode` → `read`)
+
+`src/mode.ts`. Nothing is added to the user's message, so nothing shows in the transcript:
+
+- **Tools**: `session.setActiveToolsByName()` drops `edit` and `write` and adds `grep`, `find` and `ls`
+  (read and bash stay). Write mode restores the session's original tools.
+- **System prompt**: an inline pi extension's `before_agent_start` handler adds a `read_only_mode` section
+  to `event.systemPromptOptions.sections` for that run. pi sends prompt-section changes to the model as a
+  system patch; it is not a user message and is never sent over ACP. Write mode adds nothing.
+- **Bash guard** (best effort; the prompt is the main guard): the same extension's `tool_call` handler blocks
+  obviously mutating commands (`rm`, `mv`, `touch`, output redirected into a file, `sed -i`, `git
+  commit|checkout|reset|push|stash|…`, `npm|pnpm install|add`, `cargo fmt|install`, …) with a tool error that
+  tells the model to describe the change instead. Quoted strings are ignored, so `rg "a > b"` passes.
+
+`pnpm test-mode` checks the tool sets on a real session, the prompt section and the guard without any
+model request.
 
 ### Isolation from your pi setup
 
@@ -63,7 +82,8 @@ pnpm build        # tsc → dist/
 pnpm typecheck    # src + scripts
 pnpm start        # node dist/main.js (speaks ACP on stdio)
 pnpm smoke        # build, then run the end-to-end ACP client test (bills a few tiny requests)
-SMOKE_NO_PROMPTS=1 node scripts/smoke.ts   # only handshake/status/configure checks, no model requests
+pnpm test-mode    # read/write mode: active tools, prompt section, bash guard (no model requests)
+SMOKE_NO_PROMPTS=1 node scripts/smoke.ts   # only handshake/status/configure/set_mode checks, no model requests
 ```
 
 Requires Node ≥ 24 and the Claude Code CLI, signed in to a Pro or Max plan (`claude auth login`).

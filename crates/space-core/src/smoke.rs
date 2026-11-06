@@ -19,6 +19,8 @@ pub struct SmokeOptions {
     pub prompt: String,
     /// Answer permission requests with the first allow option (else reject/cancel).
     pub allow_permissions: bool,
+    /// Switch the session to this mode (`session/set_mode`, e.g. `read`) before prompting.
+    pub mode: Option<String>,
     pub timeout: Duration,
 }
 
@@ -43,6 +45,14 @@ pub async fn run(host: &Host, mut events: EventReceiver, opts: SmokeOptions) -> 
     println!("initialized (agent: {})", agent.agent_name().unwrap_or("?"));
     let session = agent.new_session(&opts.cwd).await?;
     println!("session {} in {}", session.id(), opts.cwd.display());
+    if let Some(modes) = session.modes() {
+        let ids: Vec<_> = modes.available.iter().map(|m| m.id.as_str()).collect();
+        println!("modes: {} (current {})", ids.join(", "), modes.current);
+    }
+    if let Some(mode) = &opts.mode {
+        session.set_mode(mode.clone()).await?;
+        println!("mode set to {mode}");
+    }
     println!("> {}", opts.prompt);
 
     let mut state = SessionState::new(session.id());

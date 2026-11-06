@@ -22,7 +22,7 @@ pub mod stub_script;
 pub use discovery::{DiscoveredPlugin, DiscoveryOptions, DiscoveryReport, PluginSource};
 pub use host::{AgentHandle, EventReceiver, Host, HostEvent, HostOptions, PluginStatus, Session};
 pub use session::{
-    PermissionDecision, PermissionKind, PermissionOption, PermissionRequest, SessionEvent, SessionId,
-    PlanEntry, SessionState, ToolCallInfo, ToolCallPatch, ToolStatus, TranscriptItem,
+    ModeInfo, PermissionDecision, PermissionKind, PermissionOption, PermissionRequest, SessionEvent, SessionId,
+    PlanEntry, SessionModes, SessionState, ToolCallInfo, ToolCallPatch, ToolStatus, TranscriptItem,
 };
 pub use space_protocol as protocol;

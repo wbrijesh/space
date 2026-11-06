@@ -63,11 +63,22 @@ Required ACP methods for an `agent` plugin:
 | Direction | Method | Notes |
 |---|---|---|
 | client → agent | `initialize` | Negotiate protocol version and capabilities |
-| client → agent | `session/new` | `cwd` = project directory; returns `sessionId` |
+| client → agent | `session/new` | `cwd` = project directory; returns `sessionId` and, optionally, `modes` (below) |
 | client → agent | `session/prompt` | Text content blocks; resolves with `stopReason` when the turn settles |
 | client → agent | `session/cancel` (notification) | Abort the running turn |
-| agent → client | `session/update` (notification) | `agent_message_chunk`, `agent_thought_chunk`, `tool_call`, `tool_call_update`, `plan` |
+| client → agent | `session/set_mode` | Optional: `{ sessionId, modeId }`, one of the modes from `session/new`. Applies from the next prompt |
+| agent → client | `session/update` (notification) | `agent_message_chunk`, `agent_thought_chunk`, `tool_call`, `tool_call_update`, `plan`, `current_mode_update` |
 | agent → client | `session/request_permission` | Optional in v0; harness shows an approval card |
+
+**Session modes** (ACP `SessionModeState`). An agent that supports read-only work returns
+`modes: { currentModeId: "write", availableModes: [{ id: "write", name: "Write" }, { id: "read", name: "Read-only",
+description }] }` from `session/new`. The composer shows a Write/Read toggle only when both ids are offered; each
+thread starts in Write. The app remembers a thread's choice and sends `session/set_mode` whenever the thread
+gets a session (first prompt, folder change, agent restart) and the choice differs from `currentModeId`. An
+agent may report its own changes with a `current_mode_update`. How a mode works is up to the agent; pi-agent's
+read mode removes its edit/write tools and adds a system-prompt section for the run, never text in the
+user's message (see `plugins/pi-agent/README.md`). In Rust: `NewSessionResponse::modes`,
+`SetSessionModeRequest`, `SessionUpdate::CurrentModeUpdate`; in TS: `acp.methods.agent.session.setMode`.
 
 Space extensions (v0):
 

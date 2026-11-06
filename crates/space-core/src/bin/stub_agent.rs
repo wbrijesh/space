@@ -12,7 +12,9 @@
 //! (thinking, running a tool, waiting for permission). The app's dev scenarios use this.
 //!
 //! Sessions report two fake models (`stub-model`, `stub-fast`) and thinking levels through
-//! `_space/status`, and accept `_space/session/configure`.
+//! `_space/status`, and accept `_space/session/configure`. They offer the same session modes as
+//! pi-agent (`write`, the default, and `read`) and accept `session/set_mode`; the mode only
+//! shows in the stub's log.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -40,10 +42,23 @@ struct StubSession {
     model: String,
     thinking: String,
     context_tokens: u64,
+    mode: String,
 }
 
 const MODELS: [(&str, &str); 2] = [("stub-model", "Stub Model"), ("stub-fast", "Stub Fast")];
 const LEVELS: [&str; 4] = ["low", "medium", "high", "max"];
+/// Session modes, as pi-agent offers them.
+const MODES: [(&str, &str, &str); 2] = [
+    ("write", "Write", "The agent can edit files and run any command."),
+    ("read", "Read-only", "The agent investigates without changing anything."),
+];
+
+fn mode_state(current: &str) -> SessionModeState {
+    SessionModeState::new(
+        current.to_string(),
+        MODES.iter().map(|(id, name, desc)| SessionMode::new(*id, *name).description(desc.to_string())).collect(),
+    )
+}
 
 impl State {
     fn status(&self, session_id: &str) -> SpaceStatus {
@@ -51,6 +66,7 @@ impl State {
             model: MODELS[0].0.into(),
             thinking: "low".into(),
             context_tokens: 0,
+            mode: MODES[0].0.into(),
         });
         SpaceStatus {
             session_id: session_id.to_string(),
@@ -107,9 +123,14 @@ async fn main() -> acp::Result<()> {
                     let id = format!("stub-{}", state.next_session.fetch_add(1, Ordering::Relaxed) + 1);
                     state.sessions.lock().unwrap().insert(
                         id.clone(),
-                        StubSession { model: MODELS[0].0.into(), thinking: "low".into(), context_tokens: 0 },
+                        StubSession {
+                            model: MODELS[0].0.into(),
+                            thinking: "low".into(),
+                            context_tokens: 0,
+                            mode: MODES[0].0.into(),
+                        },
                     );
-                    responder.respond(NewSessionResponse::new(id.clone()))?;
+                    responder.respond(NewSessionResponse::new(id.clone()).modes(mode_state(MODES[0].0)))?;
                     cx.send_notification(state.status(&id))
                 }
             },
@@ -151,6 +172,23 @@ async fn main() -> acp::Result<()> {
             },
             acp::on_receive_request!(),
         )
+        .on_receive_request(
+            {
+                let state = state.clone();
+                async move |req: SetSessionModeRequest, responder: Responder<SetSessionModeResponse, acp::V1>, _cx: Conn| {
+                    eprintln!("space-stub-agent: set_mode {} {}", req.session_id.0, req.mode_id.0);
+                    let mut sessions = state.sessions.lock().unwrap();
+                    match sessions.get_mut(&*req.session_id.0) {
+                        Some(s) if MODES.iter().any(|(id, ..)| *id == &*req.mode_id.0) => {
+                            s.mode = req.mode_id.0.to_string();
+                            responder.respond(SetSessionModeResponse::default())
+                        }
+                        _ => responder.respond_with_error(acp::Error::invalid_params()),
+                    }
+                }
+            },
+            acp::on_receive_request!(),
+        )
         .on_receive_notification(
             {
                 let state = state.clone();
@@ -182,7 +220,8 @@ async fn run_turn(
             _ => None,
         })
         .collect();
-    eprintln!("space-stub-agent: prompt {text:?}");
+    let mode = state.sessions.lock().unwrap().get(&*sid.0).map(|s| s.mode.clone()).unwrap_or_default();
+    eprintln!("space-stub-agent: prompt {text:?} (mode {mode})");
     if let Some(turn) = state.script.turn(&text) {
         let steps = turn.steps.clone();
         return run_script(cx, state, sid, steps, responder).await;
