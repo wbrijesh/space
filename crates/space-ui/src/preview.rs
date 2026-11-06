@@ -16,11 +16,13 @@ pub enum Area {
     Sidebar,
     Composer,
     Transcript,
+    Settings,
     Indicators,
 }
 
 impl Area {
-    pub const ALL: [Area; 5] = [Area::Shell, Area::Sidebar, Area::Composer, Area::Transcript, Area::Indicators];
+    pub const ALL: [Area; 6] =
+        [Area::Shell, Area::Sidebar, Area::Composer, Area::Transcript, Area::Settings, Area::Indicators];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -28,6 +30,7 @@ impl Area {
             Area::Sidebar => "Sidebar",
             Area::Composer => "Composer",
             Area::Transcript => "Transcript",
+            Area::Settings => "Settings",
             Area::Indicators => "Indicators",
         }
     }
@@ -100,6 +103,7 @@ pub fn registry() -> Vec<ComponentPreview> {
     let mut all: Vec<ComponentPreview> = [
         title_bar::previews(),
         shell::previews(),
+        settings::previews(),
         thread_row::previews(),
         composer::previews(),
         transcript::previews(),

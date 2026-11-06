@@ -4,6 +4,7 @@
 
 pub mod composer;
 pub mod loaders;
+pub mod settings;
 pub mod shell;
 pub mod thread_row;
 pub mod title_bar;

@@ -7,6 +7,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::PluginStatus;
 use space_ui::components::composer::{Composer, ComposerControls, ComposerHandlers, Handler};
+use space_ui::components::settings::{Catalog, SettingsHandlers, SettingsPage};
 use space_ui::components::shell::{AgentFooter, AgentState, LogsPanel, banner, empty_heading, problem_card, scroll_fade, sidebar_column};
 use space_ui::components::thread_row::{RowIndicator, ThreadRow};
 use space_ui::components::title_bar::{MainTitleBar, SidebarTitleBar, TitleBarNav};
@@ -15,7 +16,10 @@ use space_ui::format::{self, Preview};
 use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
 
-use crate::app::{FocusComposer, GoBack, GoForward, NewThread, SpaceApp, Thread, ToggleLogs, ToggleSidebar};
+use crate::app::{
+    CloseSettings, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, SpaceApp, Thread, ToggleLogs,
+    ToggleSidebar,
+};
 
 /// A click callback that runs `f` on the app.
 fn click(cx: &mut Context<SpaceApp>, f: impl Fn(&mut SpaceApp, &mut Window, &mut Context<SpaceApp>) + 'static) -> ClickHandler {
@@ -33,7 +37,8 @@ fn handler(cx: &mut Context<SpaceApp>, f: impl Fn(&mut SpaceApp, &mut Window, &m
 pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> impl IntoElement {
     let nav = TitleBarNav {
         sidebar_open: app.sidebar_open,
-        can_back: app.back.iter().any(|k| app.thread(*k).is_some()),
+        // On the Settings page, Back returns to the current thread.
+        can_back: (app.show_settings && app.current().is_some()) || app.back.iter().any(|k| app.thread(*k).is_some()),
         can_forward: app.forward.iter().any(|k| app.thread(*k).is_some()),
         on_toggle_sidebar: click(cx, |this, _, cx| this.toggle_sidebar(cx)),
         on_back: click(cx, |this, w, cx| this.go_back(w, cx)),
@@ -49,10 +54,14 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .h_full()
         .bg(color::bg())
         .child(
-            MainTitleBar::new(app.current().map(|t| t.title()).unwrap_or_default())
-                .nav((!app.sidebar_open).then(|| nav.clone())),
+            MainTitleBar::new(if app.show_settings {
+                "Settings".to_string()
+            } else {
+                app.current().map(|t| t.title()).unwrap_or_default()
+            })
+            .nav((!app.sidebar_open).then(|| nav.clone())),
         )
-        .child(body(app, window, cx))
+        .child(if app.show_settings { settings(app, window, cx) } else { body(app, window, cx) })
         .when(app.show_logs, |d| d.child(logs(app, cx)));
 
     div()
@@ -66,6 +75,11 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &GoForward, window, cx| this.go_forward(window, cx)))
         .on_action(cx.listener(|this, _: &ToggleLogs, _, cx| this.toggle_logs(cx)))
         .on_action(cx.listener(|this, _: &FocusComposer, window, cx| this.focus_composer(window, cx)))
+        .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.toggle_settings(window, cx)))
+        // Only while the page is open, so Esc is free otherwise.
+        .when(app.show_settings, |d| {
+            d.on_action(cx.listener(|this, _: &CloseSettings, window, cx| this.close_settings(window, cx)))
+        })
         .size_full()
         .flex()
         .bg(color::bg())
@@ -83,7 +97,8 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, cx: &mut Context<SpaceApp>) -> impl
         .rev()
         .map(|t| {
             let key = t.key;
-            let selected = app.selected == Some(key);
+            // On the Settings page no thread is shown, so none is highlighted.
+            let selected = app.selected == Some(key) && !app.show_settings;
             let failed = matches!(format::thread_preview(&t.state), Preview::Error(_)) || t.error.is_some();
             let indicator = RowIndicator::resolve(
                 selected,
@@ -195,6 +210,67 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
                 .px_6()
                 .pb_4()
                 .child(column().gap_2().children(notices).child(composer)),
+        )
+        .into_any_element()
+}
+
+/// The Settings page, centered in a scrolling column like the transcript.
+fn settings(app: &SpaceApp, _window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
+    let catalog = match &app.agent_models {
+        Some(models) => Catalog::Ready { models: models.clone(), levels: app.agent_levels.clone().unwrap_or_default() },
+        None if app.agent_id.is_none()
+            || matches!(app.agent_status, PluginStatus::Crashed(_) | PluginStatus::Stopped) =>
+        {
+            Catalog::Unavailable
+        }
+        None => Catalog::Loading,
+    };
+    let this = cx.entity().downgrade();
+    let handlers = SettingsHandlers {
+        on_model: {
+            let this = this.clone();
+            Rc::new(move |model, _, cx| {
+                let _ = this.update(cx, |this, cx| this.set_default_model(model, cx));
+            })
+        },
+        on_thinking: {
+            let this = this.clone();
+            Rc::new(move |level, _, cx| {
+                let _ = this.update(cx, |this, cx| this.set_default_thinking(level, cx));
+            })
+        },
+        on_notify: {
+            let this = this.clone();
+            Rc::new(move |on, _, cx| {
+                let _ = this.update(cx, |this, cx| this.set_notify_on_finish(on, cx));
+            })
+        },
+        on_sound: Rc::new(move |on, _, cx| {
+            let _ = this.update(cx, |this, cx| this.set_sound(on, cx));
+        }),
+        on_allow: handler(cx, |this, _, cx| this.allow_notifications(cx)),
+        on_open_system_settings: Rc::new(|_, _| crate::notify::open_system_settings()),
+    };
+    let s = &app.settings.settings;
+    let page = SettingsPage::new(catalog)
+        .model(s.new_threads.model.clone().map(|m| (m.provider, m.id)))
+        .thinking(s.new_threads.thinking_level.clone())
+        .notify(s.notifications.on_finish)
+        .sound(s.notifications.sound)
+        .permission(app.permission)
+        .handlers(handlers);
+    div()
+        .id("settings")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .justify_center()
+                .px_6()
+                .child(div().w_full().max_w(size::CONTENT_MAX_W).pt_8().pb_12().child(page)),
         )
         .into_any_element()
 }

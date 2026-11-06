@@ -150,5 +150,14 @@ space/
   ring) stayed active after clicking elsewhere. Clickable chrome is plain styled divs (no focus);
   dropdown triggers show a focus ring only after keyboard input, because popup menus hand focus back
   to their trigger when they close. Selected and hovered rows use clearly different fills.
+- **Settings.** `space-app/src/settings.rs` loads `~/.space/settings.json` (`SPACE_SETTINGS` overrides;
+  serde defaults, so partial or older files load; a corrupt file loads as defaults and is only replaced
+  once the user changes something) and saves atomically on every change. The page (⌘,) is an in-window
+  view, not a second window, so tiling window managers don't have to place it. Model and thinking
+  choices come from the latest `_space/status` that listed them; when a new thread's `session/new`
+  returns, its defaults go out as one `_space/session/configure` (on failure the agent's default stays,
+  logged). The macOS permission status comes from `getNotificationSettingsWithCompletionHandler`,
+  whose callback runs off the main thread and answers through a oneshot channel; it's refreshed when
+  the page opens and whenever the window becomes active.
 - **Testing.** `space-core` ships a `space-stub-agent` binary, a scripted ACP agent with keywords
   `permission`, `slow` and `crash`. The integration tests in `crates/space-core/tests/stub_agent.rs` run against it.

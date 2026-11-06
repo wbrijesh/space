@@ -52,7 +52,9 @@ Environment:
 - `SPACE_AUTOPROMPT="…"` sends that prompt in the first thread once its session is up.
 - `SPACE_NOTIFY=0` turns off the "agent finished" alert. When a turn ends, Space plays a sound if you're
   watching that thread, otherwise it posts a macOS notification (bundled app only); clicking it opens
-  the thread. Scenarios are silent unless `SPACE_NOTIFY=1`.
+  the thread. Both can be turned off in Settings (⌘,). Scenarios are silent unless `SPACE_NOTIFY=1`.
+- `SPACE_SETTINGS=<file>` uses that settings file instead of `~/.space/settings.json`. Scenarios always
+  use a temp file.
 - `RUST_LOG=space_core=debug` turns on logging (stderr).
 - Dev builds: `SPACE_CLOCK=paused|pin:0.35|speed:0.25` starts the animation clock in that state;
   `SPACE_GALLERY_PAGE=<name>` opens a gallery page; `SPACE_SCRIPT=<file>` replays input. See
@@ -80,11 +82,16 @@ plugin list; the agent's status sits in the sidebar footer.
   becomes Stop (`session/cancel`). **+** attaches files or folders (sent as ACP `resource_link`s).
   Below the card: the project folder (switch it while the thread is empty, otherwise pick a folder
   to start a new thread there), the model and thinking effort (both switch the session through
-  `_space/session/configure`, and new threads inherit your last choice), and a context ring
+  `_space/session/configure`; new threads start with the defaults from Settings), and a context ring
   (hover for token counts).
 - **Transcript**: your messages as bubbles, replies as markdown, thinking collapsed as
   "Thought for Ns", tool calls as compact rows that expand to their output, permission cards
   (Allow/Reject).
+- **Settings** (⌘, or Space ▸ Settings…): replaces the thread view, sidebar stays. *New threads*: default
+  model and thinking level ("Agent default" leaves the agent's choice; existing threads don't change).
+  *Notifications*: notify when an agent finishes, play a sound, and the macOS permission status (with a
+  button to allow it or open System Settings). Esc, ⌘, again, ⌘[, ⌘N or clicking a thread leaves.
+  Saved on every change to `~/.space/settings.json`.
 - **Logs**: the terminal icon in the sidebar footer (or ⌘J) opens the agent's stderr. If the agent
   exits, the thread shows the error with Restart and Logs.
 

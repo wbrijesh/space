@@ -14,13 +14,13 @@ path = "src/main.rs"
 # Dev tooling: component gallery (⌥⌘G, --gallery), scenarios (--scenario), animation-clock
 # controls, input scripts. On by default; ship with `--no-default-features` (`just release`).
 default = ["dev"]
-dev = ["space-ui/dev", "dep:serde", "dep:serde_json", "dep:schemars"]
+dev = ["space-ui/dev", "dep:schemars"]
 
 [dependencies]
 space-core.workspace = true
 space-ui.workspace = true
-serde = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
 schemars = { workspace = true, optional = true }
 space-protocol.workspace = true
 anyhow.workspace = true
@@ -38,5 +38,5 @@ objc2-foundation = { version = "0.3", features = ["NSBundle", "NSData", "NSError
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSSound", "NSResponder"] }
 objc2-user-notifications = { version = "0.3", features = [
     "block2", "UNUserNotificationCenter", "UNNotification", "UNNotificationContent", "UNNotificationRequest",
-    "UNNotificationResponse", "UNNotificationSound", "UNNotificationTrigger",
+    "UNNotificationResponse", "UNNotificationSettings", "UNNotificationSound", "UNNotificationTrigger",
 ] }

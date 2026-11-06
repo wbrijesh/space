@@ -10,7 +10,8 @@
 //!
 //! The app starts the agent plugin (`pi-agent`, or `SPACE_AGENT=<plugin id>`) on launch and
 //! opens an empty thread. Env: `SPACE_AUTOPROMPT="..."` sends that prompt in the first
-//! thread; `SPACE_PLUGIN_DIRS` overrides the bundled plugin roots. Dev: `SPACE_SCRIPT=file`
+//! thread; `SPACE_PLUGIN_DIRS` overrides the bundled plugin roots; `SPACE_SETTINGS` overrides
+//! the settings file (`~/.space/settings.json`). Dev: `SPACE_SCRIPT=file`
 //! replays input commands (see `devscript`).
 
 mod app;
@@ -21,6 +22,7 @@ mod devscript;
 mod notify;
 #[cfg(feature = "dev")]
 mod scenarios;
+mod settings;
 mod view;
 
 use std::path::PathBuf;
@@ -107,6 +109,8 @@ fn main() -> Result<()> {
             .unwrap_or_default(),
         select: None,
         notify: std::env::var("SPACE_NOTIFY").map_or(true, |v| v != "0"),
+        settings_path: settings::default_path(),
+        open_settings: false,
     };
     #[cfg(feature = "dev")]
     if let Some(name) = &args.scenario {

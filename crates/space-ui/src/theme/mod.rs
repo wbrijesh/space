@@ -142,6 +142,10 @@ pub mod size {
     pub const CONTEXT_RING: f32 = 16.;
     /// Fade at the bottom of the transcript, above the composer.
     pub const SCROLL_FADE_H: Pixels = px(72.);
+    /// Settings rows (label + description on the left, a control on the right).
+    pub const SETTINGS_ROW_H: Pixels = px(60.);
+    /// Settings dropdowns, so a section's controls line up.
+    pub const SETTINGS_SELECT_W: Pixels = px(200.);
 }
 
 /// Type scale and font families.
@@ -157,6 +161,8 @@ pub mod text {
     pub const SM: Pixels = px(12.5);
     pub const MD: Pixels = px(13.5);
     pub const BODY: Pixels = px(14.5);
+    /// Page headings (Settings).
+    pub const HEADING: Pixels = px(22.);
     pub const TITLE: Pixels = px(26.);
     /// Line height multipliers.
     pub const LEADING_TIGHT: f32 = 1.4;
@@ -164,7 +170,7 @@ pub mod text {
     pub const LEADING_PROSE: f32 = 1.6;
 
     pub const ALL: &[(&str, Pixels)] =
-        &[("XS", XS), ("CODE", CODE), ("SM", SM), ("MD", MD), ("BODY", BODY), ("TITLE", TITLE)];
+        &[("XS", XS), ("CODE", CODE), ("SM", SM), ("MD", MD), ("BODY", BODY), ("HEADING", HEADING), ("TITLE", TITLE)];
 }
 
 /// Map the tokens onto gpui-component's theme (call after `Theme::change`).
@@ -204,5 +210,8 @@ pub fn install(cx: &mut App) {
         t.scrollbar = bg();
         t.scrollbar_thumb = border_strong();
         t.scrollbar_thumb_hover = scrollbar_thumb_hover();
+        // Switches: accent track when on (`primary`), a quiet track when off, white thumb.
+        t.switch = border_strong();
+        t.switch_thumb = on_accent();
     });
 }

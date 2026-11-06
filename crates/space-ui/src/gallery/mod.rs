@@ -119,6 +119,7 @@ impl Gallery {
                 Area::Sidebar => "SIDEBAR",
                 Area::Composer => "COMPOSER",
                 Area::Transcript => "TRANSCRIPT",
+                Area::Settings => "SETTINGS",
                 Area::Indicators => "INDICATORS",
             }));
             for (ix, p) in self.previews.iter().enumerate().filter(|(_, p)| p.area == area) {

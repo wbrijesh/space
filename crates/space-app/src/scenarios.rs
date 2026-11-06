@@ -13,6 +13,7 @@ use space_core::{DiscoveryOptions, HostOptions};
 
 use crate::app::{Options, SeedThread};
 
+#[derive(Default)]
 pub struct Scenario {
     pub name: &'static str,
     pub description: &'static str,
@@ -20,6 +21,10 @@ pub struct Scenario {
     pub threads: Vec<ScenarioThread>,
     /// Index of the thread to select (default: the last).
     pub select: Option<usize>,
+    /// Open on the Settings page.
+    pub settings_page: bool,
+    /// Contents of the scenario's settings file (a temp file; never `~/.space/settings.json`).
+    pub settings: Option<&'static str>,
 }
 
 #[derive(Default)]
@@ -143,32 +148,41 @@ fn done_thread(prompt: &'static str, reply: &str) -> ScenarioThread {
 pub fn all() -> Vec<Scenario> {
     let twelve = (1..=12).map(|i| format!("{i}. step {i} of the release checklist")).collect::<Vec<_>>().join("\n");
     vec![
-        Scenario { name: "empty", description: "A fresh window: one empty thread.", threads: vec![], select: None },
+        Scenario { name: "empty", description: "A fresh window: one empty thread.", ..Default::default() },
         Scenario {
             name: "thread-working",
             description: "A turn streaming a reply (held mid-sentence).",
             threads: vec![working_thread()],
             select: None,
+            ..Default::default()
         },
         Scenario {
             name: "thread-thinking",
             description: "A turn held while thinking.",
             threads: vec![thinking_thread()],
             select: None,
+            ..Default::default()
         },
         Scenario {
             name: "tool-running",
             description: "A turn held while a tool runs.",
             threads: vec![tool_thread()],
             select: None,
+            ..Default::default()
         },
         Scenario {
             name: "permission-pending",
             description: "A turn waiting for a permission answer.",
             threads: vec![permission_thread()],
             select: None,
+            ..Default::default()
         },
-        Scenario { name: "error", description: "A turn that failed.", threads: vec![error_thread()], select: None },
+        Scenario {
+            name: "error",
+            description: "A turn that failed.",
+            threads: vec![error_thread()],
+            ..Default::default()
+        },
         Scenario {
             name: "many-threads",
             description: "Nine threads in mixed states; a finished one selected.",
@@ -184,18 +198,31 @@ pub fn all() -> Vec<Scenario> {
                 explain_thread(),
             ],
             select: Some(8),
+            ..Default::default()
         },
         Scenario {
             name: "long-composer",
             description: "A finished thread with a 12-line draft in the composer.",
             threads: vec![ScenarioThread { draft: Some(twelve), ..explain_thread() }],
             select: None,
+            ..Default::default()
         },
         Scenario {
             name: "long-transcript",
             description: "A thread longer than the window, scrolled to the end (bottom fade over text).",
             threads: vec![long_thread()],
             select: None,
+            ..Default::default()
+        },
+        Scenario {
+            name: "settings",
+            description: "The Settings page (⌘,) with the stub's models and a saved default.",
+            threads: vec![explain_thread()],
+            settings_page: true,
+            settings: Some(
+                r#"{ "newThreads": { "model": { "provider": "stub", "id": "stub-fast" }, "thinkingLevel": "medium" } }"#,
+            ),
+            ..Default::default()
         },
     ]
 }
@@ -258,6 +285,13 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         script_path.display().to_string(),
     );
     std::fs::write(plugin.join("space-plugin.toml"), manifest)?;
+    let settings_path = root.join("settings.json");
+    match scenario.settings {
+        Some(json) => std::fs::write(&settings_path, json)?,
+        None => {
+            let _ = std::fs::remove_file(&settings_path);
+        }
+    }
 
     let host = HostOptions {
         project_dir: project_dir.to_path_buf(),
@@ -279,6 +313,9 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         select: scenario.select,
         // Scripted turns end instantly; alerts only on request (`SPACE_NOTIFY=1`).
         notify: std::env::var("SPACE_NOTIFY").is_ok_and(|v| v == "1"),
+        // Never the user's settings file.
+        settings_path: Some(settings_path),
+        open_settings: scenario.settings_page,
     };
     Ok((host, options))
 }
@@ -307,6 +344,7 @@ mod tests {
             "error",
             "many-threads",
             "long-composer",
+            "settings",
         ] {
             assert!(find(wanted).is_some(), "missing scenario {wanted}");
         }
@@ -344,6 +382,12 @@ mod tests {
         assert!(manifest.contains(SCRIPT_ENV));
         assert_eq!(options.seed.len(), 9);
         assert_eq!(options.agent.as_deref(), Some("stub"));
+        assert!(options.settings_path.unwrap().starts_with(std::env::temp_dir()));
+
+        let (_, options) = prepare(&find("settings").unwrap(), &dir).unwrap();
+        assert!(options.open_settings);
+        let store = crate::settings::SettingsStore::load(options.settings_path);
+        assert_eq!(store.settings.new_threads.model.unwrap().id, "stub-fast");
     }
 
     fn tempfile_dir() -> PathBuf {

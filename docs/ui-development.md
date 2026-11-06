@@ -76,7 +76,7 @@ persists across frames. See `components/composer.rs`.
 ## 4. Gallery — dev-only window
 
 ⌥⌘G, Dev ▸ Component Gallery, `Space --gallery`, or `just gallery`. On the left are components
-grouped by area (Shell, Sidebar, Composer, Transcript, Indicators) and the Tokens page. The main
+grouped by area (Shell, Sidebar, Composer, Transcript, Settings, Indicators) and the Tokens page. The main
 pane shows each example with its name. The top bar has:
 
 * **Animation clock:** Live / Pause / Step (one 60 Hz frame), speed 0.1× / 0.25× / 1×, and
@@ -103,6 +103,7 @@ until you cancel it. Nothing in the UI is faked. `Space --scenario list` prints 
 | `many-threads` | nine threads in mixed states (working, waiting, unread, error) |
 | `long-composer` | finished thread with a 12-line draft |
 | `long-transcript` | thread longer than the window, scrolled to the end (bottom fade) |
+| `settings` | the Settings page, with the stub's models and a saved default model and thinking level |
 
 **Adding a scenario:** in `crates/space-app/src/scenarios.rs`, append a `Scenario` to `all()`.
 Give it a name, a description and its threads. Each thread has a `prompt` and the `steps` the

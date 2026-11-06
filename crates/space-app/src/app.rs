@@ -9,6 +9,9 @@
 //! that is not itself focusable moves focus to the root. That clears the composer's focus
 //! state (and any keyboard focus ring) the way clicking empty space does in a browser.
 //! Thread selection and "new thread" explicitly focus the composer.
+//!
+//! Settings (⌘,) replace the thread view in the main column; the sidebar stays. Esc, ⌘, again,
+//! Back, ⌘N or picking a thread leave them.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -16,19 +19,23 @@ use std::time::Instant;
 
 use gpui::component::input::{InputEvent, TextareaState};
 use gpui::*;
-use space_core::protocol::{ConfigureSession, PluginKind};
+use space_core::protocol::{ConfigureSession, ModelInfo, PluginKind};
 use space_core::{
     AgentHandle, EventReceiver, Host, HostEvent, PermissionDecision, PluginStatus, Session, SessionEvent, SessionId,
     SessionState, TranscriptItem,
 };
 
-pub use space_ui::actions::{FocusComposer, GoBack, GoForward, NewThread, Quit, ToggleLogs, ToggleSidebar};
+pub use space_ui::actions::{
+    CloseSettings, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, Quit, ToggleLogs, ToggleSidebar,
+};
 use space_ui::assets::SpaceAssets;
 use space_ui::components::composer;
 use space_ui::format;
 
 #[cfg(feature = "dev")]
 use crate::devscript;
+use crate::notify::{self, NotificationPermission};
+use crate::settings::{ModelRef, SettingsStore};
 
 const MAX_LOG_LINES: usize = 2000;
 const DEFAULT_AGENT: &str = "pi-agent";
@@ -42,8 +49,12 @@ pub struct Options {
     /// Index into `seed` of the thread to select (default: the last).
     pub select: Option<usize>,
     /// Notify (sound, plus a system notification when not watching) when a turn finishes.
-    /// Off for scenarios; `SPACE_NOTIFY=0` turns it off too.
+    /// Off for scenarios; `SPACE_NOTIFY=0` turns it off too. Settings can turn either off.
     pub notify: bool,
+    /// Settings file (`None`: in memory only). Scenarios use a temp file.
+    pub settings_path: Option<PathBuf>,
+    /// Open on the Settings page.
+    pub open_settings: bool,
 }
 
 /// A thread opened at launch: an optional prompt sent once its session exists and an
@@ -78,6 +89,8 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-]", GoForward, Some("Input")),
             KeyBinding::new("cmd-j", ToggleLogs, None),
             KeyBinding::new("cmd-l", FocusComposer, None),
+            KeyBinding::new("cmd-,", OpenSettings, None),
+            KeyBinding::new("escape", CloseSettings, Some("Space")),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
@@ -85,7 +98,11 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
         let mut menus = vec![
             Menu {
                 name: "Space".into(),
-                items: vec![MenuItem::action("Quit Space", Quit)],
+                items: vec![
+                    MenuItem::action("Settings…", OpenSettings),
+                    MenuItem::separator(),
+                    MenuItem::action("Quit Space", Quit),
+                ],
                 disabled: false,
             },
             Menu {
@@ -119,7 +136,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
         .detach();
 
         // Dock icon (and notification registration when bundled), for the gallery too.
-        let clicks = crate::notify::init();
+        let clicks = notify::init();
 
         let options = match launch {
             Launch::App(options) => options,
@@ -259,8 +276,13 @@ pub struct SpaceApp {
     pub(crate) sidebar_open: bool,
     pub(crate) show_logs: bool,
     pub(crate) banner: Option<String>,
-    preferred_model: Option<(String, String)>,
-    preferred_effort: Option<String>,
+    pub(crate) settings: SettingsStore,
+    /// The Settings page replaces the thread view.
+    pub(crate) show_settings: bool,
+    /// Models and thinking levels from the latest `_space/status` that listed them.
+    pub(crate) agent_models: Option<Vec<ModelInfo>>,
+    pub(crate) agent_levels: Option<Vec<String>>,
+    pub(crate) permission: NotificationPermission,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -308,6 +330,13 @@ impl SpaceApp {
             }
         })
         .detach();
+
+        // Back from System Settings (or anywhere): the notification permission may have changed.
+        let activation = cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.refresh_permission(cx);
+            }
+        });
 
         cx.spawn(async move |this, cx| {
             while let Some(first) = events.recv().await {
@@ -361,14 +390,22 @@ impl SpaceApp {
             sidebar_open: true,
             show_logs: false,
             banner,
-            preferred_model: None,
-            preferred_effort: None,
-            _subscriptions: vec![sub],
+            settings: SettingsStore::load(options.settings_path),
+            show_settings: false,
+            agent_models: None,
+            agent_levels: None,
+            permission: NotificationPermission::Checking,
+            _subscriptions: vec![sub, activation],
         };
         this.seed_threads(options.seed, options.select, window, cx);
         this.ensure_agent(cx);
-        let input = this.input.clone();
-        input.update(cx, |s, cx| s.focus(window, cx));
+        this.refresh_permission(cx);
+        if options.open_settings {
+            this.open_settings(window, cx);
+        } else {
+            let input = this.input.clone();
+            input.update(cx, |s, cx| s.focus(window, cx));
+        }
         this
     }
 
@@ -437,7 +474,17 @@ impl SpaceApp {
     }
 
     fn apply_session_event(&mut self, key: u64, event: &SessionEvent, _cx: &mut Context<Self>) {
-        let selected = self.selected == Some(key);
+        if let SessionEvent::Status(status) = event {
+            // What the agent offers, for the Settings page.
+            if let Some(models) = &status.available_models {
+                self.agent_models = Some(models.clone());
+            }
+            if let Some(levels) = &status.thinking_levels {
+                self.agent_levels = Some(levels.clone());
+            }
+        }
+        // On the Settings page nothing is being watched.
+        let selected = self.selected == Some(key) && !self.show_settings;
         let Some(thread) = self.thread_mut(key) else { return };
         thread.apply(event);
         let attention = matches!(
@@ -450,8 +497,11 @@ impl SpaceApp {
         if selected && !matches!(event, SessionEvent::Status(_)) {
             self.transcript_scroll.scroll_to_bottom();
         }
+        let prefs = &self.settings.settings.notifications;
+        let alerts = notify::Alerts { notification: prefs.on_finish, sound: prefs.sound };
         if let SessionEvent::TurnEnded { stop_reason } = event
             && self.notify
+            && (alerts.notification || alerts.sound)
             && stop_reason != "cancelled"
             && let Some(thread) = self.thread(key)
         {
@@ -460,7 +510,7 @@ impl SpaceApp {
                 format::Preview::Text(text) => text,
                 _ => String::new(),
             };
-            crate::notify::turn_finished(key, &thread.title(), &body, selected && crate::notify::app_active());
+            notify::turn_finished(key, &thread.title(), &body, selected && notify::app_active(), alerts);
         }
     }
 
@@ -521,7 +571,8 @@ impl SpaceApp {
             self.ensure_agent(cx);
             return;
         };
-        let prefs = (self.preferred_model.clone(), self.preferred_effort.clone());
+        let Some(thread) = self.thread(key) else { return };
+        let defaults = self.session_defaults(thread);
         let Some(thread) = self.thread_mut(key) else { return };
         thread.creating = true;
         thread.error = None;
@@ -542,13 +593,8 @@ impl SpaceApp {
                 }
             };
             let _ = this.update(cx, |this, cx| this.attach_session(key, session.clone(), cx));
-            // Carry the model / effort the user picked last over to new sessions.
-            if prefs.0.is_some() || prefs.1.is_some() {
-                let (provider, model) = prefs.0.map_or((None, None), |(p, m)| (Some(p), Some(m)));
-                let request = ConfigureSession { provider, model, thinking_level: prefs.1, ..Default::default() };
-                if let Err(e) = session.configure(request).await {
-                    tracing::warn!("applying model preference failed: {e:#}");
-                }
+            if let Some(request) = defaults {
+                apply_defaults(&session, request).await;
             }
             let _ = this.update(cx, |this, cx| {
                 if let Some(t) = this.thread_mut(key) {
@@ -562,6 +608,26 @@ impl SpaceApp {
         })
         .detach();
         cx.notify();
+    }
+
+    /// What a new session should be switched to: for a new thread, the defaults from
+    /// Settings; for a thread whose agent exited, the model and level it was using.
+    fn session_defaults(&self, thread: &Thread) -> Option<ConfigureSession> {
+        let request = if thread.state.items.is_empty() {
+            let d = &self.settings.settings.new_threads;
+            let (provider, model) =
+                d.model.clone().map_or((None, None), |ModelRef { provider, id }| (Some(provider), Some(id)));
+            ConfigureSession { provider, model, thinking_level: d.thinking_level.clone(), ..Default::default() }
+        } else {
+            let s = &thread.state.status;
+            ConfigureSession {
+                provider: s.provider.clone(),
+                model: s.model.clone(),
+                thinking_level: s.thinking_level.clone(),
+                ..Default::default()
+            }
+        };
+        (request.model.is_some() || request.thinking_level.is_some()).then_some(request)
     }
 
     fn attach_session(&mut self, key: u64, session: Session, cx: &mut Context<Self>) {
@@ -670,6 +736,7 @@ impl SpaceApp {
         if self.thread(key).is_none() {
             return;
         }
+        self.show_settings = false;
         if self.selected != Some(key) {
             let draft = self.input.read(cx).value().to_string();
             if let Some(prev) = self.selected {
@@ -694,6 +761,11 @@ impl SpaceApp {
     }
 
     pub(crate) fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Settings sit on top of the current thread: Back just leaves them.
+        if self.show_settings {
+            self.close_settings(window, cx);
+            return;
+        }
         while let Some(key) = self.back.pop() {
             if self.thread(key).is_some() {
                 if let Some(cur) = self.selected {
@@ -725,6 +797,9 @@ impl SpaceApp {
             && t.is_empty()
             && t.cwd == dir
         {
+            if self.show_settings {
+                self.close_settings(window, cx);
+            }
             self.focus_composer(window, cx);
             return;
         }
@@ -808,20 +883,9 @@ impl SpaceApp {
         cx.notify();
     }
 
-    /// Switch the selected thread's model and/or effort; also remembered for new threads.
+    /// Switch the selected thread's model and/or effort (new threads use Settings' defaults).
     pub(crate) fn configure(&mut self, request: ConfigureSession, cx: &mut Context<Self>) {
         let Some(session) = self.current().and_then(|t| t.live_session().cloned()) else { return };
-        if let Some(model) = &request.model {
-            let provider = request
-                .provider
-                .clone()
-                .or_else(|| self.current().and_then(|t| t.state.status.provider.clone()))
-                .unwrap_or_default();
-            self.preferred_model = Some((provider, model.clone()));
-        }
-        if let Some(level) = &request.thinking_level {
-            self.preferred_effort = Some(level.clone());
-        }
         cx.spawn(async move |this, cx| {
             if let Err(e) = session.configure(request).await {
                 let _ = this.update(cx, |this, cx| {
@@ -867,6 +931,94 @@ impl SpaceApp {
     pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_open = !self.sidebar_open;
         cx.notify();
+    }
+
+    // ----- settings ---------------------------------------------------------------------
+
+    pub(crate) fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.show_settings {
+            self.close_settings(window, cx);
+        } else {
+            self.open_settings(window, cx);
+        }
+    }
+
+    pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_settings = true;
+        // Off the composer (it's hidden), so Esc reaches the page.
+        window.focus(&self.focus, cx);
+        self.refresh_permission(cx);
+        cx.notify();
+    }
+
+    /// Back to the current thread.
+    pub(crate) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_settings = false;
+        match self.selected {
+            Some(key) => self.select_inner(key, false, window, cx),
+            None => cx.notify(),
+        }
+    }
+
+    /// Ask macOS whether notifications are allowed (answers on another thread).
+    pub(crate) fn refresh_permission(&mut self, cx: &mut Context<Self>) {
+        let answer = notify::permission();
+        cx.spawn(async move |this, cx| {
+            if let Ok(permission) = answer.await {
+                let _ = this.update(cx, |this, cx| {
+                    if this.permission != permission {
+                        this.permission = permission;
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn allow_notifications(&mut self, cx: &mut Context<Self>) {
+        let answered = notify::request_permission();
+        cx.spawn(async move |this, cx| {
+            let _ = answered.await;
+            let _ = this.update(cx, |this, cx| this.refresh_permission(cx));
+        })
+        .detach();
+    }
+
+    pub(crate) fn set_default_model(&mut self, model: Option<ModelInfo>, cx: &mut Context<Self>) {
+        self.settings.update(|s| s.new_threads.model = model.map(|m| ModelRef { provider: m.provider, id: m.id }));
+        cx.notify();
+    }
+
+    pub(crate) fn set_default_thinking(&mut self, level: Option<String>, cx: &mut Context<Self>) {
+        self.settings.update(|s| s.new_threads.thinking_level = level);
+        cx.notify();
+    }
+
+    pub(crate) fn set_notify_on_finish(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.settings.update(|s| s.notifications.on_finish = on);
+        cx.notify();
+    }
+
+    pub(crate) fn set_sound(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.settings.update(|s| s.notifications.sound = on);
+        cx.notify();
+    }
+}
+
+/// Switch a just-created session to `request`. When that fails (say the model is no longer
+/// offered), keep the agent's model but still try the thinking level; otherwise stay on the
+/// agent's defaults.
+async fn apply_defaults(session: &Session, request: ConfigureSession) {
+    let level = request.thinking_level.clone().filter(|_| request.model.is_some());
+    if let Err(e) = session.configure(request).await {
+        tracing::info!("new thread keeps the agent's model: {e:#}");
+        if let Some(level) = level {
+            let request = ConfigureSession { thinking_level: Some(level), ..Default::default() };
+            if let Err(e) = session.configure(request).await {
+                tracing::info!("new thread keeps the agent's thinking level: {e:#}");
+            }
+        }
     }
 }
 
