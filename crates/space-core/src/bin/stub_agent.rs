@@ -6,9 +6,10 @@
 //! * `permission` — ask `session/request_permission` before running the tool.
 //! * `slow` — stream 50 chunks 100 ms apart (use with cancel).
 //! * `crash` — exit with code 3 mid-turn.
-//! * `explain` — reply with a longer markdown answer.
-//! * `wait` — keep the turn running (streaming nothing) until it is cancelled.
-//! * `fail` — fail the turn with a JSON-RPC error.
+//!
+//! With `SPACE_STUB_SCRIPT=<file>` (see `space_core::stub_script`), a prompt matching a
+//! scripted turn plays that turn's steps instead, which can hold a turn open indefinitely
+//! (thinking, running a tool, waiting for permission). The app's dev scenarios use this.
 //!
 //! Sessions report two fake models (`stub-model`, `stub-fast`) and thinking levels through
 //! `_space/status`, and accept `_space/session/configure`.
@@ -18,6 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use space_core::stub_script::{SCRIPT_ENV, Step, StubScript};
 use space_protocol::{ConfigureSession, ModelInfo, SpaceStatus};
 use space_protocol::acp::{self, Agent, ByteStreams, Client, Responder};
 use space_protocol::acp_schema::*;
@@ -30,6 +32,7 @@ struct State {
     next_session: AtomicU64,
     cancelled: Mutex<HashSet<String>>,
     sessions: Mutex<HashMap<String, StubSession>>,
+    script: StubScript,
 }
 
 #[derive(Clone)]
@@ -69,7 +72,20 @@ impl State {
 
 #[tokio::main]
 async fn main() -> acp::Result<()> {
-    let state = Arc::new(State::default());
+    let script = match std::env::var_os(SCRIPT_ENV) {
+        Some(path) => match StubScript::load(std::path::Path::new(&path)) {
+            Ok(script) => {
+                eprintln!("space-stub-agent: loaded {} scripted turn(s)", script.turns.len());
+                script
+            }
+            Err(e) => {
+                eprintln!("space-stub-agent: bad {SCRIPT_ENV}: {e:#}");
+                StubScript::default()
+            }
+        },
+        None => StubScript::default(),
+    };
+    let state = Arc::new(State { script, ..State::default() });
     let transport = ByteStreams::new(tokio::io::stdout().compat_write(), tokio::io::stdin().compat());
     eprintln!("space-stub-agent: started");
     Agent
@@ -167,6 +183,10 @@ async fn run_turn(
         })
         .collect();
     eprintln!("space-stub-agent: prompt {text:?}");
+    if let Some(turn) = state.script.turn(&text) {
+        let steps = turn.steps.clone();
+        return run_script(cx, state, sid, steps, responder).await;
+    }
     let text = text.to_lowercase();
     let send = |update: SessionUpdate| cx.send_notification(SessionNotification::new(sid.clone(), update));
     let chunk = |s: &str| ContentChunk::new(ContentBlock::Text(TextContent::new(s)));
@@ -174,19 +194,6 @@ async fn run_turn(
     cx.send_notification(state.status(&sid.0))?;
     send(SessionUpdate::AgentThoughtChunk(chunk("Thinking about ")))?;
     send(SessionUpdate::AgentThoughtChunk(chunk("the request.")))?;
-
-    if text.contains("fail") {
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        return responder.respond_with_error(acp::Error::new(-32603, "The model request failed: overloaded (stub)"));
-    }
-    if text.contains("wait") {
-        loop {
-            if state.cancelled.lock().unwrap().contains(&*sid.0) {
-                return responder.respond(PromptResponse::new(StopReason::Cancelled));
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
 
     if text.contains("crash") {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -241,8 +248,6 @@ async fn run_turn(
 
     let words: Vec<String> = if text.contains("slow") {
         (1..=50).map(|i| format!("{i} ")).collect()
-    } else if text.contains("explain") {
-        EXPLAIN.split_inclusive(' ').map(String::from).collect()
     } else {
         ["Hello ", "from ", "the ", "stub ", "agent."].map(String::from).to_vec()
     };
@@ -261,12 +266,83 @@ async fn run_turn(
     responder.respond(PromptResponse::new(StopReason::EndTurn))
 }
 
-const EXPLAIN: &str = "Plugin discovery scans three roots in order: the bundled `plugins/` directory, \
-`~/.space/plugins` and the project's `.space/plugins`. Each directory with a `space-plugin.toml` \
-becomes a plugin; later roots win on duplicate ids.\n\n\
-**What happens on start**\n\n\
-- The manifest's `run.command` is resolved on `PATH` and spawned with piped stdio.\n\
-- The harness performs the ACP `initialize` handshake.\n\
-- stderr lines are kept in a ring buffer for the logs panel.\n\n\
-```rust\nlet agent = host.start_agent(\"pi-agent\").await?;\n```\n\n\
-Invalid manifests are reported, not fatal.";
+/// Play a scripted turn (see `space_core::stub_script`).
+async fn run_script(
+    cx: Conn,
+    state: Arc<State>,
+    sid: SessionId,
+    steps: Vec<Step>,
+    responder: Responder<PromptResponse, acp::V1>,
+) -> acp::Result<()> {
+    let send = |update: SessionUpdate| cx.send_notification(SessionNotification::new(sid.clone(), update));
+    let chunk = |s: &str| ContentChunk::new(ContentBlock::Text(TextContent::new(s)));
+    let cancelled = || state.cancelled.lock().unwrap().contains(&*sid.0);
+    let mut tools: HashSet<String> = HashSet::new();
+    cx.send_notification(state.status(&sid.0))?;
+    for step in steps {
+        if cancelled() {
+            return responder.respond(PromptResponse::new(StopReason::Cancelled));
+        }
+        match step {
+            Step::Thought { text } | Step::Text { text } if text.is_empty() => {}
+            Step::Thought { text } => {
+                for w in text.split_inclusive(' ') {
+                    send(SessionUpdate::AgentThoughtChunk(chunk(w)))?;
+                    tokio::time::sleep(Duration::from_millis(8)).await;
+                }
+            }
+            Step::Text { text } => {
+                for w in text.split_inclusive(' ') {
+                    send(SessionUpdate::AgentMessageChunk(chunk(w)))?;
+                    tokio::time::sleep(Duration::from_millis(8)).await;
+                }
+            }
+            Step::Tool { id, title, kind, status, output } => {
+                let status: ToolCallStatus =
+                    serde_json::from_value(serde_json::json!(status)).unwrap_or(ToolCallStatus::Pending);
+                let content: Vec<ToolCallContent> = output
+                    .map(|o| vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(o)))])
+                    .unwrap_or_default();
+                if tools.insert(id.clone()) {
+                    let kind: ToolKind = serde_json::from_value(serde_json::json!(kind)).unwrap_or(ToolKind::Other);
+                    send(SessionUpdate::ToolCall(ToolCall::new(id, title).kind(kind).status(status).content(content)))?;
+                } else {
+                    let mut fields = ToolCallUpdateFields::new().status(status).title(title);
+                    if !content.is_empty() {
+                        fields = fields.content(content);
+                    }
+                    send(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id, fields)))?;
+                }
+            }
+            Step::Permission { tool_id, title } => {
+                let options = vec![
+                    PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce),
+                    PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce),
+                ];
+                cx.send_request(RequestPermissionRequest::new(
+                    sid.clone(),
+                    ToolCallUpdate::new(tool_id, ToolCallUpdateFields::new().title(title)),
+                    options,
+                ))
+                .block_task()
+                .await?;
+            }
+            Step::Context { tokens } => {
+                if let Some(s) = state.sessions.lock().unwrap().get_mut(&*sid.0) {
+                    s.context_tokens = tokens;
+                }
+                cx.send_notification(state.status(&sid.0))?;
+            }
+            Step::Sleep { ms } => tokio::time::sleep(Duration::from_millis(ms)).await,
+            Step::Hold => loop {
+                if cancelled() {
+                    return responder.respond(PromptResponse::new(StopReason::Cancelled));
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            },
+            Step::Fail { message } => return responder.respond_with_error(acp::Error::new(-32603, message)),
+        }
+    }
+    cx.send_notification(state.status(&sid.0))?;
+    responder.respond(PromptResponse::new(StopReason::EndTurn))
+}

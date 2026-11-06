@@ -17,11 +17,12 @@ mod host;
 pub mod process;
 pub mod session;
 pub mod smoke;
+pub mod stub_script;
 
 pub use discovery::{DiscoveredPlugin, DiscoveryOptions, DiscoveryReport, PluginSource};
 pub use host::{AgentHandle, EventReceiver, Host, HostEvent, HostOptions, PluginStatus, Session};
 pub use session::{
     PermissionDecision, PermissionKind, PermissionOption, PermissionRequest, SessionEvent, SessionId,
-    SessionState, ToolCallInfo, ToolCallPatch, ToolStatus, TranscriptItem,
+    PlanEntry, SessionState, ToolCallInfo, ToolCallPatch, ToolStatus, TranscriptItem,
 };
 pub use space_protocol as protocol;
