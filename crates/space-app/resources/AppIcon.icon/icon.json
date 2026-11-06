@@ -1,45 +1,24 @@
 {
   "fill": {
-    "linear-gradient": [
-      "srgb:0.15686,0.16471,0.40784,1.00000",
-      "srgb:0.02745,0.03137,0.10196,1.00000"
-    ]
+    "solid": "srgb:1.00000,0.36078,0.10196,1.00000"
   },
   "groups": [
     {
       "layers": [
         {
-          "image-name": "ring-front.png",
-          "name": "ring-front"
-        },
-        {
-          "image-name": "planet.png",
-          "name": "planet"
-        },
-        {
-          "image-name": "ring-back.png",
-          "name": "ring-back"
+          "image-name": "orbit.png",
+          "name": "orbit"
         }
       ],
       "shadow": {
         "kind": "neutral",
         "opacity": 0.5
       },
-      "specular": true
-    },
-    {
-      "layers": [
-        {
-          "image-name": "sky.png",
-          "name": "sky",
-          "glass": false
-        }
-      ],
-      "shadow": {
-        "kind": "none",
-        "opacity": 0
+      "translucency": {
+        "enabled": false,
+        "value": 0
       },
-      "specular": false
+      "specular": true
     }
   ],
   "supported-platforms": {

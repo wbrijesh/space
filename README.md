@@ -62,8 +62,9 @@ Environment:
 
 ## App icon
 
-`crates/space-app/resources/AppIcon.icon` is an Icon Composer bundle: a ringed planet on a deep-indigo
-tile, in layers (ring front, planet, ring back, sky) so macOS 26 adds its own glass lighting. A
+`crates/space-app/resources/AppIcon.icon` is an Icon Composer bundle: an orbit (a thick cream ring
+with a moon cut into it) on solid orange. One bold shape on a flat colour so it reads at Dock size;
+macOS 26 adds the glass lighting. A
 legacy `.icns` would be put on a grey plate, so the bundle ships only the compiled `Assets.car`.
 `python3 scripts/make_app_icon.py` redraws the layers and compiles them with Xcode's `actool`.
 `AppIcon.png` is only the Dock icon for a bare `cargo run` binary.
