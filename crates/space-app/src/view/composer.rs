@@ -83,35 +83,40 @@ pub fn render(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -
             .into_any_element()
     };
 
-    // One row: [+] [text, grows up to 10 lines] [send]. Buttons stay pinned to the bottom
-    // as the text grows. 8px padding + 32px buttons = a 50px card for one line.
-    // No gap after "+": its icon already has 8px of air, plus the editor's 4px.
-    let row = div()
-        .flex()
-        .items_end()
-        .child(
-            icon_button("attach", IconName::Plus, true, false)
-                .size(px(BUTTON))
-                .rounded_full()
-                .tooltip(tip("Attach files or folders"))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.focus_composer(window, cx);
-                    this.attach_files(cx);
-                })),
-        )
-        .child(
-            // Line height 20 + 6px top/bottom = the 32px button height, so a single line
-            // sits on the buttons' center line.
-            div()
-                .flex_1()
-                .min_w_0()
-                .py(px((BUTTON - LINE) / 2.))
-                .child(
-                    // XSmall: no vertical editor padding, 4px horizontal.
-                    Textarea::new(&app.input).appearance(false).xsmall().text_size(theme::TEXT_BODY),
-                ),
-        )
-        .child(div().flex_none().ml_1p5().child(send));
+    let expanded = composer_expanded(app, window, cx);
+    app.composer_expanded.set(expanded);
+
+    let attach = icon_button("attach", IconName::Plus, true, false)
+        .size(px(BUTTON))
+        .rounded_full()
+        .tooltip(tip("Attach files or folders"))
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.focus_composer(window, cx);
+            this.attach_files(cx);
+        }));
+    // XSmall: no vertical editor padding, 4px horizontal.
+    let textarea = Textarea::new(&app.input).appearance(false).xsmall().text_size(theme::TEXT_BODY);
+
+    let body = if expanded {
+        // Two zones: the text spans the full width (its first column lines up with the "+"
+        // icon below), the action row sits under it. The card grows upward.
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(div().pt(px(4.)).px(px(TEXT_INSET)).child(textarea))
+            .child(div().flex().items_center().justify_between().child(attach).child(send))
+    } else {
+        // One row: [+] [text] [send]. Line height 20 + 6px top/bottom = the 32px button
+        // height, so the line sits on the buttons' center line. No gap after "+": its icon
+        // already has 8px of air, plus the editor's 4px.
+        div()
+            .flex()
+            .items_center()
+            .child(attach)
+            .child(div().flex_1().min_w_0().py(px((BUTTON - LINE) / 2.)).child(textarea))
+            .child(div().flex_none().ml(px(SEND_GAP)).child(send))
+    };
 
     let card = div()
         .id("composer-card")
@@ -129,7 +134,7 @@ pub fn render(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -
         // Clicking the card's padding focuses the input, like a real text field.
         .on_click(cx.listener(|this, _, window, cx| this.focus_composer(window, cx)))
         .when(has_attachments, |d| d.child(chips))
-        .child(row);
+        .child(body);
 
     div().w_full().flex().flex_col().gap_2().child(card).child(controls(app, window, cx))
 }
@@ -139,11 +144,52 @@ const PAD: f32 = 8.;
 const BUTTON: f32 = 32.;
 /// The textarea's line height: 1.25rem.
 const LINE: f32 = 20.;
+const SEND_GAP: f32 = 6.;
+/// Expanded mode: wrapper inset so text (inset + the editor's 4px) starts at the "+" icon.
+const TEXT_INSET: f32 = 4.;
+/// The editor's own horizontal padding at XSmall size (each side).
+const EDITOR_PAD: f32 = 4.;
 /// Horizontal inset of the control row so its first icon centers under "+" (card border 1 +
 /// padding 8 + half the button 16 = 25; minus half the 14px folder icon and the menu
 /// button's 8px padding) and the context ring's right edge meets the send button's (1 + 8).
 const ROW_INSET_LEFT: f32 = 1. + PAD + BUTTON / 2. - 7. - 8.;
 const ROW_INSET_RIGHT: f32 = 1. + PAD;
+
+/// Two-zone layout when the text has more than one visual line *in the single-row layout*:
+/// any newline, or a line wider than the single-row text column. Measuring against the
+/// single-row width in both modes keeps the switch stable (no flip-flop between layouts) and
+/// decides before layout, so the frame that shows the new text already has the right shape.
+fn composer_expanded(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> bool {
+    let state = app.input.read(cx);
+    let text = state.value();
+    if text.contains('\n') {
+        return true;
+    }
+    if text.is_empty() {
+        return false;
+    }
+    let editor_width = state.input_bounds().size.width;
+    if editor_width <= px(0.) {
+        return app.composer_expanded.get();
+    }
+    // Width of the single-row text column, derived from the current layout.
+    let single_row_editor = if app.composer_expanded.get() {
+        editor_width + px(2. * TEXT_INSET) - px(2. * BUTTON + SEND_GAP)
+    } else {
+        editor_width
+    };
+    let available = single_row_editor - px(2. * EDITOR_PAD);
+    let run = TextRun {
+        len: text.len(),
+        font: font(theme::UI_FONT),
+        color: theme::text(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let width = window.text_system().shape_line(text, theme::TEXT_BODY, &[run], None).width;
+    width > available
+}
 
 fn menu_trigger(id: &'static str, window: &Window) -> Button {
     Button::new(id)

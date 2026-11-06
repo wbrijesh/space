@@ -61,8 +61,10 @@ plugin list; the agent's status sits in the sidebar footer.
   yellow: waiting for your input). ⌘B hides the sidebar.
 - **Title bar**: sidebar toggle, back/forward through the threads you visited (⌘[ / ⌘]), new
   thread (⌘N), and the current thread's title and folder. Drag it to move the window.
-- **Composer**: one row, **+** · text · send. The text area starts one line tall and grows up to
-  ten lines before it scrolls; Enter sends, Shift+Enter adds a newline. While the agent works, send
+- **Composer**: one row, **+** · text · send, while the text fits on one line. Longer text
+  switches the card to two zones: the text across the full width (growing upward to ten lines,
+  then scrolling) and **+** / send in a row below; it collapses again when the text fits. Enter
+  sends, Shift+Enter adds a newline. While the agent works, send
   becomes Stop (`session/cancel`). **+** attaches files or folders (sent as ACP `resource_link`s).
   Below the card: the project folder (switch it while the thread is empty, otherwise pick a folder
   to start a new thread there), the model and thinking effort (both switch the session through

@@ -212,6 +212,8 @@ pub struct SpaceApp {
     preferred_effort: Option<String>,
     /// Mouse went down on the title bar's drag area; the next move starts a window move.
     pub(crate) drag_pending: bool,
+    /// The composer shows its two-zone (multi-line) layout; decided each render.
+    pub(crate) composer_expanded: std::cell::Cell<bool>,
     demo: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -294,6 +296,7 @@ impl SpaceApp {
             preferred_model: None,
             preferred_effort: None,
             drag_pending: false,
+            composer_expanded: std::cell::Cell::new(false),
             demo: options.demo,
             _subscriptions: vec![sub],
         };
