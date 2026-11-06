@@ -62,15 +62,17 @@ Environment:
 
 ## App icon
 
-`crates/space-app/resources/AppIcon.icon` is an Icon Composer bundle: an orbit (a thick cream ring
-with a moon cut into it) on solid orange. One bold shape on a flat colour so it reads at Dock size;
-macOS 26 adds the glass lighting. A
-legacy `.icns` would be put on a grey plate, so the bundle ships only the compiled `Assets.car`.
-`python3 scripts/make_app_icon.py` redraws the layers and compiles them with Xcode's `actool`.
-`AppIcon.png` is only the Dock icon for a bare `cargo run` binary.
+A black S (bottom bar, 68° stem, top bar of the same length, both ends square) on a sunrise
+gradient: an amber core below centre through orange, red, sage and periwinkle to violet-blue.
+`python3 scripts/make_app_icon.py` draws it into `crates/space-app/resources/`:
 
-After changing the icon the Dock may keep showing the old one (it is cached per bundle id):
-`rm -rf "$(getconf DARWIN_USER_CACHE_DIR)"/com.apple.{dock.iconcache,iconservices,iconservicesagent}; killall iconservicesagent Dock`.
+- `AppIcon.icon`: Icon Composer bundle (S layer over the gradient layer). macOS 26 masks and
+  lights it, and uses it for the Dock, app switcher, Finder and notifications.
+- `Assets.car`: compiled from it with Xcode's `actool`; `scripts/bundle.sh` ships it.
+- `AppIcon.png`: flattened, pre-masked copy, set as the Dock icon only for a bare `cargo run`.
+
+After changing the icon, macOS may keep showing the old one (cached per bundle id). Clear it with
+`rm -rf "$(getconf DARWIN_USER_CACHE_DIR)"/com.apple.{dock.iconcache,iconservices,iconservicesagent}; killall iconservicesagent Dock NotificationCenter`.
 
 ## Using the app
 

@@ -1,24 +1,34 @@
 {
   "fill": {
-    "solid": "srgb:1.00000,0.36078,0.10196,1.00000"
+    "solid": "srgb:0.35686,0.36078,0.90980,1.00000"
   },
   "groups": [
     {
       "layers": [
         {
-          "image-name": "orbit.png",
-          "name": "orbit"
+          "image-name": "s.png",
+          "name": "s"
         }
       ],
       "shadow": {
         "kind": "neutral",
-        "opacity": 0.5
-      },
-      "translucency": {
-        "enabled": false,
-        "value": 0
+        "opacity": 0.35
       },
       "specular": true
+    },
+    {
+      "layers": [
+        {
+          "image-name": "sunrise.png",
+          "name": "sunrise",
+          "glass": false
+        }
+      ],
+      "shadow": {
+        "kind": "none",
+        "opacity": 0
+      },
+      "specular": false
     }
   ],
   "supported-platforms": {

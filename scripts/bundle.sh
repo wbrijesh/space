@@ -13,11 +13,11 @@ version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)"
 build="$(date +%s)"
 
 [ -x "$bin" ] || { echo "missing $bin (build first)" >&2; exit 1; }
+# Rebuilt from scratch each time, so nothing from an older bundle lingers.
+rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin" "$app/Contents/MacOS/Space"
-# Only the compiled asset catalog: macOS 26 puts a legacy AppIcon.icns on a grey plate, and
-# would use it if it were present.
-rm -f "$app/Contents/Resources/AppIcon.icns"
+# The icon is the compiled asset catalog only (from AppIcon.icon, see scripts/make_app_icon.py).
 cp "$root/crates/space-app/resources/Assets.car" "$app/Contents/Resources/Assets.car"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
