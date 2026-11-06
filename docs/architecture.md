@@ -147,6 +147,6 @@ space/
   into elements that track one, so without a sink the last focused control (or a keyboard focus
   ring) stayed active after clicking elsewhere. Clickable chrome is plain styled divs (no focus);
   dropdown triggers show a focus ring only after keyboard input, because popup menus hand focus back
-  to their trigger when they close. Selected and hovered rows use different fills.
+  to their trigger when they close. Selected and hovered rows use clearly different fills.
 - **Testing.** `space-core` ships a `space-stub-agent` binary, a scripted ACP agent with keywords
   `permission`, `slow` and `crash`. The integration tests in `crates/space-core/tests/stub_agent.rs` run against it.

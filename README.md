@@ -56,10 +56,9 @@ Environment:
 The app starts the agent plugin in the background on launch and opens a new thread. There is no
 plugin list; the agent's status sits in the sidebar footer.
 
-- **Sidebar**: one row per thread, newest first: the title (first line of your first message), a
-  two-line preview (latest reply, *Working…*, *Waiting for your input* or the error), and
-  `branch • ~/path`. A blue badge counts turns that finished or need input while the thread was not
-  selected. ⌘B hides the sidebar.
+- **Sidebar**: a plain list of thread titles (first line of your first message), newest first. A
+  spinner shows while a thread works; a dot marks news you haven't seen (blue: reply, red: error,
+  yellow: waiting for your input). ⌘B hides the sidebar.
 - **Title bar**: sidebar toggle, back/forward through the threads you visited (⌘[ / ⌘]), new
   thread (⌘N), and the current thread's title and folder. Drag it to move the window.
 - **Composer**: Enter sends, Shift+Enter adds a newline; while the agent works the send button

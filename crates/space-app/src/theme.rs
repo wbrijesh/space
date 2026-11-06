@@ -75,13 +75,6 @@ pub fn accent_hover() -> Hsla {
 pub fn on_accent() -> Hsla {
     c(0xffffff)
 }
-/// Secondary text on an accent fill.
-pub fn on_accent_2() -> Hsla {
-    rgba(0xffffffcc).into()
-}
-pub fn on_accent_3() -> Hsla {
-    rgba(0xffffff99).into()
-}
 pub fn green() -> Hsla {
     c(0x3fb950)
 }
