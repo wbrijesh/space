@@ -1,0 +1,10 @@
+id = "pi-agent"
+name = "Pi Agent"
+version = "0.1.0"
+kind = "agent"
+description = "Coding agent on the pi SDK, using the Claude CLI subscription."
+
+[run]
+command = "node"
+args = ["dist/main.js"]
+cwd = "plugin"

@@ -1,0 +1,28 @@
+{
+  "name": "@space/pi-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Space agent plugin: ACP agent on the pi SDK using the Claude Code CLI subscription.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "start": "node dist/main.js",
+    "smoke": "pnpm run build && node scripts/smoke.ts"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^2.4.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@pi-plugins/claude-cli": "0.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  },
+  "main": "dist/main.js"
+}
