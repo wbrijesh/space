@@ -112,13 +112,13 @@ pub struct Alerts {
 /// A turn finished. `watching`: Space is frontmost on this thread (sound only). A thread you
 /// aren't watching gets a notification (silent when the sound is off); when notifications are
 /// off, unavailable or not allowed, the sound plays alone.
-pub fn turn_finished(thread_key: u64, title: &str, body: &str, watching: bool, alerts: Alerts) {
+pub fn turn_finished(thread_key: u64, headline: &str, thread_title: &str, watching: bool, alerts: Alerts) {
     let center = center().filter(|_| !watching && alerts.notification && !DENIED.load(Ordering::Relaxed));
     match center {
         Some(center) => {
             let content = UNMutableNotificationContent::new();
-            content.setTitle(&NSString::from_str(title));
-            content.setBody(&NSString::from_str(if body.is_empty() { "Finished" } else { body }));
+            content.setTitle(&NSString::from_str(headline));
+            content.setBody(&NSString::from_str(thread_title));
             if alerts.sound {
                 content.setSound(Some(&UNNotificationSound::defaultSound()));
             }

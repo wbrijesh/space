@@ -505,12 +505,9 @@ impl SpaceApp {
             && stop_reason != "cancelled"
             && let Some(thread) = self.thread(key)
         {
-            let body = match format::thread_preview(&thread.state) {
-                _ if stop_reason == "error" => "Stopped with an error".to_string(),
-                format::Preview::Text(text) => text,
-                _ => String::new(),
-            };
-            notify::turn_finished(key, &thread.title(), &body, selected && notify::app_active(), alerts);
+            // Headline says what happened; the second line says which thread.
+            let headline = if stop_reason == "error" { "Agent stopped with an error" } else { "Agent finished" };
+            notify::turn_finished(key, headline, &thread.title(), selected && notify::app_active(), alerts);
         }
     }
 
