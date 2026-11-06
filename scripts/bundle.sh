@@ -15,7 +15,9 @@ build="$(date +%s)"
 [ -x "$bin" ] || { echo "missing $bin (build first)" >&2; exit 1; }
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin" "$app/Contents/MacOS/Space"
-cp "$root/crates/space-app/resources/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
+# Only the compiled asset catalog: macOS 26 puts a legacy AppIcon.icns on a grey plate, and
+# would use it if it were present.
+rm -f "$app/Contents/Resources/AppIcon.icns"
 cp "$root/crates/space-app/resources/Assets.car" "$app/Contents/Resources/Assets.car"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -26,7 +28,6 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Space</string>
   <key>CFBundleDisplayName</key><string>Space</string>
   <key>CFBundleExecutable</key><string>Space</string>
-  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIconName</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
