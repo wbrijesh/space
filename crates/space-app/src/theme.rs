@@ -13,8 +13,9 @@ pub const MONO_FONT: &str = "Menlo";
 // Layout.
 pub const TITLE_BAR_H: Pixels = px(48.);
 pub const SIDEBAR_W: Pixels = px(316.);
-/// Width reserved for the macOS traffic lights (at x=18) in the title bar.
-pub const TRAFFIC_LIGHTS_W: Pixels = px(78.);
+/// Width reserved for the macOS traffic lights (at x=18, ~52px wide) plus a gap before
+/// the first title-bar button.
+pub const TRAFFIC_LIGHTS_W: Pixels = px(92.);
 pub const CONTENT_MAX_W: Pixels = px(760.);
 
 // Type scale.

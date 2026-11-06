@@ -6,7 +6,8 @@ edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "space"
+# Capitalized: macOS names an unbundled app after its executable (menu bar, Dock).
+name = "Space"
 path = "src/main.rs"
 
 [dependencies]

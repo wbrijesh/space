@@ -9,7 +9,7 @@ pi SDK. See [docs/architecture.md](docs/architecture.md) for the contract (manif
 ```
 crates/space-protocol   manifest types (space-plugin.toml), _space/* extension types, ACP re-exports
 crates/space-core       discovery · process supervisor · ACP client · session model (no UI deps)
-crates/space-app        GPUI desktop app, binary `space`
+crates/space-app        GPUI desktop app, binary `Space`
 plugins/pi-agent        TypeScript ACP agent on the pi SDK (Claude CLI subscription)
 ```
 

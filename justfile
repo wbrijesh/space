@@ -33,7 +33,7 @@ demo-ui:
     dir=$(mktemp -d)/stub && mkdir -p "$dir"
     printf 'id="stub"\nname="Stub Agent"\nversion="0.1.0"\nkind="agent"\n[run]\ncommand="%s"\n' \
         "{{project}}/target/debug/space-stub-agent" > "$dir/space-plugin.toml"
-    SPACE_PLUGIN_DIRS="$(dirname "$dir")" SPACE_AGENT=stub SPACE_DEMO=1 ./target/debug/space {{project}}
+    SPACE_PLUGIN_DIRS="$(dirname "$dir")" SPACE_AGENT=stub SPACE_DEMO=1 ./target/debug/Space {{project}}
 
 # Run all Rust tests (uses the space-stub-agent, no model calls)
 test:
@@ -54,4 +54,4 @@ smoke-stub prompt="hello, permission please":
     dir=$(mktemp -d)/stub && mkdir -p "$dir"
     printf 'id="stub"\nname="Stub Agent"\nversion="0.1.0"\nkind="agent"\n[run]\ncommand="%s"\n' \
         "{{project}}/target/debug/space-stub-agent" > "$dir/space-plugin.toml"
-    SPACE_PLUGIN_DIRS="$(dirname "$dir")" ./target/debug/space --smoke "{{prompt}}" --allow {{project}}
+    SPACE_PLUGIN_DIRS="$(dirname "$dir")" ./target/debug/Space --smoke "{{prompt}}" --allow {{project}}

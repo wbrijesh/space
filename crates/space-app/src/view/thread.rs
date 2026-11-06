@@ -39,21 +39,10 @@ pub fn render_body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceAp
                     .child(
                         div()
                             .flex()
-                            .flex_col()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_size(px(26.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("What should we work on?"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(theme::TEXT_MD)
-                                    .text_color(theme::text_3())
-                                    .child(format!("in {}", format::dir_name(&thread.cwd))),
-                            ),
+                            .justify_center()
+                            .text_size(px(26.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("What should we work on?"),
                     )
                     .children(agent_problem(app, thread, cx))
                     .children(banner)

@@ -12,7 +12,7 @@ use gpui::*;
 
 use crate::app::{FocusComposer, GoBack, GoForward, NewThread, SpaceApp, ToggleLogs, ToggleSidebar};
 use gpui::assets::IconName as Lucide;
-use crate::{format, theme};
+use crate::theme;
 
 pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> impl IntoElement {
     let main = div()
@@ -123,11 +123,9 @@ fn title_bar_sidebar(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> impl IntoEle
         .child(new_thread_button(cx))
 }
 
-/// Title bar over the main column: thread title, folder and path.
+/// Title bar over the main column: the thread title.
 fn title_bar_main(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> impl IntoElement {
-    let thread = app.current();
-    let title = thread.map(|t| t.title()).unwrap_or_default();
-    let path = thread.map(|t| format::abbreviate_home(&t.cwd)).unwrap_or_default();
+    let title = app.current().map(|t| t.title()).unwrap_or_default();
     drag_region(div().id("titlebar-main"), cx)
         .h(theme::TITLE_BAR_H)
         .flex_none()
@@ -140,27 +138,15 @@ fn title_bar_main(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> impl IntoElemen
         .when(!app.sidebar_open, |d| {
             d.pl(theme::TRAFFIC_LIGHTS_W).child(nav_buttons(app, cx)).child(new_thread_button(cx)).child(div().w_2())
         })
-        .child(Icon::new(IconName::Folder).size(px(15.)).text_color(theme::text_3()))
         .child(
             div()
                 .min_w_0()
-                .flex_shrink(1.)
+                .flex_1()
                 .truncate()
                 .text_size(theme::TEXT_MD)
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title),
         )
-        .child(
-            div()
-                .min_w_0()
-                .flex_shrink(1.)
-                .truncate()
-                .font_family(theme::MONO_FONT)
-                .text_size(theme::TEXT_XS)
-                .text_color(theme::text_3())
-                .child(path),
-        )
-        .child(div().flex_1())
 }
 
 // ----- widgets ---------------------------------------------------------------------------

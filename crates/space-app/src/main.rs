@@ -1,8 +1,8 @@
-//! `space` — the Space desktop app.
+//! `Space` — the Space desktop app.
 //!
 //! ```text
-//! space [PROJECT_DIR]                 open the window (project defaults to the cwd)
-//! space --smoke "PROMPT" [--plugin ID] [--allow] [PROJECT_DIR]
+//! Space [PROJECT_DIR]                 open the window (project defaults to the cwd)
+//! Space --smoke "PROMPT" [--plugin ID] [--allow] [PROJECT_DIR]
 //!                                     headless: start an agent, prompt once, print events
 //! ```
 //!
@@ -46,7 +46,7 @@ fn parse_args() -> Result<Args> {
             "--plugin" => plugin = Some(args.next().context("--plugin needs an id")?),
             "--allow" => allow = true,
             "-h" | "--help" => {
-                println!("usage: space [--smoke PROMPT [--plugin ID] [--allow]] [PROJECT_DIR]");
+                println!("usage: Space [--smoke PROMPT [--plugin ID] [--allow]] [PROJECT_DIR]");
                 std::process::exit(0);
             }
             _ if arg.starts_with('-') => anyhow::bail!("unknown flag {arg}"),

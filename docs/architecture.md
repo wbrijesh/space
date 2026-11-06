@@ -109,7 +109,7 @@ space/
 ├─ crates/
 │  ├─ space-protocol/         # manifest types, ACP re-exports, _space extension types
 │  ├─ space-core/             # discovery, supervisor, ACP client connections, session state
-│  └─ space-app/              # GPUI binary `space`
+│  └─ space-app/              # GPUI binary `Space`
 ├─ plugins/
 │  └─ pi-agent/               # TypeScript ACP agent on the pi SDK
 └─ docs/
