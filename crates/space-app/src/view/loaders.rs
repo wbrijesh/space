@@ -7,10 +7,11 @@ use std::time::Duration;
 use gpui::*;
 
 /// Spoke spinner: rotates once per cycle with ease-in-out, so it speeds up and slows down.
-/// Spokes run from 45% to 100% of the radius; 6 spokes leave wide gaps.
+/// Spokes run from 60% to 100% of the radius.
 pub const SPINNER_CYCLE: Duration = Duration::from_millis(1600);
-pub const SPINNER_SPOKES: usize = 6;
-pub const SPINNER_STROKE: f32 = 1.6;
+pub const SPINNER_SPOKES: usize = 8;
+pub const SPINNER_STROKE: f32 = 1.3;
+const SPINNER_INNER: f32 = 0.6;
 
 pub fn spinner(id: impl Into<ElementId>, size: f32, color: Hsla) -> impl IntoElement {
     div().size(px(size)).flex_none().with_animation(
@@ -23,7 +24,7 @@ pub fn spinner(id: impl Into<ElementId>, size: f32, color: Hsla) -> impl IntoEle
                     move |bounds, _, window, _| {
                         let center = bounds.center();
                         let r_out = size / 2. - SPINNER_STROKE / 2.;
-                        let r_in = r_out * 0.45;
+                        let r_in = r_out * SPINNER_INNER;
                         let rotation = delta * TAU;
                         for i in 0..SPINNER_SPOKES {
                             let a = rotation + i as f32 * TAU / SPINNER_SPOKES as f32 - PI / 2.;
