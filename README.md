@@ -62,11 +62,12 @@ Environment:
 
 ## App icon
 
-`crates/space-app/resources/AppIcon.icon` is a **placeholder** (light-grey tile, dashed frame,
+`crates/space-app/resources/AppIcon.icon` is a **placeholder** (pure black tile,
 circle/square/triangle) until there's a real logo. It's an Icon Composer bundle with one full-bleed
 layer; macOS 26 masks it to the system shape. A legacy `.icns` that doesn't match that shape gets put
-on a grey plate. macOS 26 also draws a bright glass rim on every icon, which is why the
-tile is light: on a dark tile the rim reads as a silver frame. `python3 scripts/make_placeholder_icon.py` redraws it and compiles `Assets.car` +
+on a grey plate. After changing the icon, the Dock can keep showing the old one
+(it is cached per bundle id): clear it with
+`rm -rf "$(getconf DARWIN_USER_CACHE_DIR)"/com.apple.{dock.iconcache,iconservices,iconservicesagent}; killall iconservicesagent Dock`. `python3 scripts/make_placeholder_icon.py` redraws it and compiles `Assets.car` +
 `AppIcon.icns` with Xcode's `actool`. `AppIcon.png` is only the Dock icon for a bare `cargo run`
 binary.
 

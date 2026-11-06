@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Draw Space's PLACEHOLDER app icon (the real logo is yet to come).
 
-A neutral light-grey tile with a dashed inner frame and three primitive shapes (circle, square,
+A pure black tile with three primitive shapes (circle, square,
 triangle): deliberately generic, so nobody mistakes it for a logo.
 
 Writes to crates/space-app/resources/:
@@ -21,15 +21,12 @@ DEVELOPER_DIR = "/Applications/Xcode.app/Contents/Developer"
 S = 4          # supersampling
 N = 1024 * S   # full-bleed canvas
 
-# Light grey, like an "image goes here" box. macOS 26 draws a bright glass rim around every app
-# icon; on a dark tile it reads as a silver frame, on a light one it disappears.
-TOP, BOTTOM = (238, 239, 242), (208, 210, 216)
-FRAME = (126, 129, 138, 210)
-INK = (72, 75, 84, 255)
+TOP, BOTTOM = (0, 0, 0), (0, 0, 0)   # pure black
+INK = (255, 255, 255, 255)
 
 
 def background():
-    """The graphite gradient (only for the pre-masked PNG; the .icon uses a fill for this)."""
+    """The background (only for the pre-masked PNG; the .icon uses a fill for this)."""
     img = Image.new("RGBA", (N, N))
     d = ImageDraw.Draw(img)
     for y in range(N):
@@ -39,30 +36,9 @@ def background():
 
 
 def glyphs():
-    """Dashed frame and shapes on transparency, full-bleed coordinates (the system masks the tile)."""
+    """The shapes on transparency, full-bleed coordinates (the system masks the tile)."""
     img = Image.new("RGBA", (N, N), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-
-    # Dashed inner frame ("something goes here"), inside the mask's safe area.
-    fi, fr = 168 * S, 120 * S
-    dash, gap, w = 46 * S, 30 * S, 14 * S
-    x0, y0, x1, y1 = fi, fi, N - fi, N - fi
-
-    def dashed(p, q):
-        (ax, ay), (bx, by) = p, q
-        length, n = math.hypot(bx - ax, by - ay), 0.0
-        while n < length:
-            e = min(n + dash, length)
-            d.line([(ax + (bx - ax) * n / length, ay + (by - ay) * n / length),
-                    (ax + (bx - ax) * e / length, ay + (by - ay) * e / length)], fill=FRAME, width=w)
-            n += dash + gap
-
-    dashed((x0 + fr, y0), (x1 - fr, y0))
-    dashed((x0 + fr, y1), (x1 - fr, y1))
-    dashed((x0, y0 + fr), (x0, y1 - fr))
-    dashed((x1, y0 + fr), (x1, y1 - fr))
-    for cx, cy, a0 in [(x0 + fr, y0 + fr, 180), (x1 - fr, y0 + fr, 270), (x1 - fr, y1 - fr, 0), (x0 + fr, y1 - fr, 90)]:
-        d.arc([cx - fr, cy - fr, cx + fr, cy + fr], a0 + 14, a0 + 76, fill=FRAME, width=w)
 
     # Three primitives with heavy outlines, legible at notification size.
     sw, r, gapx, c = 36 * S, 76 * S, 196 * S, N // 2
