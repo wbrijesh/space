@@ -92,3 +92,28 @@ space/
 │  └─ pi-agent/               # TypeScript ACP agent on the pi SDK
 └─ docs/
 ```
+
+## Harness implementation notes (v0)
+
+- **GPUI version.** `space-app` depends on `gpui-kit = "0.9.0"`, renamed to `gpui` in Cargo.toml.
+  gpui-kit re-exports `gpui-pre 0.3.11` (a crates.io snapshot of Zed's GPUI), its macOS platform and
+  `gpui-component 0.9.0`, which provides the buttons, textarea and dark theme. `gpui-component` only builds
+  against `gpui-pre`, not against a zed git rev or `gpui 0.2.2`. Using the kit gives us widgets plus a
+  reproducible registry dependency instead of a full zed checkout. It builds cleanly on stable 1.98.
+- **Runtime bridge.** `space-core` uses tokio, with `tokio::process` for children and
+  `tokio-util` compat for ACP `ByteStreams`. The app owns a 2-worker tokio runtime and passes its
+  handle to `Host::new`. Every async `space-core` method spawns its work onto that runtime, so GPUI tasks
+  (`cx.spawn`) can await it directly. Host events go out on a tokio unbounded mpsc channel. A GPUI
+  foreground task drains it in batches and folds each `SessionEvent` into a per-session `SessionState`
+  (`SessionState::apply`).
+- **ACP client.** This uses `agent-client-protocol 5.0.0`, the `Client.v1()` builder with typed handlers for
+  `session/update`, `_space/status` (a `#[derive(JsonRpcNotification)]` struct in `space-protocol`)
+  and `session/request_permission`. Permission responses are produced in a `cx.spawn`ed task, so the
+  dispatch loop keeps running while the user decides. `session/cancel` answers any pending permission
+  requests with `cancelled`.
+- **Supervisor.** The process gets piped stdio and `kill_on_drop`. Each stderr line goes to a
+  2000-line ring buffer and is also emitted as a `HostEvent::PluginLog`. On exit the harness reports
+  `stopped` (killed or exit code 0) or `crashed` (exit code plus the last stderr line). Before spawning,
+  any relative file argument in `run.args` must exist, which catches unbuilt plugins with a clear error.
+- **Testing.** `space-core` ships a `space-stub-agent` binary, a scripted ACP agent with keywords
+  `permission`, `slow` and `crash`. The integration tests in `crates/space-core/tests/stub_agent.rs` run against it.

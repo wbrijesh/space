@@ -1,0 +1,22 @@
+[package]
+name = "space-app"
+description = "Space desktop app (GPUI)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "space"
+path = "src/main.rs"
+
+[dependencies]
+space-core.workspace = true
+space-protocol.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# GPUI via gpui-kit 0.9.0: re-exports gpui-pre 0.3.11 (crates.io snapshot of Zed's GPUI),
+# its macOS platform, and gpui-component. Renamed to `gpui` so GPUI macro output resolves.
+gpui = { package = "gpui-kit", version = "0.9.0" }
