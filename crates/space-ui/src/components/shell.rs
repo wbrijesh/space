@@ -234,6 +234,20 @@ pub fn problem_card(message: impl Into<SharedString>, actions: Option<(ClickHand
 }
 
 /// Heading above the centered composer of an empty thread.
+/// Fade over the bottom edge of a scroll area so content dims into the background before it
+/// meets the composer. Place inside a `relative()` parent, after the scroll container. Has no
+/// hitbox, so wheel and clicks pass through to the content below.
+pub fn scroll_fade() -> Div {
+    let bg = color::bg();
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .bottom_0()
+        .h(size::SCROLL_FADE_H)
+        .bg(linear_gradient(180., linear_color_stop(bg.opacity(0.), 0.), linear_color_stop(bg, 1.)))
+}
+
 pub fn empty_heading() -> Div {
     div()
         .flex()

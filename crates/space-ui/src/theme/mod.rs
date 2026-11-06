@@ -140,6 +140,8 @@ pub mod size {
     pub const SPINNER_MD: f32 = 16.;
     pub const SPINNER_LG: f32 = 18.;
     pub const CONTEXT_RING: f32 = 16.;
+    /// Fade at the bottom of the transcript, above the composer.
+    pub const SCROLL_FADE_H: Pixels = px(72.);
 }
 
 /// Type scale and font families.

@@ -7,7 +7,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::PluginStatus;
 use space_ui::components::composer::{Composer, ComposerControls, ComposerHandlers, Handler};
-use space_ui::components::shell::{AgentFooter, AgentState, LogsPanel, banner, empty_heading, problem_card, sidebar_column};
+use space_ui::components::shell::{AgentFooter, AgentState, LogsPanel, banner, empty_heading, problem_card, scroll_fade, sidebar_column};
 use space_ui::components::thread_row::{RowIndicator, ThreadRow};
 use space_ui::components::title_bar::{MainTitleBar, SidebarTitleBar, TitleBarNav};
 use space_ui::components::transcript::{TranscriptView, transcript_items};
@@ -170,12 +170,21 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
         .flex_col()
         .child(
             div()
-                .id("transcript")
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
-                .track_scroll(&app.transcript_scroll)
-                .child(div().w_full().flex().justify_center().px_6().child(column().pt_6().pb_8().children(items))),
+                .relative()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .id("transcript")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .track_scroll(&app.transcript_scroll)
+                        .child(div().w_full().flex().justify_center().px_6().child(column().pt_6().pb(size::SCROLL_FADE_H).children(items))),
+                )
+                .child(scroll_fade()),
         )
         .child(
             div()

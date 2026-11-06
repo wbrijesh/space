@@ -191,7 +191,24 @@ pub fn all() -> Vec<Scenario> {
             threads: vec![ScenarioThread { draft: Some(twelve), ..explain_thread() }],
             select: None,
         },
+        Scenario {
+            name: "long-transcript",
+            description: "A thread longer than the window, scrolled to the end (bottom fade over text).",
+            threads: vec![long_thread()],
+            select: None,
+        },
     ]
+}
+
+/// The explain reply three times over, so the transcript always overflows the window.
+fn long_thread() -> ScenarioThread {
+    let mut steps = Vec::new();
+    for i in 0..3 {
+        steps.push(tool(&format!("t{i}"), "read: crates/space-core/src/discovery.rs", "read", "completed", Some("194 lines")));
+        steps.push(say(EXPLAIN));
+    }
+    steps.push(context(120_000));
+    thread("Walk me through plugin discovery in detail", steps)
 }
 
 pub fn find(name: &str) -> Option<Scenario> {

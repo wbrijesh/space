@@ -102,6 +102,7 @@ until you cancel it. Nothing in the UI is faked. `Space --scenario list` prints 
 | `error` | failed turn |
 | `many-threads` | nine threads in mixed states (working, waiting, unread, error) |
 | `long-composer` | finished thread with a 12-line draft |
+| `long-transcript` | thread longer than the window, scrolled to the end (bottom fade) |
 
 **Adding a scenario:** in `crates/space-app/src/scenarios.rs`, append a `Scenario` to `all()`.
 Give it a name, a description and its threads. Each thread has a `prompt` and the `steps` the
