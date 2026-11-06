@@ -1,13 +1,12 @@
 //! Thread body: transcript (or the empty state) above the composer, and the logs panel.
 
-use gpui::component::spinner::Spinner;
 use gpui::component::text::TextView;
-use gpui::component::{Icon, IconName, Sizable as _};
+use gpui::component::{Icon, IconName};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::{PermissionDecision, PermissionRequest, PluginStatus, ToolCallInfo, ToolStatus, TranscriptItem};
 
-use super::{composer, icon_button, status_dot, tip};
+use super::{composer, icon_button, loaders, status_dot, tip};
 use crate::app::{SpaceApp, Thread};
 use crate::{format, theme};
 use gpui::assets::IconName as Lucide;
@@ -169,11 +168,12 @@ fn transcript(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> Ve
     if let Some((text, attachments)) = &thread.queued {
         out.push(div().mt(px(18.)).child(user_bubble(text, attachments)).into_any_element());
         out.push(div().mt(px(18.)).child(working_row("Starting agent…")).into_any_element());
-    } else if thread.state.running && !matches!(items.last(), Some(TranscriptItem::Agent(_) | TranscriptItem::Thought(_))) {
-        let waiting = thread.state.pending_permission().is_some();
-        if !waiting {
-            out.push(div().mt(px(14.)).child(working_row("Working…")).into_any_element());
-        }
+    } else if thread.state.running
+        && thread.state.pending_permission().is_none()
+        // A live thought shows the spinner in its own "Thinking…" row.
+        && !matches!(items.last(), Some(TranscriptItem::Thought(_)))
+    {
+        out.push(div().mt(px(14.)).child(working_row("Working…")).into_any_element());
     }
     out
 }
@@ -182,12 +182,12 @@ fn working_row(label: &str) -> impl IntoElement {
     div()
         .flex()
         .items_center()
-        .gap_2()
-        .h(px(28.))
-        .px_2()
+        .gap_2p5()
+        .h(px(30.))
+        .px_1p5()
         .text_size(theme::TEXT_SM)
         .text_color(theme::text_3())
-        .child(Spinner::new().xsmall().color(theme::text_3()))
+        .child(loaders::spinner("working-spinner", 18., theme::text_3()))
         .child(label.to_string())
 }
 
@@ -210,7 +210,8 @@ fn render_item(
             .into_any_element(),
         TranscriptItem::Thought(text) => {
             let open = thread.expanded.contains(&ix);
-            let label = if last && thread.state.running {
+            let live = last && thread.state.running;
+            let label = if live {
                 "Thinking…".to_string()
             } else {
                 match thread.thought_secs.get(&ix) {
@@ -235,7 +236,13 @@ fn render_item(
                         .text_color(theme::text_3())
                         .cursor_pointer()
                         .hover(|s| s.text_color(theme::text_2()).bg(theme::surface()))
-                        .child(Icon::new(Lucide::Brain).size(px(14.)))
+                        .map(|d| {
+                            if live {
+                                d.child(loaders::spinner(("thinking-spinner", ix), 16., theme::text_3()))
+                            } else {
+                                d.child(Icon::new(Lucide::Brain).size(px(14.)))
+                            }
+                        })
                         .child(label)
                         .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size(px(12.)))
                         .on_click(cx.listener(move |this, _, _, cx| this.toggle_expanded(ix, cx))),
@@ -397,7 +404,7 @@ fn tool_row(ix: usize, call: &ToolCallInfo, open: bool, cx: &mut Context<SpaceAp
     let (name, detail) = format::tool_parts(&title);
     let has_body = !call.output.trim().is_empty() || !call.locations.is_empty();
     let status: AnyElement = match call.status {
-        ToolStatus::InProgress => Spinner::new().xsmall().color(theme::text_3()).into_any_element(),
+        ToolStatus::InProgress => loaders::spinner(("tool-spinner", ix), 14., theme::text_3()).into_any_element(),
         ToolStatus::Pending => status_dot(theme::text_3()).into_any_element(),
         ToolStatus::Completed => status_dot(theme::green()).into_any_element(),
         ToolStatus::Failed => div()

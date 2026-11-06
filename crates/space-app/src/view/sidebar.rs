@@ -1,12 +1,11 @@
 //! Thread list (cmux style): title, 2-line preview, branch • path meta, unread badge.
 
-use gpui::component::spinner::Spinner;
-use gpui::component::{IconName, Sizable as _};
+use gpui::component::IconName;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::PluginStatus;
 
-use super::{icon_button, status_dot, tip, tip_action, title_bar_sidebar};
+use super::{icon_button, loaders, status_dot, tip, tip_action, title_bar_sidebar};
 use crate::app::{SpaceApp, Thread, ToggleLogs};
 use crate::format::{self, Preview};
 use crate::theme;
@@ -45,7 +44,8 @@ fn thread_row(app: &SpaceApp, t: &Thread, cx: &mut Context<SpaceApp>) -> impl In
     let indicator: Option<AnyElement> = if needs_input && !selected {
         Some(status_dot(theme::yellow()).into_any_element())
     } else if running {
-        Some(Spinner::new().xsmall().color(theme::text_3()).into_any_element())
+        // Any turn in progress: thinking, streaming or running tools.
+        Some(loaders::dots(SharedString::from(format!("dots-{key}")), theme::text_3()).into_any_element())
     } else if t.unread > 0 && !selected {
         Some(status_dot(if failed { theme::red() } else { theme::accent() }).into_any_element())
     } else {

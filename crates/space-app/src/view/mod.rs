@@ -2,6 +2,7 @@
 //! used for the textarea, popup menus, tooltips and the spinner.
 
 mod composer;
+mod loaders;
 mod sidebar;
 mod thread;
 

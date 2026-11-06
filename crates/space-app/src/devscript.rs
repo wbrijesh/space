@@ -13,6 +13,7 @@
 //! type some text      type text into the focused element
 //! resize 1280 820     resize the window (logical px)
 //! shot name           run `$SPACE_SHOT_CMD name` (e.g. a script calling `screencapture -l`)
+//! shotnow name        same as `shot` without the 250 ms settle delay (animation frames)
 //! quit                quit the app
 //! ```
 
@@ -108,9 +109,11 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                         window.refresh();
                     });
                 }
-                "shot" => {
-                    // Let a frame render before capturing.
-                    cx.background_executor().timer(Duration::from_millis(250)).await;
+                "shot" | "shotnow" => {
+                    // Let a frame render before capturing (`shotnow`: capture immediately).
+                    if cmd == "shot" {
+                        cx.background_executor().timer(Duration::from_millis(250)).await;
+                    }
                     if let Some(shot) = std::env::var_os("SPACE_SHOT_CMD") {
                         let name = args.first().copied().unwrap_or("shot").to_string();
                         let _ = std::process::Command::new(shot).arg(name).status();
