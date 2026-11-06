@@ -6,7 +6,7 @@ v0 delivers the foundation: a Rust/GPUI **harness** that hosts out-of-process **
 
 ```
 ┌──────────────────────────── space (Rust) ────────────────────────────┐
-│  space-app       GPUI UI: sidebar · chat · tool cards · approvals    │
+│  space-app       GPUI UI: threads · transcript · composer · approvals│
 │  space-core      plugin registry · process supervisor · sessions     │
 │  space-protocol  manifest types · ACP re-exports · _space extensions │
 └──────┬──────────────────────────────────────────────────────────────┘
@@ -137,5 +137,16 @@ space/
   2000-line ring buffer and is also emitted as a `HostEvent::PluginLog`. On exit the harness reports
   `stopped` (killed or exit code 0) or `crashed` (exit code plus the last stderr line). Before spawning,
   any relative file argument in `run.args` must exist, which catches unbuilt plugins with a clear error.
+- **App shell.** The window uses a transparent title bar (`appears_transparent`, traffic lights at
+  18,17, `app_owns_titlebar_drag`) and draws its own 48px bar, which moves the window with
+  `start_window_move`. The default agent plugin starts on launch. Each thread owns one ACP session;
+  events that arrive before `session/new` returns are buffered and replayed. Colors, spacing and
+  fonts come from `space-app/src/theme.rs`, which also maps them onto the gpui-component theme.
+- **Focus.** The root element tracks a focus handle, so clicking anything that is not focusable
+  moves focus there and clears the composer's focused state. GPUI only moves focus on mouse-down
+  into elements that track one, so without a sink the last focused control (or a keyboard focus
+  ring) stayed active after clicking elsewhere. Clickable chrome is plain styled divs (no focus);
+  dropdown triggers show a focus ring only after keyboard input, because popup menus hand focus back
+  to their trigger when they close. Selected and hovered rows use different fills.
 - **Testing.** `space-core` ships a `space-stub-agent` binary, a scripted ACP agent with keywords
   `permission`, `slow` and `crash`. The integration tests in `crates/space-core/tests/stub_agent.rs` run against it.

@@ -1,0 +1,119 @@
+//! Dev-only input scripting: `SPACE_SCRIPT=path` replays a list of input commands through
+//! GPUI's own event dispatch (`Window::dispatch_event`), so hit testing, focus transfer,
+//! hover and active states run exactly as for real mouse input. Used to verify UI behavior
+//! (and take screenshots) without OS-level event synthesis.
+//!
+//! One command per line (`#` starts a comment):
+//!
+//! ```text
+//! wait 500            sleep 500 ms
+//! move 120 300        move the mouse to window coordinates (logical px)
+//! click 120 300       move + left mouse down + up
+//! key cmd-n           dispatch a keystroke
+//! resize 1280 820     resize the window (logical px)
+//! shot name           run `$SPACE_SHOT_CMD name` (e.g. a script calling `screencapture -l`)
+//! quit                quit the app
+//! ```
+
+use std::time::Duration;
+
+use gpui::*;
+
+/// A script is running (enables extra diagnostics on stderr).
+pub fn active() -> bool {
+    std::env::var_os("SPACE_SCRIPT").is_some()
+}
+
+pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
+    let Some(path) = std::env::var_os("SPACE_SCRIPT") else { return };
+    let script = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("SPACE_SCRIPT: cannot read {}: {e}", path.to_string_lossy());
+            return;
+        }
+    };
+    cx.spawn(async move |cx| {
+        let lines: Vec<String> = script.lines().map(str::to_string).collect();
+        for raw in &lines {
+            let line = raw.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+            let mut parts = line.split_whitespace();
+            let cmd = parts.next().unwrap_or("");
+            let args: Vec<&str> = parts.collect();
+            let num = |i: usize| args.get(i).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.);
+            eprintln!("script: {line}");
+            match cmd {
+                "wait" => cx.background_executor().timer(Duration::from_millis(num(0) as u64)).await,
+                "move" | "click" => {
+                    let position = point(px(num(0)), px(num(1)));
+                    let click = cmd == "click";
+                    let _ = window.update(cx, |_, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseMove(MouseMoveEvent {
+                                position,
+                                pressed_button: None,
+                                modifiers: Modifiers::default(),
+                            }),
+                            cx,
+                        );
+                        if click {
+                            window.dispatch_event(
+                                PlatformInput::MouseDown(MouseDownEvent {
+                                    button: MouseButton::Left,
+                                    position,
+                                    modifiers: Modifiers::default(),
+                                    click_count: 1,
+                                    first_mouse: false,
+                                }),
+                                cx,
+                            );
+                            window.dispatch_event(
+                                PlatformInput::MouseUp(MouseUpEvent {
+                                    button: MouseButton::Left,
+                                    position,
+                                    modifiers: Modifiers::default(),
+                                    click_count: 1,
+                                }),
+                                cx,
+                            );
+                        }
+                        window.refresh();
+                    });
+                    cx.background_executor().timer(Duration::from_millis(16)).await;
+                }
+                "key" => {
+                    if let Some(k) = args.first().and_then(|k| Keystroke::parse(Box::leak(k.to_string().into_boxed_str())).ok()) {
+                        let _ = window.update(cx, |_, window, cx| {
+                            window.dispatch_keystroke(k, cx);
+                            window.refresh();
+                        });
+                    }
+                }
+                "shot" => {
+                    // Let a frame render before capturing.
+                    cx.background_executor().timer(Duration::from_millis(250)).await;
+                    if let Some(shot) = std::env::var_os("SPACE_SHOT_CMD") {
+                        let name = args.first().copied().unwrap_or("shot").to_string();
+                        let _ = std::process::Command::new(shot).arg(name).status();
+                    }
+                }
+                "resize" => {
+                    let _ = window.update(cx, |_, window, _| window.resize(size(px(num(0)), px(num(1)))));
+                }
+                "size" => {
+                    let _ = window.update(cx, |_, window, _| {
+                        eprintln!("script: viewport {:?} scale {}", window.viewport_size(), window.scale_factor())
+                    });
+                }
+                "quit" => {
+                    cx.update(|cx| cx.quit());
+                }
+                other => eprintln!("script: unknown command `{other}`"),
+            }
+        }
+    })
+    .detach();
+}

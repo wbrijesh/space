@@ -21,9 +21,19 @@ build-plugin:
 run dir=project: build
     cargo run -p space-app -- {{dir}}
 
-# Launch and auto-start the first agent + session (optionally auto-send a prompt)
+# Launch and send a prompt in the first thread (billed when using pi-agent)
 demo prompt="": build
-    SPACE_AUTOSTART=1 SPACE_AUTOPROMPT="{{prompt}}" cargo run -p space-app -- {{project}}
+    SPACE_AUTOPROMPT="{{prompt}}" cargo run -p space-app -- {{project}}
+
+# Dev: open the app on the free stub agent with a few seeded threads (UI work, screenshots)
+demo-ui:
+    #!/usr/bin/env sh
+    set -e
+    cargo build -p space-core --bin space-stub-agent -p space-app
+    dir=$(mktemp -d)/stub && mkdir -p "$dir"
+    printf 'id="stub"\nname="Stub Agent"\nversion="0.1.0"\nkind="agent"\n[run]\ncommand="%s"\n' \
+        "{{project}}/target/debug/space-stub-agent" > "$dir/space-plugin.toml"
+    SPACE_PLUGIN_DIRS="$(dirname "$dir")" SPACE_AGENT=stub SPACE_DEMO=1 ./target/debug/space {{project}}
 
 # Run all Rust tests (uses the space-stub-agent, no model calls)
 test:

@@ -6,12 +6,19 @@
 //!                                     headless: start an agent, prompt once, print events
 //! ```
 //!
-//! Env: `SPACE_AUTOSTART=1` starts the first agent and a session on launch;
-//! `SPACE_AUTOPROMPT="..."` additionally sends that prompt. `SPACE_PLUGIN_DIRS` overrides
-//! the bundled plugin roots.
+//! The app starts the agent plugin (`pi-agent`, or `SPACE_AGENT=<plugin id>`) on launch and
+//! opens an empty thread. Env: `SPACE_AUTOPROMPT="..."` sends that prompt in the first
+//! thread; `SPACE_PLUGIN_DIRS` overrides the bundled plugin roots.
+//!
+//! Dev only: `SPACE_DEMO=1` seeds a few threads with scripted prompts (for the stub agent),
+//! `SPACE_SCRIPT=file` replays input commands (see `devscript`).
 
 mod app;
+mod assets;
+mod devscript;
+mod format;
 mod theme;
+mod view;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -83,7 +90,13 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    app::run(host, events, args.project_dir);
+    let options = app::Options {
+        project_dir: args.project_dir,
+        agent: std::env::var("SPACE_AGENT").ok().filter(|s| !s.is_empty()),
+        demo: std::env::var_os("SPACE_DEMO").is_some_and(|v| v != "0"),
+        autoprompt: std::env::var("SPACE_AUTOPROMPT").ok().filter(|p| !p.trim().is_empty()),
+    };
+    app::run(host, events, options);
     drop(runtime);
     Ok(())
 }

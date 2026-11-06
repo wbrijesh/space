@@ -167,6 +167,7 @@ async fn run_turn(
         })
         .collect();
     eprintln!("space-stub-agent: prompt {text:?}");
+    let text = text.to_lowercase();
     let send = |update: SessionUpdate| cx.send_notification(SessionNotification::new(sid.clone(), update));
     let chunk = |s: &str| ContentChunk::new(ContentBlock::Text(TextContent::new(s)));
 
@@ -176,7 +177,7 @@ async fn run_turn(
 
     if text.contains("fail") {
         tokio::time::sleep(Duration::from_millis(30)).await;
-        return responder.respond_with_error(acp::Error::internal_error().data("The model request failed: overloaded (stub)"));
+        return responder.respond_with_error(acp::Error::new(-32603, "The model request failed: overloaded (stub)"));
     }
     if text.contains("wait") {
         loop {

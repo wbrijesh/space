@@ -30,7 +30,8 @@ plugins/pi-agent        TypeScript ACP agent on the pi SDK (Claude CLI subscript
 |---|---|
 | `just build` | `cargo build --workspace` + `pnpm install && pnpm build` in `plugins/pi-agent` |
 | `just run [DIR]` | open the app on a project directory (default: this repo) |
-| `just demo "Reply with exactly: pong"` | open the app, auto-start the first agent and a session, send the prompt |
+| `just demo "Reply with exactly: pong"` | open the app and send the prompt in the first thread |
+| `just demo-ui` | open the app on the free stub agent with a few seeded threads (UI work) |
 | `just test` | all Rust tests; they use the scripted `space-stub-agent`, so they make no model calls |
 | `just lint` | clippy with `-D warnings` |
 | `just smoke ["PROMPT"]` | headless end-to-end run against pi-agent, printing events (billed) |
@@ -41,21 +42,36 @@ Without just, run `cargo run -p space-app -- [PROJECT_DIR]` or
 
 Environment:
 
+- `SPACE_AGENT=<plugin id>` picks the agent plugin (default `pi-agent`, else the first agent found).
 - `SPACE_PLUGIN_DIRS=dir1:dir2` replaces the bundled plugin roots (`<repo>/plugins`).
   `~/.space/plugins` and `<project>/.space/plugins` are still scanned.
-- `SPACE_AUTOSTART=1` starts the first agent plugin and a session when the app launches.
-  `SPACE_AUTOPROMPT="…"` also sends that prompt.
+- `SPACE_AUTOPROMPT="…"` sends that prompt in the first thread once its session is up.
 - `RUST_LOG=space_core=debug` turns on logging (stderr).
+- Dev only: `SPACE_DEMO=1` seeds five threads with scripted prompts (meant for the stub agent);
+  `SPACE_SCRIPT=<file>` replays clicks/keys through GPUI's event dispatch and can run
+  `$SPACE_SHOT_CMD <name>` for screenshots (see `crates/space-app/src/devscript.rs`).
 
 ## Using the app
 
-The left sidebar lists the discovered plugins, each with its kind and status
-(stopped / starting / running / crashed). **Start** launches an agent and opens a session in the project
-directory; **New session** opens another one. Sessions appear under their plugin. The header shows the
-provider, model and thinking level the agent reports through `_space/status`. The transcript shows
-streamed replies, collapsible "Thinking" blocks, tool-call cards and permission cards (Allow/Reject).
-Enter sends a message, Shift+Enter adds a newline, and **Stop** sends `session/cancel`.
-**Show plugin logs** opens the agent's stderr.
+The app starts the agent plugin in the background on launch and opens a new thread. There is no
+plugin list; the agent's status sits in the sidebar footer.
+
+- **Sidebar**: one row per thread, newest first: the title (first line of your first message), a
+  two-line preview (latest reply, *Working…*, *Waiting for your input* or the error), and
+  `branch • ~/path`. A blue badge counts turns that finished or need input while the thread was not
+  selected. ⌘B hides the sidebar.
+- **Title bar**: sidebar toggle, back/forward through the threads you visited (⌘[ / ⌘]), new
+  thread (⌘N), and the current thread's title and folder. Drag it to move the window.
+- **Composer**: Enter sends, Shift+Enter adds a newline; while the agent works the send button
+  becomes Stop (`session/cancel`). **+** attaches files or folders (sent as ACP `resource_link`s).
+  Below the card: the project folder (switch it while the thread is empty, otherwise pick a folder to
+  start a new thread there), the model and the thinking effort (both switch the session through
+  `_space/session/configure`, and new threads inherit your last choice), and context usage.
+- **Transcript**: your messages as bubbles, replies as markdown, thinking collapsed as
+  "Thought for Ns", tool calls as compact rows that expand to their output, permission cards
+  (Allow/Reject).
+- **Logs**: the terminal icon in the sidebar footer (or ⌘J) opens the agent's stderr. If the agent
+  exits, the thread shows the error with Restart and Logs.
 
 ## space-core API sketch
 

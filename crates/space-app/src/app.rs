@@ -1,90 +1,245 @@
-//! The main window: plugin sidebar, chat transcript, composer, log panel.
+//! The main window: thread sidebar, thread view with composer, logs panel.
 //!
-//! Bridge: `space-core` runs on a tokio runtime. Its async methods spawn onto that runtime
-//! internally, so they are awaited directly from GPUI tasks (`cx.spawn`). Host events arrive
-//! on a tokio mpsc receiver which a GPUI foreground task drains and applies to this view.
+//! State lives here; rendering is in [`crate::view`]. Bridge: `space-core` runs on a tokio
+//! runtime and its async methods spawn onto it internally, so GPUI tasks (`cx.spawn`) await
+//! them directly. Host events arrive on a tokio mpsc receiver that a GPUI foreground task
+//! drains in batches.
+//!
+//! Focus model: the root element tracks its own focus handle, so a mouse-down on anything
+//! that is not itself focusable moves focus to the root. That clears the composer's focus
+//! state (and any keyboard focus ring) the way clicking empty space does in a browser.
+//! Thread selection and "new thread" explicitly focus the composer.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
-use gpui::component::button::{Button, ButtonVariants as _};
-use gpui::component::input::{InputEvent, Textarea, TextareaState};
-use gpui::component::{Disableable as _, Sizable as _, Theme, ThemeMode};
-use gpui::prelude::FluentBuilder as _;
+use gpui::component::input::{InputEvent, TextareaState};
+use gpui::component::{Theme, ThemeMode};
 use gpui::*;
+use space_core::protocol::{ConfigureSession, PluginKind};
 use space_core::{
-    AgentHandle, DiscoveredPlugin, EventReceiver, Host, HostEvent, PermissionDecision, PermissionRequest,
-    PluginStatus, Session, SessionEvent, SessionId, SessionState, ToolCallInfo, ToolStatus, TranscriptItem,
+    AgentHandle, EventReceiver, Host, HostEvent, PermissionDecision, PluginStatus, Session, SessionEvent, SessionId,
+    SessionState, TranscriptItem,
 };
 
-use crate::theme;
+use crate::{assets::SpaceAssets, devscript, format, theme};
 
-const MAX_LOG_LINES: usize = 1000;
+gpui::actions!(space, [NewThread, ToggleSidebar, GoBack, GoForward, ToggleLogs, FocusComposer, Quit]);
 
-pub fn run(host: Host, events: EventReceiver, project_dir: PathBuf) {
-    gpui::application().run(move |cx: &mut App| {
+const MAX_LOG_LINES: usize = 2000;
+const DEFAULT_AGENT: &str = "pi-agent";
+
+pub struct Options {
+    pub project_dir: PathBuf,
+    /// Plugin id of the agent to run (default `pi-agent`, else the first agent plugin).
+    pub agent: Option<String>,
+    /// Dev only: seed a few threads with scripted prompts (meant for the stub agent).
+    pub demo: bool,
+    /// Prompt to send in the first thread once its session exists.
+    pub autoprompt: Option<String>,
+}
+
+pub fn run(host: Host, events: EventReceiver, options: Options) {
+    gpui::application().with_assets(SpaceAssets).run(move |cx: &mut App| {
         gpui::init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
-        let bounds = Bounds::centered(None, size(px(1180.), px(780.)), cx);
-        let options = WindowOptions {
-            titlebar: Some(TitlebarOptions { title: Some("Space".into()), ..Default::default() }),
+        theme::install(cx);
+        cx.bind_keys([
+            KeyBinding::new("cmd-n", NewThread, None),
+            KeyBinding::new("cmd-b", ToggleSidebar, None),
+            KeyBinding::new("cmd-[", GoBack, None),
+            KeyBinding::new("cmd-]", GoForward, None),
+            // The composer would otherwise take these as indent/outdent.
+            KeyBinding::new("cmd-[", GoBack, Some("Input")),
+            KeyBinding::new("cmd-]", GoForward, Some("Input")),
+            KeyBinding::new("cmd-j", ToggleLogs, None),
+            KeyBinding::new("cmd-l", FocusComposer, None),
+            KeyBinding::new("cmd-q", Quit, None),
+        ]);
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.set_menus(vec![
+            Menu {
+                name: "Space".into(),
+                items: vec![MenuItem::action("Quit Space", Quit)],
+                disabled: false,
+            },
+            Menu {
+                name: "File".into(),
+                items: vec![MenuItem::action("New Thread", NewThread)],
+                disabled: false,
+            },
+            Menu {
+                name: "View".into(),
+                items: vec![
+                    MenuItem::action("Toggle Sidebar", ToggleSidebar),
+                    MenuItem::action("Plugin Logs", ToggleLogs),
+                    MenuItem::separator(),
+                    MenuItem::action("Back", GoBack),
+                    MenuItem::action("Forward", GoForward),
+                    MenuItem::separator(),
+                    MenuItem::action("Focus Composer", FocusComposer),
+                ],
+                disabled: false,
+            },
+        ]);
+
+        let bounds = Bounds::centered(None, size(px(1280.), px(820.)), cx);
+        let window_options = WindowOptions {
+            titlebar: Some(TitlebarOptions {
+                title: Some("Space".into()),
+                appears_transparent: true,
+                // Vertically centered in the 48px title bar (the buttons are ~14px tall).
+                traffic_light_position: Some(point(px(18.), px(17.))),
+            }),
+            // The title bar is drawn by the app, which moves the window itself.
+            app_owns_titlebar_drag: true,
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_min_size: Some(size(px(760.), px(520.))),
             ..Default::default()
         };
-        gpui::open_window(options, cx, |window, cx| cx.new(|cx| SpaceApp::new(host, events, project_dir, window, cx)))
-            .expect("failed to open window");
+        let (handle, _) = gpui::open_window(window_options, cx, |window, cx| {
+            cx.new(|cx| SpaceApp::new(host, events, options, window, cx))
+        })
+        .expect("failed to open window");
+        devscript::spawn_from_env(handle, cx);
         cx.on_window_closed(|cx, _| cx.quit()).detach();
         cx.activate(true);
     });
 }
 
-struct PluginRow {
-    plugin: DiscoveredPlugin,
-    status: PluginStatus,
-    agent: Option<AgentHandle>,
-    logs: VecDeque<String>,
+/// One conversation with the agent (an ACP session once it has been created).
+pub struct Thread {
+    pub key: u64,
+    pub cwd: PathBuf,
+    pub branch: Option<String>,
+    pub session: Option<Session>,
+    pub state: SessionState,
+    /// `session/new` is in flight.
+    pub creating: bool,
+    /// Creating the session failed.
+    pub error: Option<String>,
+    /// Turns that finished (or need input) while the thread was not selected.
+    pub unread: usize,
+    pub draft: String,
+    pub attachments: Vec<PathBuf>,
+    /// Message sent before the session existed; sent once it does.
+    pub queued: Option<(String, Vec<PathBuf>)>,
+    /// Expanded thought/tool items (transcript indices).
+    pub expanded: HashSet<usize>,
+    thought_started: HashMap<usize, Instant>,
+    pub thought_secs: HashMap<usize, u64>,
+}
+
+impl Thread {
+    fn new(key: u64, cwd: PathBuf) -> Self {
+        Self {
+            key,
+            branch: format::git_branch(&cwd),
+            cwd,
+            session: None,
+            state: SessionState::default(),
+            creating: false,
+            error: None,
+            unread: 0,
+            draft: String::new(),
+            attachments: Vec::new(),
+            queued: None,
+            expanded: HashSet::new(),
+            thought_started: HashMap::new(),
+            thought_secs: HashMap::new(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.state.items.is_empty() && self.queued.is_none()
+    }
+
+    pub fn title(&self) -> String {
+        format::thread_title(&self.state)
+            .or_else(|| self.queued.as_ref().map(|(t, _)| format::truncate_chars(&format::one_line(t), 120)))
+            .unwrap_or_else(|| "New thread".into())
+    }
+
+    /// The session can take a prompt now.
+    pub fn live_session(&self) -> Option<&Session> {
+        self.session.as_ref().filter(|s| s.agent().is_running())
+    }
+
+    fn apply(&mut self, event: &SessionEvent) {
+        self.state.apply(event);
+        let now = Instant::now();
+        let last = self.state.items.len().checked_sub(1);
+        match (last, self.state.items.last()) {
+            (Some(ix), Some(TranscriptItem::Thought(_))) => {
+                self.thought_started.entry(ix).or_insert(now);
+            }
+            _ => {
+                for (ix, start) in &self.thought_started {
+                    self.thought_secs.entry(*ix).or_insert_with(|| now.duration_since(*start).as_secs());
+                }
+            }
+        }
+        if matches!(event, SessionEvent::TurnEnded { .. }) {
+            self.branch = format::git_branch(&self.cwd);
+        }
+    }
 }
 
 pub struct SpaceApp {
-    host: Host,
-    project_dir: PathBuf,
-    plugins: Vec<PluginRow>,
-    discovery_errors: Vec<String>,
-    /// Session handles in creation order.
-    sessions: Vec<Session>,
-    /// Folded state per session id (built purely from events).
-    states: HashMap<SessionId, SessionState>,
-    active: Option<SessionId>,
-    expanded_thoughts: HashSet<(SessionId, usize)>,
-    input: Entity<TextareaState>,
-    transcript_scroll: ScrollHandle,
-    log_scroll: ScrollHandle,
-    show_logs: bool,
-    banner: Option<String>,
+    pub(crate) host: Host,
+    pub(crate) project_dir: PathBuf,
+    pub(crate) agent_id: Option<String>,
+    pub(crate) agent: Option<AgentHandle>,
+    pub(crate) agent_status: PluginStatus,
+    pub(crate) agent_title: String,
+    pub(crate) logs: VecDeque<String>,
+    pub(crate) threads: Vec<Thread>,
+    next_key: u64,
+    pub(crate) selected: Option<u64>,
+    pub(crate) back: Vec<u64>,
+    pub(crate) forward: Vec<u64>,
+    session_threads: HashMap<SessionId, u64>,
+    orphans: HashMap<SessionId, Vec<SessionEvent>>,
+    pub(crate) input: Entity<TextareaState>,
+    pub(crate) focus: FocusHandle,
+    pub(crate) transcript_scroll: ScrollHandle,
+    pub(crate) log_scroll: ScrollHandle,
+    pub(crate) sidebar_open: bool,
+    pub(crate) show_logs: bool,
+    pub(crate) banner: Option<String>,
+    preferred_model: Option<(String, String)>,
+    preferred_effort: Option<String>,
+    /// Mouse went down on the title bar's drag area; the next move starts a window move.
+    pub(crate) drag_pending: bool,
+    demo: bool,
     _subscriptions: Vec<Subscription>,
 }
 
 impl SpaceApp {
-    fn new(
-        host: Host,
-        mut events: EventReceiver,
-        project_dir: PathBuf,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    fn new(host: Host, mut events: EventReceiver, options: Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
-            let mut state = TextareaState::new(window, cx).placeholder("Message the agent…  (Enter to send, Shift+Enter for newline)");
-            state.set_auto_grow(2, 8, cx);
+            let mut state = TextareaState::new(window, cx).placeholder("Describe a task or ask a question");
+            state.set_auto_grow(1, 12, cx);
             state.set_submit_on_enter(true, cx);
             state
         });
         let sub = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { shift: false, .. } = event {
-                this.send(window, cx);
+            if devscript::active() {
+                match event {
+                    InputEvent::Focus => eprintln!("script: composer focused"),
+                    InputEvent::Blur => eprintln!("script: composer blurred"),
+                    _ => {}
+                }
+            }
+            match event {
+                InputEvent::PressEnter { shift: false, .. } => this.send(window, cx),
+                // Send button state and the card's focus border follow the input.
+                InputEvent::Change | InputEvent::Focus | InputEvent::Blur => cx.notify(),
+                _ => {}
             }
         });
 
-        // Bridge host events into the view.
         cx.spawn(async move |this, cx| {
             while let Some(first) = events.recv().await {
                 let mut batch = vec![first];
@@ -93,7 +248,7 @@ impl SpaceApp {
                 }
                 let alive = this.update(cx, |this, cx| {
                     for e in batch {
-                        this.on_host_event(e);
+                        this.on_host_event(e, cx);
                     }
                     cx.notify();
                 });
@@ -104,181 +259,338 @@ impl SpaceApp {
         })
         .detach();
 
-        let report = host.discover();
-        let plugins = report
-            .plugins
-            .into_iter()
-            .map(|plugin| PluginRow { plugin, status: PluginStatus::Stopped, agent: None, logs: VecDeque::new() })
-            .collect();
-        let mut this = Self {
-            host,
-            project_dir,
-            plugins,
-            discovery_errors: report.errors.iter().map(|e| e.to_string()).collect(),
-            sessions: Vec::new(),
-            states: HashMap::new(),
-            active: None,
-            expanded_thoughts: HashSet::new(),
-            input,
-            transcript_scroll: ScrollHandle::new(),
-            log_scroll: ScrollHandle::new(),
-            show_logs: false,
-            banner: None,
-            _subscriptions: vec![sub],
+        let plugins = host.plugins();
+        let agents: Vec<_> = plugins.iter().filter(|p| p.manifest.kind == PluginKind::Agent).collect();
+        let wanted = options.agent.clone().unwrap_or_else(|| DEFAULT_AGENT.to_string());
+        let agent_plugin = agents.iter().find(|p| p.id() == wanted).or(agents.first()).copied();
+        let banner = match (&agent_plugin, &options.agent) {
+            (None, _) => Some("No agent plugin found. Build plugins/pi-agent (just build) or set SPACE_PLUGIN_DIRS.".into()),
+            (Some(p), Some(w)) if p.id() != w => Some(format!("Agent plugin `{w}` not found; using `{}`.", p.id())),
+            _ => None,
         };
 
-        if std::env::var_os("SPACE_AUTOSTART").is_some()
-            && let Some(id) = this.first_agent_id()
+        let mut this = Self {
+            agent_id: agent_plugin.map(|p| p.id().to_string()),
+            agent_title: agent_plugin.map(|p| p.manifest.name.clone()).unwrap_or_else(|| "No agent".into()),
+            host,
+            project_dir: options.project_dir.clone(),
+            agent: None,
+            agent_status: PluginStatus::Stopped,
+            logs: VecDeque::new(),
+            threads: Vec::new(),
+            next_key: 1,
+            selected: None,
+            back: Vec::new(),
+            forward: Vec::new(),
+            session_threads: HashMap::new(),
+            orphans: HashMap::new(),
+            input,
+            focus: cx.focus_handle(),
+            transcript_scroll: ScrollHandle::new(),
+            log_scroll: ScrollHandle::new(),
+            sidebar_open: true,
+            show_logs: false,
+            banner,
+            preferred_model: None,
+            preferred_effort: None,
+            drag_pending: false,
+            demo: options.demo,
+            _subscriptions: vec![sub],
+        };
+        let key = this.add_thread(options.project_dir);
+        this.selected = Some(key);
+        if let Some(prompt) = options.autoprompt
+            && let Some(t) = this.thread_mut(key)
         {
-            let prompt = std::env::var("SPACE_AUTOPROMPT").ok().filter(|p| !p.is_empty());
-            this.start_agent_and_session(id, prompt, cx);
+            t.queued = Some((prompt, Vec::new()));
         }
+        this.ensure_agent(cx);
+        let input = this.input.clone();
+        input.update(cx, |s, cx| s.focus(window, cx));
         this
     }
 
-    fn first_agent_id(&self) -> Option<String> {
-        self.plugins
-            .iter()
-            .find(|r| r.plugin.manifest.kind == space_core::protocol::PluginKind::Agent)
-            .map(|r| r.plugin.manifest.id.clone())
+    // ----- lookup -----------------------------------------------------------------------
+
+    pub(crate) fn thread(&self, key: u64) -> Option<&Thread> {
+        self.threads.iter().find(|t| t.key == key)
     }
 
-    fn row_mut(&mut self, plugin_id: &str) -> Option<&mut PluginRow> {
-        self.plugins.iter_mut().find(|r| r.plugin.manifest.id == plugin_id)
+    fn thread_mut(&mut self, key: u64) -> Option<&mut Thread> {
+        self.threads.iter_mut().find(|t| t.key == key)
     }
 
-    fn on_host_event(&mut self, event: HostEvent) {
+    pub(crate) fn current(&self) -> Option<&Thread> {
+        self.thread(self.selected?)
+    }
+
+    pub(crate) fn agent_running(&self) -> bool {
+        self.agent.as_ref().is_some_and(AgentHandle::is_running)
+    }
+
+    /// Project directories seen so far (for the folder menu), project dir first.
+    pub(crate) fn recent_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = vec![self.project_dir.clone()];
+        for t in self.threads.iter().rev() {
+            if !dirs.contains(&t.cwd) {
+                dirs.push(t.cwd.clone());
+            }
+        }
+        dirs
+    }
+
+    // ----- host events ------------------------------------------------------------------
+
+    fn on_host_event(&mut self, event: HostEvent, cx: &mut Context<Self>) {
         match event {
             HostEvent::PluginStatus { plugin_id, status } => {
-                if let Some(row) = self.row_mut(&plugin_id) {
-                    if matches!(status, PluginStatus::Stopped | PluginStatus::Crashed(_)) {
-                        row.agent = None;
-                    }
-                    row.status = status;
+                if Some(&plugin_id) != self.agent_id.as_ref() {
+                    return;
                 }
+                if matches!(status, PluginStatus::Stopped | PluginStatus::Crashed(_)) {
+                    self.agent = None;
+                }
+                self.agent_status = status;
             }
             HostEvent::PluginLog { plugin_id, line } => {
-                if let Some(row) = self.row_mut(&plugin_id) {
-                    if row.logs.len() == MAX_LOG_LINES {
-                        row.logs.pop_front();
+                if Some(&plugin_id) == self.agent_id.as_ref() {
+                    if self.logs.len() == MAX_LOG_LINES {
+                        self.logs.pop_front();
                     }
-                    row.logs.push_back(line);
-                }
-                if self.show_logs {
-                    self.log_scroll.scroll_to_bottom();
+                    self.logs.push_back(line);
+                    if self.show_logs {
+                        self.log_scroll.scroll_to_bottom();
+                    }
                 }
             }
             HostEvent::Session { session_id, event } => {
-                let state = self.states.entry(session_id.clone()).or_insert_with(|| SessionState::new(&session_id));
-                state.apply(&event);
-                if self.active.as_ref() == Some(&session_id) && !matches!(event, SessionEvent::Status(_)) {
-                    self.transcript_scroll.scroll_to_bottom();
-                }
+                let Some(&key) = self.session_threads.get(&session_id) else {
+                    // Arrived before `new_session` returned; applied once the thread knows its id.
+                    self.orphans.entry(session_id).or_default().push(event);
+                    return;
+                };
+                self.apply_session_event(key, &event, cx);
             }
         }
     }
 
-    // ----- actions -------------------------------------------------------------------------
-
-    /// Start `plugin_id` if needed, create a session in the project dir, optionally prompt.
-    fn start_agent_and_session(&mut self, plugin_id: String, prompt: Option<String>, cx: &mut Context<Self>) {
-        let host = self.host.clone();
-        let cwd = self.project_dir.clone();
-        let existing = self.plugins.iter().find(|r| r.plugin.manifest.id == plugin_id).and_then(|r| r.agent.clone());
-        self.banner = None;
-        cx.spawn(async move |this, cx| {
-            let result = async {
-                let agent = match existing {
-                    Some(a) if a.is_running() => a,
-                    _ => {
-                        let agent = host.start_agent(&plugin_id).await?;
-                        let a = agent.clone();
-                        let id = plugin_id.clone();
-                        this.update(cx, |this, cx| {
-                            if let Some(row) = this.row_mut(&id) {
-                                row.agent = Some(a);
-                            }
-                            cx.notify();
-                        })?;
-                        agent
-                    }
-                };
-                let session = agent.new_session(cwd).await?;
-                anyhow::Ok(session)
-            }
-            .await;
-            match result {
-                Ok(session) => {
-                    let _ = this.update(cx, |this, cx| {
-                        this.active = Some(session.id().to_string());
-                        this.sessions.push(session.clone());
-                        cx.notify();
-                    });
-                    if let Some(prompt) = prompt {
-                        let _ = session.prompt(prompt).await;
-                    }
-                }
-                Err(e) => {
-                    let _ = this.update(cx, |this, cx| {
-                        this.banner = Some(format!("{e:#}"));
-                        this.show_logs = true;
-                        cx.notify();
-                    });
-                }
-            }
-        })
-        .detach();
+    fn apply_session_event(&mut self, key: u64, event: &SessionEvent, _cx: &mut Context<Self>) {
+        let selected = self.selected == Some(key);
+        let Some(thread) = self.thread_mut(key) else { return };
+        thread.apply(event);
+        let attention = matches!(
+            event,
+            SessionEvent::TurnEnded { .. } | SessionEvent::PermissionRequested(_) | SessionEvent::Error { .. }
+        );
+        if !selected && attention && !matches!(event, SessionEvent::TurnEnded { stop_reason } if stop_reason == "error") {
+            thread.unread += 1;
+        }
+        if selected && !matches!(event, SessionEvent::Status(_)) {
+            self.transcript_scroll.scroll_to_bottom();
+        }
     }
 
-    fn stop_agent(&mut self, plugin_id: &str, cx: &mut Context<Self>) {
-        if let Some(row) = self.row_mut(plugin_id)
-            && let Some(agent) = row.agent.take()
-        {
-            agent.stop();
+    // ----- agent and sessions -----------------------------------------------------------
+
+    fn add_thread(&mut self, cwd: PathBuf) -> u64 {
+        let key = self.next_key;
+        self.next_key += 1;
+        self.threads.push(Thread::new(key, cwd));
+        key
+    }
+
+    /// Start the agent plugin if it is not running; sessions are created once it is up.
+    pub(crate) fn ensure_agent(&mut self, cx: &mut Context<Self>) {
+        if self.agent_running() || self.agent_status == PluginStatus::Starting {
+            return;
+        }
+        let Some(id) = self.agent_id.clone() else { return };
+        self.agent_status = PluginStatus::Starting;
+        let host = self.host.clone();
+        cx.spawn(async move |this, cx| {
+            let result = host.start_agent(&id).await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(agent) => {
+                        if let Some(name) = agent.agent_name() {
+                            this.agent_title = name.to_string();
+                        }
+                        this.agent = Some(agent);
+                        this.agent_status = PluginStatus::Running;
+                        this.create_pending_sessions(cx);
+                        if std::mem::take(&mut this.demo) {
+                            this.seed_demo(cx);
+                        }
+                    }
+                    Err(e) => {
+                        this.agent_status = PluginStatus::Crashed(format!("{e:#}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn create_pending_sessions(&mut self, cx: &mut Context<Self>) {
+        let keys: Vec<u64> = self
+            .threads
+            .iter()
+            .filter(|t| t.session.is_none() && !t.creating && t.error.is_none())
+            .map(|t| t.key)
+            .collect();
+        for key in keys {
+            self.create_session(key, cx);
+        }
+    }
+
+    fn create_session(&mut self, key: u64, cx: &mut Context<Self>) {
+        let Some(agent) = self.agent.clone().filter(AgentHandle::is_running) else {
+            self.ensure_agent(cx);
+            return;
+        };
+        let prefs = (self.preferred_model.clone(), self.preferred_effort.clone());
+        let Some(thread) = self.thread_mut(key) else { return };
+        thread.creating = true;
+        thread.error = None;
+        let cwd = thread.cwd.clone();
+        cx.spawn(async move |this, cx| {
+            let result = agent.new_session(cwd).await;
+            let session = match result {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = this.update(cx, |this, cx| {
+                        if let Some(t) = this.thread_mut(key) {
+                            t.creating = false;
+                            t.error = Some(format!("{e:#}"));
+                        }
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
+            let _ = this.update(cx, |this, cx| this.attach_session(key, session.clone(), cx));
+            // Carry the model / effort the user picked last over to new sessions.
+            if prefs.0.is_some() || prefs.1.is_some() {
+                let (provider, model) = prefs.0.map_or((None, None), |(p, m)| (Some(p), Some(m)));
+                let request = ConfigureSession { provider, model, thinking_level: prefs.1, ..Default::default() };
+                if let Err(e) = session.configure(request).await {
+                    tracing::warn!("applying model preference failed: {e:#}");
+                }
+            }
+            let _ = this.update(cx, |this, cx| {
+                if let Some(t) = this.thread_mut(key) {
+                    t.creating = false;
+                    if let Some((text, attachments)) = t.queued.take() {
+                        this.prompt(key, text, attachments, cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn attach_session(&mut self, key: u64, session: Session, cx: &mut Context<Self>) {
+        let sid = session.id().to_string();
+        let Some(thread) = self.thread_mut(key) else { return };
+        if thread.state.id.is_empty() {
+            thread.state.id.clone_from(&sid);
+        }
+        thread.state.status.session_id.clone_from(&sid);
+        thread.state.cwd.clone_from(&thread.cwd);
+        thread.state.plugin_id = session.agent().plugin_id().to_string();
+        thread.session = Some(session);
+        self.session_threads.insert(sid.clone(), key);
+        for event in self.orphans.remove(&sid).unwrap_or_default() {
+            self.apply_session_event(key, &event, cx);
         }
         cx.notify();
     }
 
-    fn active_session(&self) -> Option<&Session> {
-        let id = self.active.as_ref()?;
-        self.sessions.iter().find(|s| s.id() == id)
+    /// Dev-only: a handful of stub threads in varied states, for screenshots.
+    fn seed_demo(&mut self, cx: &mut Context<Self>) {
+        let sub = self.project_dir.join("crates/space-core");
+        let prompts: [(&str, Option<&Path>); 5] = [
+            ("Say hello and confirm the stub agent is wired up", None),
+            ("Fix the failing smoke test in space-core", Some(&sub)),
+            ("Clean the build cache, but ask permission before deleting anything", None),
+            ("Run the full test suite and wait for it to finish", None),
+            ("Explain how plugin discovery works, with a short code example", None),
+        ];
+        let first = self.selected;
+        let mut last = None;
+        for (text, dir) in prompts {
+            let key = match (first, last) {
+                // Reuse the empty launch thread for the first prompt.
+                (Some(k), None) if self.thread(k).is_some_and(Thread::is_empty) && dir.is_none() => k,
+                _ => self.add_thread(dir.map_or_else(|| self.project_dir.clone(), Path::to_path_buf)),
+            };
+            last = Some(key);
+            if let Some(t) = self.thread_mut(key) {
+                t.queued = Some((text.to_string(), Vec::new()));
+            }
+        }
+        self.create_pending_sessions(cx);
+        self.selected = last;
     }
 
-    fn active_state(&self) -> Option<&SessionState> {
-        self.states.get(self.active.as_ref()?)
-    }
+    // ----- user actions -----------------------------------------------------------------
 
-    fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.selected else { return };
         let text = self.input.read(cx).value().trim().to_string();
-        if text.is_empty() {
+        let Some(thread) = self.thread_mut(key) else { return };
+        if text.is_empty() && thread.attachments.is_empty() {
             return;
         }
-        let Some(session) = self.active_session().cloned() else {
-            self.banner = Some("Start an agent session first.".into());
-            cx.notify();
-            return;
-        };
-        if session.is_running() || !session.agent().is_running() {
+        if thread.state.running || thread.queued.is_some() {
             return;
         }
+        let attachments = std::mem::take(&mut thread.attachments);
+        thread.draft.clear();
         self.input.update(cx, |s, cx| s.clean(window, cx));
+
+        let thread = self.thread_mut(key).expect("thread exists");
+        if thread.live_session().is_some() {
+            self.prompt(key, text, attachments, cx);
+        } else {
+            // No session yet (agent starting) or its agent exited: send once there is one.
+            if thread.session.take().is_some() {
+                thread.state.items.push(TranscriptItem::TurnEnd("new-session".into()));
+            }
+            thread.queued = Some((text, attachments));
+            thread.error = None;
+            if !thread.creating {
+                self.create_session(key, cx);
+            }
+        }
+        self.transcript_scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    fn prompt(&mut self, key: u64, text: String, attachments: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let Some(session) = self.thread(key).and_then(|t| t.session.clone()) else { return };
         cx.spawn(async move |_, _| {
-            let _ = session.prompt(text).await;
+            // Failures are reported as session events (Error + TurnEnded).
+            let _ = session.prompt_with(text, attachments).await;
         })
         .detach();
     }
 
-    fn cancel(&mut self, cx: &mut Context<Self>) {
-        if let Some(session) = self.active_session()
+    pub(crate) fn cancel(&mut self, cx: &mut Context<Self>) {
+        if let Some(session) = self.current().and_then(|t| t.session.clone())
             && let Err(e) = session.cancel()
         {
             self.banner = Some(format!("{e:#}"));
-            cx.notify();
         }
+        cx.notify();
     }
 
-    fn answer_permission(&mut self, request_id: u64, decision: PermissionDecision, cx: &mut Context<Self>) {
-        if let Some(session) = self.active_session()
+    pub(crate) fn answer_permission(&mut self, request_id: u64, decision: PermissionDecision, cx: &mut Context<Self>) {
+        if let Some(session) = self.current().and_then(|t| t.session.clone())
             && let Err(e) = session.resolve_permission(request_id, decision)
         {
             self.banner = Some(format!("{e:#}"));
@@ -286,602 +598,216 @@ impl SpaceApp {
         cx.notify();
     }
 
-    // ----- rendering -----------------------------------------------------------------------
-
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut list = div().flex().flex_col().gap_2().px_3().py_3().flex_1().min_h_0();
-        list = list.child(section_label("PLUGINS"));
-        if self.plugins.is_empty() {
-            list = list.child(div().text_sm().text_color(theme::muted()).child("No plugins found."));
-        }
-        for (ix, row) in self.plugins.iter().enumerate() {
-            list = list.child(self.render_plugin_row(ix, row, cx));
-        }
-        for err in &self.discovery_errors {
-            list = list.child(div().text_xs().text_color(theme::red()).child(err.clone()));
-        }
-
-        let project = self.project_dir.display().to_string();
-        div()
-            .flex()
-            .flex_col()
-            .w(px(260.))
-            .h_full()
-            .flex_none()
-            .bg(theme::sidebar())
-            .border_r_1()
-            .border_color(theme::border())
-            .child(
-                div()
-                    .px_4()
-                    .pt_4()
-                    .pb_2()
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child("Space"))
-                    .child(div().text_xs().text_color(theme::muted()).truncate().child(project)),
-            )
-            .child(list)
-            .child(
-                div().p_3().border_t_1().border_color(theme::border()).child(
-                    Button::new("toggle-logs")
-                        .ghost()
-                        .small()
-                        .label(if self.show_logs { "Hide plugin logs" } else { "Show plugin logs" })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.show_logs = !this.show_logs;
-                            this.log_scroll.scroll_to_bottom();
-                            cx.notify();
-                        })),
-                ),
-            )
+    pub(crate) fn select_thread(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_inner(key, true, window, cx);
     }
 
-    fn render_plugin_row(&self, ix: usize, row: &PluginRow, cx: &mut Context<Self>) -> impl IntoElement {
-        let m = &row.plugin.manifest;
-        let id = m.id.clone();
-        let (dot, label) = match &row.status {
-            PluginStatus::Stopped => (theme::faint(), "stopped"),
-            PluginStatus::Starting => (theme::yellow(), "starting"),
-            PluginStatus::Running => (theme::green(), "running"),
-            PluginStatus::Crashed(_) => (theme::red(), "crashed"),
-        };
-        let is_agent = m.kind == space_core::protocol::PluginKind::Agent;
-        let running = row.status == PluginStatus::Running;
-        let starting = row.status == PluginStatus::Starting;
-
-        let mut card = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .p_2p5()
-            .rounded_md()
-            .bg(theme::panel())
-            .border_1()
-            .border_color(theme::border())
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(div().size(px(8.)).rounded_full().bg(dot))
-                    .child(div().flex_1().text_sm().font_weight(FontWeight::MEDIUM).truncate().child(m.name.clone()))
-                    .child(tag(m.kind.as_str())),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme::muted())
-                    .child(format!("{label} · v{} · {}", m.version, source_label(row.plugin.source))),
-            );
-        if let PluginStatus::Crashed(msg) = &row.status {
-            card = card.child(div().text_xs().text_color(theme::red()).child(msg.clone()));
+    fn select_inner(&mut self, key: u64, record: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.thread(key).is_none() {
+            return;
         }
-
-        if is_agent {
-            let mut buttons = div().flex().gap_2();
-            let start_id = id.clone();
-            buttons = buttons.child(
-                Button::new(("new-session", ix))
-                    .primary()
-                    .xsmall()
-                    .label(if running { "New session" } else { "Start" })
-                    .loading(starting)
-                    .disabled(starting)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.start_agent_and_session(start_id.clone(), None, cx);
-                    })),
-            );
-            if running {
-                let stop_id = id.clone();
-                buttons = buttons.child(
-                    Button::new(("stop-agent", ix))
-                        .ghost()
-                        .xsmall()
-                        .label("Stop")
-                        .on_click(cx.listener(move |this, _, _, cx| this.stop_agent(&stop_id, cx))),
-                );
+        if self.selected != Some(key) {
+            let draft = self.input.read(cx).value().to_string();
+            if let Some(prev) = self.selected {
+                if let Some(t) = self.thread_mut(prev) {
+                    t.draft = draft;
+                }
+                if record {
+                    self.back.push(prev);
+                    self.forward.clear();
+                }
             }
-            card = card.child(buttons);
+            self.selected = Some(key);
+            let draft = self.thread(key).map(|t| t.draft.clone()).unwrap_or_default();
+            self.input.update(cx, |s, cx| s.set_value(draft, window, cx));
         }
-
-        // Sessions belonging to this plugin.
-        let sessions: Vec<_> = self.sessions.iter().filter(|s| s.agent().plugin_id() == m.id).collect();
-        if !sessions.is_empty() {
-            let mut list = div().flex().flex_col().gap_0p5();
-            for (n, s) in sessions.iter().enumerate() {
-                let sid = s.id().to_string();
-                let active = self.active.as_deref() == Some(sid.as_str());
-                let running = self.states.get(&sid).is_some_and(|st| st.running);
-                let title = self
-                    .states
-                    .get(&sid)
-                    .and_then(|st| {
-                        st.items.iter().find_map(|i| match i {
-                            TranscriptItem::User(t) => Some(t.lines().next().unwrap_or("").to_string()),
-                            _ => None,
-                        })
-                    })
-                    .unwrap_or_else(|| format!("Session {}", n + 1));
-                list = list.child(
-                    div()
-                        .id(SharedString::from(format!("session-{sid}")))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .rounded_sm()
-                        .text_sm()
-                        .cursor_pointer()
-                        .when(active, |d| d.bg(theme::panel_hover()))
-                        .hover(|d| d.bg(theme::panel_hover()))
-                        .child(div().text_color(if running { theme::yellow() } else { theme::faint() }).child("•"))
-                        .child(div().flex_1().truncate().child(title))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.active = Some(sid.clone());
-                            this.transcript_scroll.scroll_to_bottom();
-                            cx.notify();
-                        })),
-                );
-            }
-            card = card.child(list);
+        if let Some(t) = self.thread_mut(key) {
+            t.unread = 0;
         }
-        card
+        self.transcript_scroll.scroll_to_bottom();
+        self.focus_composer(window, cx);
+        cx.notify();
     }
 
-    fn render_header(&self) -> impl IntoElement {
-        let mut header = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_5()
-            .h(px(48.))
-            .flex_none()
-            .border_b_1()
-            .border_color(theme::border());
-        match self.active_state() {
-            None => header.child(div().text_sm().text_color(theme::muted()).child("No session")),
-            Some(state) => {
-                header = header.child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(if state.plugin_id.is_empty() { "session".to_string() } else { state.plugin_id.clone() }),
-                );
-                let s = &state.status;
-                for (k, v) in [("provider", &s.provider), ("model", &s.model), ("thinking", &s.thinking_level)] {
-                    if let Some(v) = v {
-                        header = header.child(chip(k, v));
+    pub(crate) fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        while let Some(key) = self.back.pop() {
+            if self.thread(key).is_some() {
+                if let Some(cur) = self.selected {
+                    self.forward.push(cur);
+                }
+                self.select_inner(key, false, window, cx);
+                return;
+            }
+        }
+    }
+
+    pub(crate) fn go_forward(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        while let Some(key) = self.forward.pop() {
+            if self.thread(key).is_some() {
+                if let Some(cur) = self.selected {
+                    self.back.push(cur);
+                }
+                self.select_inner(key, false, window, cx);
+                return;
+            }
+        }
+    }
+
+    /// New thread in `dir` (default: the current thread's folder). An empty current
+    /// thread in the same folder is reused instead of piling up blank threads.
+    pub(crate) fn new_thread(&mut self, dir: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        let dir = dir.or_else(|| self.current().map(|t| t.cwd.clone())).unwrap_or_else(|| self.project_dir.clone());
+        if let Some(t) = self.current()
+            && t.is_empty()
+            && t.cwd == dir
+        {
+            self.focus_composer(window, cx);
+            return;
+        }
+        let key = self.add_thread(dir);
+        self.select_thread(key, window, cx);
+        self.create_session(key, cx);
+    }
+
+    /// Move the selected (still empty) thread to another folder: its session is replaced.
+    pub(crate) fn set_thread_dir(&mut self, dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.selected else { return };
+        let Some(thread) = self.thread_mut(key) else { return };
+        if !thread.is_empty() {
+            self.new_thread(Some(dir), window, cx);
+            return;
+        }
+        if thread.cwd == dir {
+            return;
+        }
+        if let Some(old) = thread.session.take() {
+            self.session_threads.remove(old.id());
+        }
+        let fresh = Thread::new(key, dir);
+        let thread = self.thread_mut(key).expect("thread exists");
+        let draft = std::mem::take(&mut thread.draft);
+        *thread = fresh;
+        thread.draft = draft;
+        self.create_session(key, cx);
+        self.focus_composer(window, cx);
+    }
+
+    pub(crate) fn choose_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Choose project folder".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(mut paths))) = paths.await
+                && let Some(dir) = paths.pop()
+            {
+                let _ = this.update_in(cx, |this, window, cx| this.set_thread_dir(dir, window, cx));
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn attach_files(&mut self, cx: &mut Context<Self>) {
+        let Some(key) = self.selected else { return };
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: true,
+            multiple: true,
+            prompt: Some("Attach".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = paths.await {
+                let _ = this.update(cx, |this, cx| {
+                    if let Some(t) = this.thread_mut(key) {
+                        for p in paths {
+                            if !t.attachments.contains(&p) {
+                                t.attachments.push(p);
+                            }
+                        }
                     }
-                }
-                header = header.child(div().flex_1());
-                if state.running {
-                    header = header.child(div().text_xs().text_color(theme::yellow()).child("● working…"));
-                }
-                header.child(
-                    div()
-                        .max_w(px(320.))
-                        .min_w_0()
-                        .text_xs()
-                        .text_color(theme::faint())
-                        .truncate()
-                        .child(state.cwd.display().to_string()),
-                )
+                    cx.notify();
+                });
             }
-        }
+        })
+        .detach();
     }
 
-    fn render_transcript(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(state) = self.active_state() else {
-            return self.render_empty(cx).into_any_element();
-        };
-        let mut col = div().flex().flex_col().gap_3().px_6().py_4().w_full();
-        if state.items.is_empty() {
-            col = col.child(div().text_sm().text_color(theme::muted()).child("Session ready. Say something."));
+    pub(crate) fn remove_attachment(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if let Some(key) = self.selected
+            && let Some(t) = self.thread_mut(key)
+            && ix < t.attachments.len()
+        {
+            t.attachments.remove(ix);
         }
-        for (ix, item) in state.items.iter().enumerate() {
-            col = col.child(self.render_item(&state.id, ix, item, cx));
-        }
-        div()
-            .id("transcript")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .track_scroll(&self.transcript_scroll)
-            .child(col)
-            .into_any_element()
+        cx.notify();
     }
 
-    fn render_empty(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = div()
-            .flex_1()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child("Welcome to Space"))
-            .child(div().text_sm().text_color(theme::muted()).child("Start an agent plugin to open a session."));
-        if let Some(id) = self.first_agent_id() {
-            let starting = self.plugins.iter().any(|r| r.status == PluginStatus::Starting);
-            body = body.child(
-                Button::new("start-first")
-                    .primary()
-                    .label(format!("Start {id}"))
-                    .loading(starting)
-                    .disabled(starting)
-                    .on_click(cx.listener(move |this, _, _, cx| this.start_agent_and_session(id.clone(), None, cx))),
-            );
+    /// Switch the selected thread's model and/or effort; also remembered for new threads.
+    pub(crate) fn configure(&mut self, request: ConfigureSession, cx: &mut Context<Self>) {
+        let Some(session) = self.current().and_then(|t| t.live_session().cloned()) else { return };
+        if let Some(model) = &request.model {
+            let provider = request
+                .provider
+                .clone()
+                .or_else(|| self.current().and_then(|t| t.state.status.provider.clone()))
+                .unwrap_or_default();
+            self.preferred_model = Some((provider, model.clone()));
         }
-        body
+        if let Some(level) = &request.thinking_level {
+            self.preferred_effort = Some(level.clone());
+        }
+        cx.spawn(async move |this, cx| {
+            if let Err(e) = session.configure(request).await {
+                let _ = this.update(cx, |this, cx| {
+                    this.banner = Some(format!("{e:#}"));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
-    fn render_item(&self, sid: &SessionId, ix: usize, item: &TranscriptItem, cx: &mut Context<Self>) -> AnyElement {
-        match item {
-            TranscriptItem::User(text) => div()
-                .flex()
-                .justify_end()
-                .child(
-                    div()
-                        .max_w(relative(0.8))
-                        .px_3()
-                        .py_2()
-                        .rounded_lg()
-                        .bg(theme::user_bubble())
-                        .text_sm()
-                        .child(text.clone()),
-                )
-                .into_any_element(),
-            TranscriptItem::Agent(text) => {
-                div().text_sm().line_height(relative(1.5)).child(text.trim_start().to_string()).into_any_element()
-            }
-            TranscriptItem::Thought(text) => {
-                let key = (sid.clone(), ix);
-                let open = self.expanded_thoughts.contains(&key);
-                let words = text.split_whitespace().count();
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .id(("thought", ix))
-                            .text_xs()
-                            .text_color(theme::muted())
-                            .cursor_pointer()
-                            .hover(|d| d.text_color(theme::text()))
-                            .child(format!("{} Thinking ({words} words)", if open { "▾" } else { "▸" }))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if !this.expanded_thoughts.remove(&key) {
-                                    this.expanded_thoughts.insert(key.clone());
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .when(open, |d| {
-                        d.child(
-                            div()
-                                .pl_3()
-                                .border_l_2()
-                                .border_color(theme::border())
-                                .text_xs()
-                                .italic()
-                                .text_color(theme::muted())
-                                .child(text.trim().to_string()),
-                        )
-                    })
-                    .into_any_element()
-            }
-            TranscriptItem::Tool(call) => render_tool(call).into_any_element(),
-            TranscriptItem::Permission { request, resolved } => {
-                self.render_permission(request, resolved.as_ref(), cx).into_any_element()
-            }
-            TranscriptItem::Plan(entries) => {
-                let mut d = div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .p_3()
-                    .rounded_md()
-                    .bg(theme::panel())
-                    .child(div().text_xs().text_color(theme::muted()).child("Plan"));
-                for e in entries {
-                    let mark = match e.status.as_str() {
-                        "completed" => "✓",
-                        "in_progress" => "◐",
-                        _ => "○",
-                    };
-                    d = d.child(div().text_sm().child(format!("{mark} {}", e.content)));
-                }
-                d.into_any_element()
-            }
-            TranscriptItem::Error(msg) => div()
-                .p_3()
-                .rounded_md()
-                .border_1()
-                .border_color(theme::red())
-                .text_sm()
-                .text_color(theme::red())
-                .child(msg.clone())
-                .into_any_element(),
-            TranscriptItem::TurnEnd(reason) => div()
-                .text_xs()
-                .text_color(theme::faint())
-                .child(format!("— turn ended: {reason} —"))
-                .into_any_element(),
+    pub(crate) fn toggle_expanded(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if let Some(key) = self.selected
+            && let Some(t) = self.thread_mut(key)
+            && !t.expanded.remove(&ix)
+        {
+            t.expanded.insert(ix);
         }
+        cx.notify();
     }
 
-    fn render_permission(
-        &self,
-        request: &PermissionRequest,
-        resolved: Option<&PermissionDecision>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let title = request.tool_call.title.clone().unwrap_or_else(|| request.tool_call.id.clone());
-        let mut card = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .p_3()
-            .rounded_md()
-            .bg(theme::panel())
-            .border_1()
-            .border_color(if resolved.is_none() { theme::yellow() } else { theme::border() })
-            .child(div().text_xs().text_color(theme::yellow()).child("Permission requested"))
-            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(title));
-        match resolved {
-            Some(decision) => {
-                let text = match decision {
-                    PermissionDecision::Selected(id) => {
-                        let name = request.options.iter().find(|o| &o.id == id).map_or(id.as_str(), |o| o.name.as_str());
-                        format!("Answered: {name}")
-                    }
-                    PermissionDecision::Cancelled => "Cancelled".into(),
-                };
-                card = card.child(div().text_xs().text_color(theme::muted()).child(text));
-            }
-            None => {
-                let mut row = div().flex().gap_2();
-                for (n, opt) in request.options.iter().enumerate() {
-                    let rid = request.request_id;
-                    let oid = opt.id.clone();
-                    let mut b = Button::new(SharedString::from(format!("perm-{rid}-{n}"))).small().label(opt.name.clone());
-                    b = if opt.kind.is_allow() { b.success() } else { b.danger() };
-                    row = row.child(b.on_click(cx.listener(move |this, _, _, cx| {
-                        this.answer_permission(rid, PermissionDecision::Selected(oid.clone()), cx)
-                    })));
-                }
-                card = card.child(row);
-            }
+    pub(crate) fn restart_agent(&mut self, cx: &mut Context<Self>) {
+        if let Some(agent) = self.agent.take() {
+            agent.stop();
         }
-        card
+        self.agent_status = PluginStatus::Stopped;
+        for t in &mut self.threads {
+            t.error = None;
+        }
+        self.ensure_agent(cx);
     }
 
-    fn render_composer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let state = self.active_state();
-        let has_session = state.is_some();
-        let running = state.is_some_and(|s| s.running);
-        div()
-            .flex_none()
-            .flex()
-            .items_end()
-            .gap_2()
-            .px_5()
-            .py_3()
-            .border_t_1()
-            .border_color(theme::border())
-            .child(div().flex_1().min_w_0().child(Textarea::new(&self.input).disabled(!has_session)))
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .child(
-                        Button::new("send")
-                            .primary()
-                            .label("Send")
-                            .disabled(!has_session || running)
-                            .on_click(cx.listener(|this, _, window, cx| this.send(window, cx))),
-                    )
-                    .child(
-                        Button::new("stop")
-                            .danger()
-                            .label("Stop")
-                            .disabled(!running)
-                            .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
-                    ),
-            )
+    pub(crate) fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |s, cx| s.focus(window, cx));
     }
 
-    fn render_logs(&self) -> impl IntoElement {
-        let plugin_id = self.active_state().map(|s| s.plugin_id.clone());
-        let row = self
-            .plugins
-            .iter()
-            .find(|r| Some(&r.plugin.manifest.id) == plugin_id.as_ref())
-            .or_else(|| self.plugins.iter().find(|r| !r.logs.is_empty()))
-            .or(self.plugins.first());
-        let mut col = div().flex().flex_col().px_4().py_2().font_family(theme::MONO_FONT).text_xs();
-        let name = row.map(|r| r.plugin.manifest.id.clone()).unwrap_or_default();
-        match row {
-            Some(r) if !r.logs.is_empty() => {
-                for line in r.logs.iter().skip(r.logs.len().saturating_sub(300)) {
-                    col = col.child(div().text_color(theme::muted()).child(line.clone()));
-                }
-            }
-            _ => col = col.child(div().text_color(theme::faint()).child("(no stderr output yet)")),
-        }
-        div()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .h(px(180.))
-            .border_t_1()
-            .border_color(theme::border())
-            .bg(theme::sidebar())
-            .child(
-                div()
-                    .px_4()
-                    .pt_2()
-                    .text_xs()
-                    .text_color(theme::faint())
-                    .child(format!("stderr · {name}")),
-            )
-            .child(div().id("logs").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.log_scroll).child(col))
+    pub(crate) fn toggle_logs(&mut self, cx: &mut Context<Self>) {
+        self.show_logs = !self.show_logs;
+        self.log_scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_open = !self.sidebar_open;
+        cx.notify();
     }
 }
 
 impl Render for SpaceApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut main = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .child(self.render_header())
-            .child(self.render_transcript(cx));
-        if let Some(banner) = &self.banner {
-            main = main.child(
-                div()
-                    .id("banner")
-                    .mx_5()
-                    .mb_2()
-                    .p_2()
-                    .rounded_md()
-                    .bg(theme::panel())
-                    .border_1()
-                    .border_color(theme::red())
-                    .text_xs()
-                    .text_color(theme::red())
-                    .cursor_pointer()
-                    .child(format!("{banner}   (click to dismiss)"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.banner = None;
-                        cx.notify();
-                    })),
-            );
-        }
-        main = main.child(self.render_composer(cx));
-        if self.show_logs {
-            main = main.child(self.render_logs());
-        }
-
-        div()
-            .flex()
-            .size_full()
-            .bg(theme::bg())
-            .text_color(theme::text())
-            .font_family(theme::UI_FONT)
-            .child(self.render_sidebar(cx))
-            .child(main)
-    }
-}
-
-fn render_tool(call: &ToolCallInfo) -> impl IntoElement {
-    let (color, label) = match call.status {
-        ToolStatus::Pending => (theme::faint(), "pending"),
-        ToolStatus::InProgress => (theme::yellow(), "running"),
-        ToolStatus::Completed => (theme::green(), "done"),
-        ToolStatus::Failed => (theme::red(), "failed"),
-    };
-    let output: Vec<&str> = call.output.lines().collect();
-    let shown = output.iter().take(8).copied().collect::<Vec<_>>().join("\n");
-    let more = output.len().saturating_sub(8);
-    let title = if call.title.is_empty() { call.id.clone() } else { call.title.clone() };
-    div()
-        .flex()
-        .flex_col()
-        .gap_1p5()
-        .p_2p5()
-        .rounded_md()
-        .bg(theme::panel())
-        .border_1()
-        .border_color(theme::border())
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(div().size(px(7.)).rounded_full().bg(color))
-                .child(tag(&call.kind))
-                .child(div().flex_1().min_w_0().text_sm().font_family(theme::MONO_FONT).truncate().child(title))
-                .child(div().text_xs().text_color(color).child(label)),
-        )
-        .when(!call.locations.is_empty(), |d| {
-            d.child(div().text_xs().text_color(theme::faint()).child(call.locations.join(", ")))
-        })
-        .when(!shown.is_empty(), |d| {
-            d.child(
-                div()
-                    .px_2()
-                    .py_1p5()
-                    .rounded_sm()
-                    .bg(theme::bg())
-                    .font_family(theme::MONO_FONT)
-                    .text_xs()
-                    .text_color(theme::muted())
-                    .child(shown)
-                    .when(more > 0, |d| d.child(div().text_color(theme::faint()).child(format!("… {more} more lines")))),
-            )
-        })
-}
-
-fn section_label(text: &'static str) -> impl IntoElement {
-    div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::faint()).child(text)
-}
-
-fn tag(text: &str) -> impl IntoElement {
-    div()
-        .px_1p5()
-        .rounded_sm()
-        .bg(theme::panel_hover())
-        .text_xs()
-        .text_color(theme::muted())
-        .child(text.to_string())
-}
-
-fn chip(key: &str, value: &str) -> impl IntoElement {
-    div()
-        .flex()
-        .gap_1()
-        .px_2()
-        .py_0p5()
-        .rounded_full()
-        .bg(theme::panel())
-        .border_1()
-        .border_color(theme::border())
-        .text_xs()
-        .child(div().text_color(theme::faint()).child(key.to_string()))
-        .child(div().text_color(theme::accent()).child(value.to_string()))
-}
-
-fn source_label(source: space_core::PluginSource) -> &'static str {
-    match source {
-        space_core::PluginSource::Bundled => "bundled",
-        space_core::PluginSource::User => "user",
-        space_core::PluginSource::Project => "project",
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::view::render_root(self, window, cx)
     }
 }
