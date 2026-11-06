@@ -34,7 +34,7 @@ const ICON_PNG: &[u8] = include_bytes!("../resources/AppIcon.png");
 const ID_PREFIX: &str = "space.thread.";
 
 /// System Settings ▸ Notifications ▸ Space.
-const SYSTEM_SETTINGS_URL: &str = "x-apple.preferences:com.apple.Notifications-Settings.extension?id=dev.brijesh.space";
+const SYSTEM_SETTINGS_URL: &str = "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=dev.brijesh.space";
 
 /// Thread keys from clicked notifications.
 static CLICKS: OnceLock<UnboundedSender<u64>> = OnceLock::new();
@@ -185,8 +185,10 @@ pub fn request_permission() -> oneshot::Receiver<()> {
 pub fn open_system_settings() {
     // On a thread so the `open` child is reaped.
     std::thread::spawn(|| {
-        if let Err(e) = std::process::Command::new("open").arg(SYSTEM_SETTINGS_URL).status() {
-            tracing::warn!("opening System Settings failed: {e}");
+        match std::process::Command::new("open").arg(SYSTEM_SETTINGS_URL).status() {
+            Ok(status) if status.success() => {}
+            Ok(status) => tracing::warn!("opening System Settings failed: `open` exited with {status}"),
+            Err(e) => tracing::warn!("opening System Settings failed: {e}"),
         }
     });
 }
