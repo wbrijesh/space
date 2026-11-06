@@ -9,7 +9,8 @@ pi SDK. See [docs/architecture.md](docs/architecture.md) for the contract (manif
 ```
 crates/space-protocol   manifest types (space-plugin.toml), _space/* extension types, ACP re-exports
 crates/space-core       discovery · process supervisor · ACP client · session model (no UI deps)
-crates/space-app        GPUI desktop app, binary `Space`
+crates/space-ui         design tokens · animation clock · components (+ previews and gallery, `dev`)
+crates/space-app        GPUI desktop app, binary `Space` (app state, wiring, dev scenarios)
 plugins/pi-agent        TypeScript ACP agent on the pi SDK (Claude CLI subscription)
 ```
 
@@ -31,7 +32,9 @@ plugins/pi-agent        TypeScript ACP agent on the pi SDK (Claude CLI subscript
 | `just build` | `cargo build --workspace` + `pnpm install && pnpm build` in `plugins/pi-agent` |
 | `just run [DIR]` | open the app on a project directory (default: this repo) |
 | `just demo "Reply with exactly: pong"` | open the app and send the prompt in the first thread |
-| `just demo-ui` | open the app on the free stub agent with a few seeded threads (UI work) |
+| `just gallery` | dev: component gallery: tokens, every component state, animation-clock controls |
+| `just scenario name=many-threads` | dev: the real app in a held, scripted state (`name=list` lists them) |
+| `just release` | release build without dev tooling |
 | `just test` | all Rust tests; they use the scripted `space-stub-agent`, so they make no model calls |
 | `just lint` | clippy with `-D warnings` |
 | `just smoke ["PROMPT"]` | headless end-to-end run against pi-agent, printing events (billed) |
@@ -47,9 +50,9 @@ Environment:
   `~/.space/plugins` and `<project>/.space/plugins` are still scanned.
 - `SPACE_AUTOPROMPT="…"` sends that prompt in the first thread once its session is up.
 - `RUST_LOG=space_core=debug` turns on logging (stderr).
-- Dev only: `SPACE_DEMO=1` seeds five threads with scripted prompts (meant for the stub agent);
-  `SPACE_SCRIPT=<file>` replays clicks/keys through GPUI's event dispatch and can run
-  `$SPACE_SHOT_CMD <name>` for screenshots (see `crates/space-app/src/devscript.rs`).
+- Dev builds: `SPACE_CLOCK=paused|pin:0.35|speed:0.25` starts the animation clock in that state;
+  `SPACE_GALLERY_PAGE=<name>` opens a gallery page; `SPACE_SCRIPT=<file>` replays input. See
+  [docs/ui-development.md](docs/ui-development.md) for the gallery, scenarios and the clock.
 
 ## Using the app
 

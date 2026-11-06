@@ -141,7 +141,9 @@ space/
   18,17, `app_owns_titlebar_drag`) and draws its own 48px bar, which moves the window with
   `start_window_move`. The default agent plugin starts on launch. Each thread owns one ACP session;
   events that arrive before `session/new` returns are buffered and replayed. Colors, spacing and
-  fonts come from `space-app/src/theme.rs`, which also maps them onto the gpui-component theme.
+  fonts are tokens in `space-ui` (`theme/`), which also maps them onto the gpui-component theme.
+  Components live in `space-ui` and take props and callbacks only; `space-app/src/view.rs` wires
+  them to app state. See [ui-development.md](ui-development.md).
 - **Focus.** The root element tracks a focus handle, so clicking anything that is not focusable
   moves focus there and clears the composer's focused state. GPUI only moves focus on mouse-down
   into elements that track one, so without a sink the last focused control (or a keyboard focus

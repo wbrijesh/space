@@ -25,15 +25,19 @@ run dir=project: build
 demo prompt="": build
     SPACE_AUTOPROMPT="{{prompt}}" cargo run -p space-app -- {{project}}
 
-# Dev: open the app on the free stub agent with a few seeded threads (UI work, screenshots)
-demo-ui:
-    #!/usr/bin/env sh
-    set -e
-    cargo build -p space-core --bin space-stub-agent -p space-app
-    dir=$(mktemp -d)/stub && mkdir -p "$dir"
-    printf 'id="stub"\nname="Stub Agent"\nversion="0.1.0"\nkind="agent"\n[run]\ncommand="%s"\n' \
-        "{{project}}/target/debug/space-stub-agent" > "$dir/space-plugin.toml"
-    SPACE_PLUGIN_DIRS="$(dirname "$dir")" SPACE_AGENT=stub SPACE_DEMO=1 ./target/debug/Space {{project}}
+# Dev: component gallery (tokens, every component state, animation clock controls)
+gallery:
+    cargo build --workspace
+    ./target/debug/Space --gallery
+
+# Dev: boot the real app into a scripted state (stub agent); `just scenario name=list`
+scenario name="many-threads":
+    cargo build --workspace
+    ./target/debug/Space --scenario {{name}} {{project}}
+
+# Release build without dev tooling (no gallery, scenarios or clock controls)
+release:
+    cargo build --release -p space-app --no-default-features
 
 # Run all Rust tests (uses the space-stub-agent, no model calls)
 test:
@@ -41,6 +45,7 @@ test:
 
 lint:
     cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy -p space-app --no-default-features --all-targets -- -D warnings
 
 # Headless end-to-end prompt against the real agent plugin (bills your Claude subscription)
 smoke prompt="Reply with exactly: pong": build
