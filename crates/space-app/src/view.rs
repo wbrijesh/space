@@ -6,11 +6,15 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::PluginStatus;
-use space_ui::components::composer::{Composer, ComposerControls, ComposerHandlers, Handler};
-use space_ui::components::settings::{Catalog, SettingsHandlers, SettingsPage};
+use gpui::component::input::InputState;
+use space_core::protocol::service::SettingKind;
+use space_ui::components::composer::{
+    Composer, ComposerBlocker, ComposerControls, ComposerHandlers, Handler, ModeChoice,
+};
+use space_ui::components::settings::{Catalog, FieldView, PluginRow, PluginSettingsView, SettingsHandlers, SettingsPage};
 use space_ui::components::follow_scroll::FollowScrollArea;
 use space_ui::components::shell::{
-    AgentFooter, AgentState, LogsPanel, banner, empty_heading, problem_card, sidebar_column,
+    AgentFooter, AgentState, LogsPanel, banner, confirm_card, empty_heading, problem_card, sidebar_column,
 };
 use space_ui::components::thread_row::{RowIndicator, ThreadRow};
 use space_ui::components::title_bar::{MainTitleBar, SidebarTitleBar, TitleBarNav};
@@ -20,8 +24,8 @@ use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
 
 use crate::app::{
-    CloseSettings, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, ScrollToBottom, SpaceApp, Thread,
-    ToggleLogs, ToggleSidebar,
+    CloseSettings, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, ScrollToBottom,
+    SpaceApp, Thread, ToggleLogs, ToggleSidebar,
 };
 
 /// A click callback that runs `f` on the app.
@@ -80,6 +84,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &FocusComposer, window, cx| this.focus_composer(window, cx)))
         .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.toggle_settings(window, cx)))
         .on_action(cx.listener(|this, _: &ScrollToBottom, _, cx| this.scroll_to_bottom(cx)))
+        .on_action(cx.listener(|this, _: &CyclePermissionMode, _, cx| this.cycle_mode(cx)))
         // Only while the page is open, so Esc is free otherwise.
         .when(app.show_settings, |d| {
             d.on_action(cx.listener(|this, _: &CloseSettings, window, cx| this.close_settings(window, cx)))
@@ -137,7 +142,7 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
     let Some(thread) = app.current() else {
         return div().flex_1().into_any_element();
     };
-    let notices: Vec<AnyElement> = [agent_problem(app, thread, cx), app.banner.clone().map(|b| {
+    let notices: Vec<AnyElement> = [agent_problem(app, thread, cx), mode_confirmation(app, thread, cx), app.banner.clone().map(|b| {
         banner(b, cx.listener(|this, _, _, cx| {
             this.banner = None;
             cx.notify();
@@ -215,7 +220,10 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
 }
 
 /// The Settings page, centered in a scrolling column like the transcript.
-fn settings(app: &SpaceApp, _window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
+fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
+    let plugin_sections = plugin_settings(app, window, cx);
+    let plugin_rows = plugin_rows(app);
+    let app = &*app;
     let catalog = match &app.agent_models {
         Some(models) => Catalog::Ready { models: models.clone(), levels: app.agent_levels.clone().unwrap_or_default() },
         None if app.agent_id.is_none()
@@ -250,6 +258,30 @@ fn settings(app: &SpaceApp, _window: &mut Window, cx: &mut Context<SpaceApp>) ->
         }),
         on_allow: handler(cx, |this, _, cx| this.allow_notifications(cx)),
         on_open_system_settings: Rc::new(|_, _| crate::notify::open_system_settings()),
+        on_mode: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |mode, _, cx| {
+                let _ = this.update(cx, |this, cx| this.set_default_mode(mode, cx));
+            })
+        },
+        on_save_field: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |plugin, key, w, cx| {
+                let _ = this.update(cx, |this, cx| this.save_plugin_setting(plugin, key, false, w, cx));
+            })
+        },
+        on_clear_field: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |plugin, key, w, cx| {
+                let _ = this.update(cx, |this, cx| this.save_plugin_setting(plugin, key, true, w, cx));
+            })
+        },
+        on_plugin_enabled: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |plugin, on, _, cx| {
+                let _ = this.update(cx, |this, cx| this.set_plugin_enabled(plugin, on, cx));
+            })
+        },
     };
     let s = &app.settings.settings;
     let page = SettingsPage::new(catalog)
@@ -258,6 +290,9 @@ fn settings(app: &SpaceApp, _window: &mut Window, cx: &mut Context<SpaceApp>) ->
         .notify(s.notifications.on_finish)
         .sound(s.notifications.sound)
         .permission(app.permission)
+        .modes(app.permission_modes.clone(), s.new_threads.permission_mode.clone())
+        .plugin_settings(plugin_sections)
+        .plugins(plugin_rows)
         .handlers(handlers);
     div()
         .id("settings")
@@ -273,6 +308,95 @@ fn settings(app: &SpaceApp, _window: &mut Window, cx: &mut Context<SpaceApp>) ->
                 .child(div().w_full().max_w(size::CONTENT_MAX_W).pt_8().pb_12().child(page)),
         )
         .into_any_element()
+}
+
+/// Settings sections for service plugins that declare settings, with their fields' inputs.
+fn plugin_settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> Vec<PluginSettingsView> {
+    let mut sections = Vec::new();
+    for (plugin_id, states) in app.plugin_settings.clone() {
+        if states.is_empty() || app.host.is_disabled(&plugin_id) {
+            continue;
+        }
+        let title = app.host.plugin(&plugin_id).map_or_else(|| plugin_id.clone(), |p| p.manifest.name);
+        let fields = states
+            .into_iter()
+            .map(|st| {
+                let secret = st.field.kind == SettingKind::Secret;
+                let placeholder = st.field.placeholder.clone().unwrap_or_default();
+                let placeholder =
+                    if st.set && secret { "Enter a new key to replace it".to_string() } else { placeholder };
+                let (input, shown) = app
+                    .setting_inputs
+                    .entry((plugin_id.clone(), st.field.key.clone()))
+                    .or_insert_with(|| (cx.new(|cx| InputState::new(window, cx).masked(secret)), None));
+                if shown.as_deref() != Some(placeholder.as_str()) {
+                    input.update(cx, |s, cx| s.set_placeholder(placeholder.clone(), window, cx));
+                    *shown = Some(placeholder);
+                }
+                let input = input.clone();
+                FieldView {
+                    plugin_id: plugin_id.clone(),
+                    key: st.field.key.clone(),
+                    label: st.field.label.clone().into(),
+                    description: st.field.description.clone().into(),
+                    secret,
+                    set: st.set,
+                    input,
+                }
+            })
+            .collect();
+        sections.push(PluginSettingsView { title: title.into(), fields });
+    }
+    sections
+}
+
+/// Every plugin, with what it's doing; service plugins can be turned off.
+fn plugin_rows(app: &SpaceApp) -> Vec<PluginRow> {
+    app.host
+        .plugins()
+        .into_iter()
+        .map(|p| {
+            let agent = p.manifest.is_agent();
+            let enabled = !app.host.is_disabled(p.id());
+            let status = if agent {
+                (app.agent_id.as_deref() == Some(p.id())).then_some(&app.agent_status)
+            } else {
+                app.plugin_status.get(p.id())
+            };
+            let status = match (enabled, status) {
+                (false, _) => "Off".to_string(),
+                (true, Some(PluginStatus::Running)) => "Running".into(),
+                (true, Some(PluginStatus::Starting)) => "Starting…".into(),
+                (true, Some(PluginStatus::Crashed(m))) => format!("Exited: {}", format::one_line(m)),
+                (true, _) => "Not running".into(),
+            };
+            PluginRow {
+                id: p.id().to_string(),
+                name: p.manifest.name.clone().into(),
+                description: p.manifest.description.clone().into(),
+                agent,
+                enabled,
+                status: status.into(),
+            }
+        })
+        .collect()
+}
+
+/// "Switch this thread to Full access?" while a mode waits for confirmation.
+fn mode_confirmation(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
+    let (key, id) = app.pending_confirm.as_ref()?;
+    if *key != thread.key {
+        return None;
+    }
+    let entry = app.permission_modes.iter().find(|e| &e.id == id)?;
+    let message = entry.confirm.clone().unwrap_or_default();
+    let card = confirm_card(
+        message,
+        format!("Use {}", entry.name),
+        cx.listener(|this, _, _, cx| this.confirm_mode(true, cx)),
+        cx.listener(|this, _, _, cx| this.confirm_mode(false, cx)),
+    );
+    Some(card.into_any_element())
 }
 
 fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyElement {
@@ -303,8 +427,21 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         on_pick_dir: pick_dir,
         on_choose_folder: handler(cx, |this, w, cx| this.choose_folder(w, cx)),
         on_configure: configure,
-        ..Default::default()
+        on_mode: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |id, _: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| this.set_mode(id, cx));
+            })
+        },
+        on_blocker_action: handler(cx, |this, w, cx| this.blocker_action(w, cx)),
     };
+    let mode = app
+        .effective_mode(thread)
+        .map(|current| ModeChoice { entries: app.permission_modes.clone(), current });
+    let blocker = app.blocker(thread).map(|b| ComposerBlocker {
+        text: b.text.into(),
+        action_label: b.action_label.map(Into::into),
+    });
     Composer::new("composer", &app.input)
         .running(thread.state.running)
         .queued(thread.queued.is_some())
@@ -315,7 +452,8 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
             thread_empty: thread.is_empty(),
             status: thread.state.status.clone(),
             locked: thread.state.running || thread.live_session().is_none(),
-            mode: None,
+            mode,
+            blocker,
         })
         .handlers(handlers)
         .into_any_element()

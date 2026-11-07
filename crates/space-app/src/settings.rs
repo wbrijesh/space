@@ -4,6 +4,7 @@
 //! read or parsed loads as defaults with a warning and is left alone until the user changes a
 //! setting. Every change is saved at once, atomically (temp file + rename).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,7 @@ pub const SETTINGS_ENV: &str = "SPACE_SETTINGS";
 pub struct Settings {
     pub new_threads: NewThreads,
     pub notifications: Notifications,
+    pub plugins: Plugins,
 }
 
 /// Applied when a new thread's session is created; `None` keeps the agent's default.
@@ -24,6 +26,17 @@ pub struct Settings {
 pub struct NewThreads {
     pub model: Option<ModelRef>,
     pub thinking_level: Option<String>,
+    /// Permission mode id (from the `permission-modes` catalog); `None`: the catalog's default.
+    pub permission_mode: Option<String>,
+}
+
+/// Plugins turned off, and plugins' text settings (secrets live in the Keychain, not here).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Plugins {
+    pub disabled: Vec<String>,
+    /// Text setting values by plugin id, then key.
+    pub settings: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,10 +140,13 @@ mod tests {
         store.update(|s| {
             s.new_threads.model = Some(ModelRef { provider: "stub".into(), id: "stub-fast".into() });
             s.new_threads.thinking_level = Some("high".into());
+            s.new_threads.permission_mode = Some("read-only".into());
             s.notifications.sound = false;
+            s.plugins.disabled = vec!["permissions".into()];
         });
         let json = std::fs::read_to_string(&path).unwrap();
         assert!(json.contains("\"newThreads\"") && json.contains("\"thinkingLevel\"") && json.contains("\"onFinish\""));
+        assert!(json.contains("\"permissionMode\"") && json.contains("\"disabled\""));
         assert_eq!(SettingsStore::load(Some(path)).settings, store.settings);
     }
 

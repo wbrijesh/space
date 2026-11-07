@@ -11,7 +11,7 @@ gpui::actions!(
         FocusComposer,
         OpenSettings,
         CloseSettings,
-        ToggleReadOnly,
+        CyclePermissionMode,
         ScrollToBottom,
         Quit
     ]

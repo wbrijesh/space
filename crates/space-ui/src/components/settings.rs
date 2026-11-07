@@ -1,5 +1,9 @@
 //! Settings page (⌘,): a heading and sections of rows. Each row is a label with a one-line
-//! description on the left and its control on the right (dropdown, switch, status).
+//! description on the left and its control on the right (dropdown, switch, status, a field).
+//!
+//! Plugin settings are generic: each service plugin with settings gets a section built from
+//! the fields it declares (secrets are masked and never shown once saved), and the Plugins
+//! section turns service plugins on and off.
 //!
 //! Primitives ([`section`], [`row`], [`select`], [`toggle`]) plus [`SettingsPage`], which
 //! lays out Space's settings from plain props. The page has no scroll container of its own;
@@ -8,12 +12,14 @@
 use std::rc::Rc;
 
 use gpui::component::button::Button;
+use gpui::component::input::{Input, InputState};
 use gpui::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui::component::switch::Switch;
 use gpui::component::{Disableable as _, FocusableExt as _, Icon, IconName, Sizable as _};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::protocol::ModelInfo;
+use space_core::protocol::service::CatalogEntry;
 
 use super::composer::{Handler, IndexHandler};
 use super::widgets::pill_button;
@@ -23,6 +29,42 @@ use crate::theme::{color, radius, size, text};
 pub type ToggleHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
 pub type ModelHandler = Rc<dyn Fn(Option<ModelInfo>, &mut Window, &mut App)>;
 pub type LevelHandler = Rc<dyn Fn(Option<String>, &mut Window, &mut App)>;
+/// `(plugin id, key)`.
+pub type FieldHandler = Rc<dyn Fn(String, String, &mut Window, &mut App)>;
+pub type PluginToggleHandler = Rc<dyn Fn(String, bool, &mut Window, &mut App)>;
+
+/// One plugin setting field.
+#[derive(Clone)]
+pub struct FieldView {
+    pub plugin_id: String,
+    pub key: String,
+    pub label: SharedString,
+    pub description: SharedString,
+    /// Masked, kept in the Keychain, never shown again once saved.
+    pub secret: bool,
+    pub set: bool,
+    pub input: Entity<InputState>,
+}
+
+/// A plugin's settings section.
+#[derive(Clone)]
+pub struct PluginSettingsView {
+    pub title: SharedString,
+    pub fields: Vec<FieldView>,
+}
+
+/// A row of the Plugins section.
+#[derive(Clone)]
+pub struct PluginRow {
+    pub id: String,
+    pub name: SharedString,
+    pub description: SharedString,
+    /// Agents can't be turned off here.
+    pub agent: bool,
+    pub enabled: bool,
+    /// "Running", "Exited: …", "Off".
+    pub status: SharedString,
+}
 
 /// Whether macOS lets Space post notifications.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +101,12 @@ pub struct SettingsHandlers {
     /// Ask macOS for notification permission.
     pub on_allow: Handler,
     pub on_open_system_settings: Handler,
+    /// Default permission mode for new threads (a catalog id).
+    pub on_mode: LevelHandler,
+    /// Save the field's input as the setting's value.
+    pub on_save_field: FieldHandler,
+    pub on_clear_field: FieldHandler,
+    pub on_plugin_enabled: PluginToggleHandler,
 }
 
 impl Default for SettingsHandlers {
@@ -70,6 +118,10 @@ impl Default for SettingsHandlers {
             on_sound: Rc::new(|_, _, _| {}),
             on_allow: Rc::new(|_, _| {}),
             on_open_system_settings: Rc::new(|_, _| {}),
+            on_mode: Rc::new(|_, _, _| {}),
+            on_save_field: Rc::new(|_, _, _, _| {}),
+            on_clear_field: Rc::new(|_, _, _, _| {}),
+            on_plugin_enabled: Rc::new(|_, _, _, _| {}),
         }
     }
 }
@@ -84,6 +136,12 @@ pub struct SettingsPage {
     notify: bool,
     sound: bool,
     permission: NotificationPermission,
+    /// The `permission-modes` catalog (empty: no plugin publishes modes, so no row).
+    modes: Vec<CatalogEntry>,
+    /// Default mode for new threads; `None`: the catalog's default.
+    mode: Option<String>,
+    plugin_settings: Vec<PluginSettingsView>,
+    plugins: Vec<PluginRow>,
     handlers: SettingsHandlers,
 }
 
@@ -96,8 +154,28 @@ impl SettingsPage {
             notify: true,
             sound: true,
             permission: NotificationPermission::Checking,
+            modes: Vec::new(),
+            mode: None,
+            plugin_settings: Vec::new(),
+            plugins: Vec::new(),
             handlers: SettingsHandlers::default(),
         }
+    }
+
+    pub fn modes(mut self, modes: Vec<CatalogEntry>, default: Option<String>) -> Self {
+        self.modes = modes;
+        self.mode = default;
+        self
+    }
+
+    pub fn plugin_settings(mut self, sections: Vec<PluginSettingsView>) -> Self {
+        self.plugin_settings = sections;
+        self
+    }
+
+    pub fn plugins(mut self, plugins: Vec<PluginRow>) -> Self {
+        self.plugins = plugins;
+        self
     }
 
     pub fn model(mut self, model: Option<(String, String)>) -> Self {
@@ -143,7 +221,8 @@ fn model_name(m: &ModelInfo) -> String {
 
 impl RenderOnce for SettingsPage {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        let Self { catalog, model, thinking, notify, sound, permission, handlers: h } = self;
+        let Self { catalog, model, thinking, notify, sound, permission, modes, mode, plugin_settings, plugins, handlers: h } =
+            self;
 
         // Model: "Agent default" + the agent's models.
         let (model_row, thinking_row) = match &catalog {
@@ -215,19 +294,93 @@ impl RenderOnce for SettingsPage {
             permission_row(permission, &h).into_any_element(),
         ];
 
+        let mut new_threads = vec![model_row.into_any_element(), thinking_row.into_any_element()];
+        if !modes.is_empty() {
+            new_threads.push(mode_row(&modes, mode.as_deref(), h.on_mode.clone(), window).into_any_element());
+        }
+        let plugin_sections = plugin_settings.into_iter().map(|p| {
+            let rows = p.fields.iter().map(|f| field_row(f, &h, window).into_any_element()).collect();
+            section(p.title, None, rows)
+        });
+        let plugin_rows: Vec<AnyElement> =
+            plugins.iter().map(|p| plugin_row(p, h.on_plugin_enabled.clone(), window).into_any_element()).collect();
+
         div()
             .w_full()
             .flex()
             .flex_col()
             .gap_8()
             .child(div().text_size(text::HEADING).font_weight(FontWeight::SEMIBOLD).child("Settings"))
-            .child(section(
-                "New threads",
-                Some("Applies to threads you start from now on."),
-                vec![model_row.into_any_element(), thinking_row.into_any_element()],
-            ))
+            .child(section("New threads", Some("Applies to threads you start from now on."), new_threads))
+            .children(plugin_sections)
             .child(section("Notifications", None, notifications))
+            .when(!plugin_rows.is_empty(), |d| {
+                d.child(section("Plugins", Some("Turning a plugin off removes what it adds, at once."), plugin_rows))
+            })
     }
+}
+
+/// "Permission mode" for new threads: the catalog's entries; the default one is marked.
+fn mode_row(modes: &[CatalogEntry], chosen: Option<&str>, on_mode: LevelHandler, window: &Window) -> Div {
+    let default_ix = modes.iter().position(|e| e.default).unwrap_or(0);
+    let selected = chosen.and_then(|c| modes.iter().position(|e| e.id == c)).unwrap_or(default_ix);
+    let options: Vec<SharedString> = modes.iter().map(|e| e.name.clone().into()).collect();
+    let label = options.get(selected).cloned().unwrap_or_default();
+    let ids: Vec<String> = modes.iter().map(|e| e.id.clone()).collect();
+    let on_select: IndexHandler = Rc::new(move |ix, w, cx| on_mode(ids.get(ix).cloned(), w, cx));
+    let control = select_plain("settings-mode", label, options, Some(selected), Some(on_select), window);
+    row("Permission mode", "What the agent may do in a new thread.", Some(control))
+}
+
+/// One plugin setting: its label, whether it's set, a field, Save and (when set) Remove.
+pub fn field_row(f: &FieldView, h: &SettingsHandlers, _window: &Window) -> Div {
+    let status = match (f.secret, f.set) {
+        (true, true) => "Saved in your Keychain.",
+        (true, false) => "Not set. Stored in your Keychain once saved.",
+        (false, true) => "Saved.",
+        (false, false) => "Not set.",
+    };
+    let description: SharedString = if f.description.is_empty() {
+        status.into()
+    } else {
+        format!("{} {status}", f.description).into()
+    };
+    let (save, clear) = (h.on_save_field.clone(), h.on_clear_field.clone());
+    let (pid, key) = (f.plugin_id.clone(), f.key.clone());
+    let (pid2, key2) = (pid.clone(), key.clone());
+    let control = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(div().w(size::SETTINGS_SELECT_W).child(Input::new(&f.input).small()))
+        .child(
+            pill_button(SharedString::from(format!("save-{}-{}", f.plugin_id, f.key)), "Save", true)
+                .on_click(move |_, w, cx| save(pid.clone(), key.clone(), w, cx)),
+        )
+        .when(f.set, |d| {
+            d.child(
+                pill_button(SharedString::from(format!("clear-{}-{}", f.plugin_id, f.key)), "Remove", false)
+                    .on_click(move |_, w, cx| clear(pid2.clone(), key2.clone(), w, cx)),
+            )
+        });
+    row(f.label.clone(), description, Some(control.into_any_element()))
+}
+
+/// A plugin: name, status and what it does; a switch for service plugins.
+pub fn plugin_row(p: &PluginRow, on_enabled: PluginToggleHandler, window: &Window) -> Div {
+    let description: SharedString = if p.description.is_empty() {
+        p.status.clone()
+    } else {
+        format!("{} · {}", p.status, p.description).into()
+    };
+    let control = if p.agent {
+        div().text_size(text::MD).text_color(color::text_3()).child("Agent").into_any_element()
+    } else {
+        let id = p.id.clone();
+        let element_id = SharedString::from(format!("plugin-{}", p.id));
+        toggle(element_id, p.enabled, Rc::new(move |on, w, cx| on_enabled(id.clone(), on, w, cx)), window).into_any_element()
+    };
+    row(p.name.clone(), description, Some(control))
 }
 
 /// The "macOS permission" row: status text and, when it helps, one action.
@@ -376,8 +529,50 @@ pub fn select(
         .into_any_element()
 }
 
+/// A dropdown like [`select`], without the separator after the first option.
+pub fn select_plain(
+    id: &'static str,
+    label: impl Into<SharedString>,
+    options: Vec<SharedString>,
+    selected: Option<usize>,
+    on_select: Option<IndexHandler>,
+    window: &Window,
+) -> AnyElement {
+    let Some(on_select) = on_select else {
+        return select(id, label, options, selected, None, window);
+    };
+    Button::new(id)
+        .outline()
+        .small()
+        .focus_ring(window.last_input_was_keyboard())
+        .w(size::SETTINGS_SELECT_W)
+        .rounded(radius::MD)
+        .text_size(text::MD)
+        .child(select_label(label.into(), true))
+        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+            let mut menu = menu.min_w(size::SETTINGS_SELECT_W).max_h(px(420.)).scrollable(true);
+            for (ix, label) in options.iter().enumerate() {
+                let f = on_select.clone();
+                menu = menu.item(PopupMenuItem::new(label.clone()).checked(selected == Some(ix)).on_click(move |_, w, cx| f(ix, w, cx)));
+            }
+            menu
+        })
+        .into_any_element()
+}
+
+fn select_label(label: SharedString, enabled: bool) -> Div {
+    div()
+        .w_full()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .child(div().min_w_0().truncate().text_color(if enabled { color::text() } else { color::text_2() }).child(label))
+        .child(Icon::new(IconName::ChevronDown).size(size::ICON_SM).text_color(color::text_3()))
+}
+
 /// An on/off switch.
-pub fn toggle(id: &'static str, checked: bool, on_change: ToggleHandler, window: &Window) -> Switch {
+pub fn toggle(id: impl Into<ElementId>, checked: bool, on_change: ToggleHandler, window: &Window) -> Switch {
     Switch::new(id)
         .checked(checked)
         .focus_ring(window.last_input_was_keyboard())

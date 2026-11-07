@@ -235,6 +235,29 @@ pub fn problem_card(message: impl Into<SharedString>, actions: Option<(ClickHand
         })
 }
 
+/// A question above the composer that needs an answer before something happens (e.g. switching
+/// a thread to Full access): a yellow shield, the message, Cancel and the confirming action.
+pub fn confirm_card(
+    message: impl Into<SharedString>,
+    confirm_label: impl Into<SharedString>,
+    on_confirm: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2p5()
+        .p_3()
+        .rounded(radius::XL)
+        .bg(color::surface())
+        .border_1()
+        .border_color(color::yellow_border())
+        .child(Icon::new(Lucide::ShieldAlert).size(size::ICON_MD).text_color(color::yellow()))
+        .child(div().flex_1().min_w_0().text_size(text::SM).child(message.into()))
+        .child(pill_button("confirm-cancel", "Cancel", false).on_click(on_cancel))
+        .child(pill_button("confirm-ok", confirm_label, true).on_click(on_confirm))
+}
+
 /// Heading above the centered composer of an empty thread.
 pub fn empty_heading() -> Div {
     div()

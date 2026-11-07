@@ -5,7 +5,10 @@ use std::borrow::Cow;
 use gpui::assets::{Assets, icon_assets};
 use gpui::{AssetSource, Result, SharedString};
 
-icon_assets!(ExtraIcons, [GitBranch, CircleStop, Brain, Wrench, Pencil, ListChecks, Terminal, SquarePen]);
+icon_assets!(
+    ExtraIcons,
+    [GitBranch, CircleStop, Brain, Wrench, Pencil, ListChecks, Terminal, SquarePen, Shield, ShieldCheck, ShieldHalf, ShieldAlert, KeyRound]
+);
 
 pub struct SpaceAssets;
 

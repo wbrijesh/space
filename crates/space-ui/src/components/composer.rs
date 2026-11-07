@@ -1,5 +1,6 @@
 //! Composer: the input card (+ · text · send/stop) and the control row below it (project
-//! folder, Write / Read-only toggle, model, effort, context ring).
+//! folder, permission mode, model, effort, context ring). A mode that isn't set up yet blocks
+//! sending and says why, with a link to fix it.
 //!
 //! One visual line: a single row. More (a newline, or text wider than the single-row text
 //! column): two zones, text across the full width over a row with + and send.
@@ -13,15 +14,14 @@ use gpui::assets::IconName as Lucide;
 use gpui::component::{Disableable as _, Icon, IconName, Sizable as _};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use space_core::protocol::service::CatalogEntry;
 use space_core::protocol::{ConfigureSession, ModelInfo, SpaceStatus};
 
 use super::loaders::ContextRing;
 use super::transcript::attachment_chip;
-use super::widgets::{icon_button, menu_trigger, tip, tip_action};
-use crate::actions::ToggleReadOnly;
-use crate::clock::AnimationClock;
+use super::widgets::{icon_button, menu_trigger, tip};
 use crate::format;
-use crate::theme::{color, motion, radius, size, space, text};
+use crate::theme::{color, radius, size, space, text};
 
 /// Card padding.
 const PAD: f32 = space::MD;
@@ -55,6 +55,7 @@ pub type IndexHandler = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 pub type PathHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 pub type ConfigureHandler = Rc<dyn Fn(ConfigureSession, &mut Window, &mut App)>;
 pub type BoolHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
+pub type StringHandler = Rc<dyn Fn(String, &mut Window, &mut App)>;
 
 /// Callbacks; every one defaults to a no-op.
 #[derive(Clone)]
@@ -67,8 +68,10 @@ pub struct ComposerHandlers {
     pub on_pick_dir: PathHandler,
     pub on_choose_folder: Handler,
     pub on_configure: ConfigureHandler,
-    /// The Write / Read-only toggle: `true` for read-only.
-    pub on_read_only: BoolHandler,
+    /// A permission mode was picked (its catalog id).
+    pub on_mode: StringHandler,
+    /// The blocker's link was clicked.
+    pub on_blocker_action: Handler,
 }
 
 impl Default for ComposerHandlers {
@@ -83,7 +86,8 @@ impl Default for ComposerHandlers {
             on_pick_dir: Rc::new(|_, _, _| {}),
             on_choose_folder: noop,
             on_configure: Rc::new(|_, _, _| {}),
-            on_read_only: Rc::new(|_, _, _| {}),
+            on_mode: Rc::new(|_, _, _| {}),
+            on_blocker_action: Rc::new(|_, _| {}),
         }
     }
 }
@@ -99,16 +103,30 @@ pub struct ComposerControls {
     pub status: SpaceStatus,
     /// Model and effort can't change now (turn running or no session).
     pub locked: bool,
-    /// The Write / Read-only toggle; `None` hides it (the agent has no such modes).
-    pub mode: Option<ModeControl>,
+    /// The permission mode menu; `None` hides it (no plugin publishes modes).
+    pub mode: Option<ModeChoice>,
+    /// Sending is blocked until this is resolved (e.g. a mode that needs setting up).
+    pub blocker: Option<ComposerBlocker>,
 }
 
-/// State of the Write / Read-only toggle.
-#[derive(Clone, Copy, Default)]
-pub struct ModeControl {
-    pub read_only: bool,
-    /// Identifies the thread, so switching threads jumps instead of sliding the knob.
-    pub scope: u64,
+/// The thread's permission mode and the modes it can switch to (the `permission-modes` catalog).
+#[derive(Clone, Default)]
+pub struct ModeChoice {
+    pub entries: Vec<CatalogEntry>,
+    pub current: String,
+}
+
+impl ModeChoice {
+    pub fn current_entry(&self) -> Option<&CatalogEntry> {
+        self.entries.iter().find(|e| e.id == self.current)
+    }
+}
+
+/// Why the composer can't send, and the link that fixes it.
+#[derive(Clone)]
+pub struct ComposerBlocker {
+    pub text: SharedString,
+    pub action_label: Option<SharedString>,
 }
 
 #[derive(IntoElement)]
@@ -167,7 +185,8 @@ impl RenderOnce for Composer {
         let Self { id, input, running, queued, attachments, controls, handlers: h } = self;
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
         let has_text = !input.read(cx).value().trim().is_empty();
-        let can_send = (has_text || !attachments.is_empty()) && !running && !queued;
+        let blocker = controls.as_ref().and_then(|c| c.blocker.clone());
+        let can_send = (has_text || !attachments.is_empty()) && !running && !queued && blocker.is_none();
 
         let expanded_state = window.use_keyed_state((id.clone(), "expanded"), cx, |_, _| false);
         let expanded = is_expanded(&input, *expanded_state.read(cx), window, cx);
@@ -229,6 +248,7 @@ impl RenderOnce for Composer {
                 })
                 .child(Icon::new(IconName::ArrowUp).size(size::ICON_MD))
                 .when(can_send, |d| d.tooltip(tip("Send  ⏎")).on_click(move |_, w, cx| send(w, cx)))
+                .when(blocker.is_some(), |d| d.tooltip(tip("Can't send in this mode yet")))
                 .into_any_element()
         };
 
@@ -292,7 +312,42 @@ impl RenderOnce for Composer {
             // transcript (see the key bindings in space-app).
             .when(expanded, |d| d.key_context(MULTILINE_CONTEXT))
             .child(card)
-            .children(controls.map(|c| control_row(c, &h, running, window)))
+            .children(blocker.map(|b| blocker_row(b, h.on_blocker_action.clone())))
+            .children(controls.map(|c| control_row(c, &h, window)))
+    }
+}
+
+/// "Set up the decision model to use this mode · Open Settings", under the card.
+pub fn blocker_row(blocker: ComposerBlocker, on_action: Handler) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_1p5()
+        .pl(px(ROW_INSET_LEFT + space::MD))
+        .text_size(text::SM)
+        .text_color(color::text_2())
+        .child(Icon::new(Lucide::ShieldAlert).size(size::ICON_SM).text_color(color::yellow()))
+        .child(blocker.text)
+        .when_some(blocker.action_label, |d, label| {
+            d.child(
+                div()
+                    .id("blocker-action")
+                    .text_color(color::accent())
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(color::accent_hover()))
+                    .child(label)
+                    .on_click(move |_, w, cx| on_action(w, cx)),
+            )
+        })
+}
+
+/// The Lucide icon for a catalog icon name.
+pub fn mode_icon(icon: Option<&str>) -> Lucide {
+    match icon {
+        Some("shield-check") => Lucide::ShieldCheck,
+        Some("shield-half") => Lucide::ShieldHalf,
+        Some("shield-alert") => Lucide::ShieldAlert,
+        _ => Lucide::Shield,
     }
 }
 
@@ -326,7 +381,7 @@ fn is_expanded(input: &Entity<TextareaState>, was_expanded: bool, window: &mut W
     window.text_system().shape_line(value, text::BODY, &[run], None).width > available
 }
 
-fn control_row(c: ComposerControls, h: &ComposerHandlers, running: bool, window: &Window) -> Div {
+fn control_row(c: ComposerControls, h: &ComposerHandlers, window: &Window) -> Div {
     let status = c.status.clone();
     let folder = {
         let (dirs, cwd, empty) = (c.dirs.clone(), c.cwd.clone(), c.thread_empty);
@@ -392,11 +447,26 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers, running: bool, window:
             .tooltip(tip(format::context_usage(tokens, window_size))),
     );
 
-    let toggle = c.mode.map(|m| {
-        let on_change = h.on_read_only.clone();
-        ModeToggle::new(("mode-toggle", m.scope), m.read_only)
-            .running(running)
-            .on_change(move |read_only, w, cx| on_change(read_only, w, cx))
+    let mode = c.mode.filter(|m| !m.entries.is_empty()).map(|m| {
+        let current = m.current_entry().cloned();
+        let icon = mode_icon(current.as_ref().and_then(|e| e.icon.as_deref()));
+        let alert = icon == Lucide::ShieldAlert;
+        let name = current.map_or_else(|| SharedString::from("Permissions"), |e| e.name.into());
+        let on_mode = h.on_mode.clone();
+        menu_trigger("mode-menu", window)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .text_color(color::text_2())
+                    .child(Icon::new(icon).size(size::ICON).text_color(if alert { color::yellow() } else { color::text_2() }))
+                    .child(name)
+                    .child(Icon::new(IconName::ChevronDown).size(size::ICON_SM).text_color(color::text_3())),
+            )
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
+                mode_menu(menu, &m.entries, &m.current, on_mode.clone())
+            })
     });
 
     div()
@@ -405,162 +475,22 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers, running: bool, window:
         .justify_between()
         .pl(px(ROW_INSET_LEFT))
         .pr(px(ROW_INSET_RIGHT))
-        .child(div().flex().items_center().gap_1().min_w_0().child(folder).children(toggle))
+        .child(div().flex().items_center().gap_1().min_w_0().child(folder).children(mode))
         .child(right)
 }
 
-/// Segment width and track inset of the [`ModeToggle`].
-const SEGMENT_W: f32 = 26.;
-const SEGMENT_H: f32 = 20.;
-const TRACK_INSET: f32 = space::XXS;
-
-/// Write / Read-only segmented toggle: a pill track with a pencil and an eye, and a raised
-/// knob under the selected one that slides over ([`motion::TOGGLE_SLIDE`]) when it changes.
-/// Read-only also tints the eye yellow and shows a muted "Read-only" label, so it reads at a
-/// glance without looking like a warning.
-#[derive(IntoElement)]
-pub struct ModeToggle {
-    id: ElementId,
-    read_only: bool,
-    /// A turn is running: a switch applies from the next message (said in the tooltip).
-    running: bool,
-    /// Gallery: draw the unselected segment hovered.
-    force_hover: bool,
-    on_change: Option<BoolHandler>,
-}
-
-impl ModeToggle {
-    pub fn new(id: impl Into<ElementId>, read_only: bool) -> Self {
-        Self { id: id.into(), read_only, running: false, force_hover: false, on_change: None }
+/// Permission mode picker contents: one item per catalog entry, the current one checked.
+pub fn mode_menu(menu: PopupMenu, entries: &[CatalogEntry], current: &str, on_mode: StringHandler) -> PopupMenu {
+    let mut menu = menu.min_w(px(220.)).label("Permissions");
+    for e in entries {
+        let (id, f) = (e.id.clone(), on_mode.clone());
+        let item = PopupMenuItem::new(e.name.clone())
+            .icon(Icon::new(mode_icon(e.icon.as_deref())))
+            .checked(e.id == current)
+            .on_click(move |_, w, cx| f(id.clone(), w, cx));
+        menu = menu.item(item);
     }
-
-    pub fn running(mut self, running: bool) -> Self {
-        self.running = running;
-        self
-    }
-
-    pub fn force_hover(mut self, on: bool) -> Self {
-        self.force_hover = on;
-        self
-    }
-
-    pub fn on_change(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
-        self.on_change = Some(Rc::new(f));
-        self
-    }
-}
-
-/// Knob position (0 = Write, 1 = Read) and when it last started moving (animation time).
-struct Knob {
-    read_only: bool,
-    from: f32,
-    to: f32,
-    since: Option<f64>,
-}
-
-impl Knob {
-    /// Position at animation time `now` (`pinned`: the clock's pinned phase).
-    fn at(&self, now: f64, pinned: Option<f32>) -> (f32, bool) {
-        let Some(since) = self.since else { return (self.to, false) };
-        let t = match pinned {
-            Some(p) => p,
-            None => ((now - since) / motion::TOGGLE_SLIDE.as_secs_f64()).clamp(0., 1.) as f32,
-        };
-        (self.from + (self.to - self.from) * motion::ease_out(t), t < 1.)
-    }
-}
-
-impl RenderOnce for ModeToggle {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let Self { id, read_only, running, force_hover, on_change } = self;
-        let target = if read_only { 1. } else { 0. };
-        let clock = AnimationClock::global(cx).clone();
-        let (now, pinned) = (clock.now(), clock.pinned());
-        let knob = window.use_keyed_state((id.clone(), "knob"), cx, |_, _| Knob {
-            read_only,
-            from: target,
-            to: target,
-            since: None,
-        });
-        // A new choice: slide from wherever the knob is now (also mid-slide).
-        if knob.read(cx).read_only != read_only {
-            let from = knob.read(cx).at(now, pinned).0;
-            knob.update(cx, |k, _| *k = Knob { read_only, from, to: target, since: Some(now) });
-        }
-        let (pos, moving) = if cx.reduce_motion() { (target, false) } else { knob.read(cx).at(now, pinned) };
-        if moving && clock.is_running() {
-            window.request_animation_frame();
-        }
-
-        let segment = |read: bool| {
-            let selected = read == read_only;
-            let (icon, label) = if read {
-                (Lucide::Eye, "Read-only: the agent investigates without changing anything")
-            } else {
-                (Lucide::Pencil, "Write: the agent can edit files")
-            };
-            let label =
-                if running && !selected { format!("{label} (from the next message)") } else { label.to_string() };
-            let on_change = on_change.clone();
-            let fg = match (selected, read) {
-                (true, true) => color::yellow(),
-                (true, false) => color::text(),
-                (false, _) if force_hover => color::text_2(),
-                (false, _) => color::text_3(),
-            };
-            div()
-                .id(if read { "read" } else { "write" })
-                .w(px(SEGMENT_W))
-                .h(px(SEGMENT_H))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .text_color(fg)
-                .when(!selected, |d| d.cursor_pointer().hover(|s| s.text_color(color::text_2())))
-                // Plain div, and the mouse-down stops here: the composer keeps its focus.
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(Icon::new(icon).size(size::ICON_SM))
-                .tooltip(tip_action(label, &ToggleReadOnly))
-                .when_some(on_change.filter(|_| !selected), |d, f| d.on_click(move |_, w, cx| f(read, w, cx)))
-        };
-
-        let track = div()
-            .id(id)
-            .relative()
-            .flex_none()
-            .flex()
-            .items_center()
-            .p(px(TRACK_INSET))
-            .rounded_full()
-            .bg(color::bg_sidebar())
-            .border_1()
-            .border_color(color::border())
-            // The knob first, so the icons paint over it.
-            .child(
-                div()
-                    .absolute()
-                    .top(px(TRACK_INSET))
-                    .left(px(TRACK_INSET + pos * SEGMENT_W))
-                    .w(px(SEGMENT_W))
-                    .h(px(SEGMENT_H))
-                    .rounded_full()
-                    .bg(color::pressed())
-                    .border_1()
-                    .border_color(color::border_strong())
-                    .shadow_xs(),
-            )
-            .child(segment(false))
-            .child(segment(true));
-
-        div()
-            .flex()
-            .items_center()
-            .gap_1p5()
-            .child(track)
-            // Calm, not alarming: the eye carries the color, the label stays quiet.
-            .when(read_only, |d| d.child(div().text_size(text::SM).text_color(color::text_3()).child("Read-only")))
-    }
+    menu
 }
 
 /// Model picker contents (used by the dropdown and the gallery).
@@ -654,12 +584,39 @@ pub mod fixtures {
             thread_empty: false,
             status: status(tokens),
             locked,
-            mode: Some(ModeControl::default()),
+            mode: Some(modes("workspace-write", true)),
+            blocker: None,
         }
     }
 
-    pub fn read_only(mut c: ComposerControls) -> ComposerControls {
-        c.mode = Some(ModeControl { read_only: true, scope: 0 });
+    /// The permissions plugin's three modes; `ready`: the decision model is set up.
+    pub fn modes(current: &str, ready: bool) -> ModeChoice {
+        let entry = |id: &str, name: &str, icon: &str, default: bool, needs_setup: bool| CatalogEntry {
+            id: id.into(),
+            name: name.into(),
+            icon: Some(icon.into()),
+            default,
+            ready: ready || !needs_setup,
+            ..Default::default()
+        };
+        ModeChoice {
+            entries: vec![
+                entry("read-only", "Read Only", "shield-check", false, false),
+                entry("workspace-write", "Workspace Write", "shield-half", true, true),
+                entry("full-access", "Full access", "shield-alert", false, true),
+            ],
+            current: current.into(),
+        }
+    }
+
+    pub fn with_mode(mut c: ComposerControls, current: &str, ready: bool) -> ComposerControls {
+        c.mode = Some(modes(current, ready));
+        if !ready && current != "read-only" {
+            c.blocker = Some(ComposerBlocker {
+                text: "Set up the decision model to use this mode.".into(),
+                action_label: Some("Open Settings".into()),
+            });
+        }
         c
     }
 }
@@ -709,42 +666,25 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 c.attachments(vec![PathBuf::from("Cargo.toml"), PathBuf::from("README.md")])
             }),
             example("agent starting (locked)", "", |c| c.queued(true).controls(fixtures::controls(0, true))),
-            example("read-only", "Why does the composer flicker when it grows?", |c| {
-                c.controls(fixtures::read_only(fixtures::controls(18_200, false)))
+            example("read only", "Why does the composer flicker when it grows?", |c| {
+                c.controls(fixtures::with_mode(fixtures::controls(18_200, false), "read-only", true))
             }),
-            example("agent without modes (no toggle)", "", |c| {
+            example("full access", "", |c| c.controls(fixtures::with_mode(fixtures::controls(18_200, false), "full-access", true))),
+            example("mode not set up (sending blocked)", "Clean up the build cache", |c| {
+                c.controls(fixtures::with_mode(fixtures::controls(18_200, false), "workspace-write", false))
+            }),
+            example("no permission modes (no plugin)", "", |c| {
                 c.controls(ComposerControls { mode: None, ..fixtures::controls(18_200, false) })
-            }),
-        ]),
-        ComponentPreview::new(
-            Area::Composer,
-            "Mode toggle",
-            "Write / Read-only, under the input. Read-only is per thread and applies from the next message.",
-        )
-        .examples([
-            Example::new("write", |_, _| ModeToggle::new("p-write", false).into_any_element()),
-            Example::new("read-only", |_, _| ModeToggle::new("p-read", true).into_any_element()),
-            Example::new("write, hover read", |_, _| {
-                ModeToggle::new("p-hover-read", false).force_hover(true).into_any_element()
-            }),
-            Example::new("read-only, hover write", |_, _| {
-                ModeToggle::new("p-hover-write", true).force_hover(true).into_any_element()
-            }),
-            Example::new("interactive", |window, cx| {
-                let read = window.use_keyed_state("p-interactive-mode", cx, |_, _| false);
-                let value = *read.read(cx);
-                ModeToggle::new("p-interactive", value)
-                    .on_change(move |v, _, cx| read.update(cx, |r, cx| {
-                        *r = v;
-                        cx.notify();
-                    }))
-                    .into_any_element()
             }),
         ]),
         ComponentPreview::new(Area::Composer, "Menus", "Dropdown contents, rendered open.").examples([
             menu("model", |m| model_menu(m, &fixtures::status(0).available_models.unwrap(), "claude-opus-5-5", Rc::new(|_, _, _| {}))),
             menu("effort", |m| {
                 effort_menu(m, &fixtures::status(0).thinking_levels.unwrap(), "medium", Rc::new(|_, _, _| {}))
+            }),
+            menu("permission mode", |m| {
+                let modes = fixtures::modes("workspace-write", true);
+                mode_menu(m, &modes.entries, &modes.current, Rc::new(|_, _, _| {}))
             }),
             menu("folder", |m| {
                 let c = fixtures::controls(0, false);

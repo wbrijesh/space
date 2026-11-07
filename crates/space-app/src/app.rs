@@ -13,21 +13,22 @@
 //! Settings (⌘,) replace the thread view in the main column; the sidebar stays. Esc, ⌘, again,
 //! Back, ⌘N or picking a thread leave them.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use gpui::component::input::{InputEvent, TextareaState};
+use gpui::component::input::{InputEvent, InputState, TextareaState};
 use gpui::*;
-use space_core::protocol::{ConfigureSession, ModelInfo};
+use space_core::protocol::service::CatalogEntry;
+use space_core::protocol::{CATALOG_PERMISSION_MODES, ConfigureSession, ModelInfo};
 use space_core::{
     AgentHandle, EventReceiver, Host, HostEvent, PermissionDecision, PluginStatus, Session, SessionEvent, SessionId,
-    SessionState, TranscriptItem,
+    SessionState, SettingState, TranscriptItem,
 };
 
 pub use space_ui::actions::{
-    CloseSettings, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, Quit, ScrollToBottom, ToggleLogs,
-    ToggleSidebar,
+    CloseSettings, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, Quit, ScrollToBottom,
+    ToggleLogs, ToggleSidebar,
 };
 use space_ui::assets::SpaceAssets;
 use space_ui::components::composer;
@@ -97,6 +98,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-j", ToggleLogs, None),
             KeyBinding::new("cmd-l", FocusComposer, None),
             KeyBinding::new("cmd-,", OpenSettings, None),
+            KeyBinding::new("cmd-shift-r", CyclePermissionMode, None),
             // ⌘↓ scrolls the transcript to the bottom, also from the composer (where the
             // textarea would move the caret to the end) unless its text spans several lines.
             // Not context-free: a `None` binding counts as the deepest match and would beat
@@ -134,6 +136,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
                     MenuItem::separator(),
                     MenuItem::action("Scroll to Bottom", ScrollToBottom),
                     MenuItem::action("Focus Composer", FocusComposer),
+                    MenuItem::action("Next Permission Mode", CyclePermissionMode),
                 ],
                 disabled: false,
             },
@@ -206,6 +209,11 @@ pub struct Thread {
     pub attachments: Vec<PathBuf>,
     /// Message sent before the session existed; sent once it does.
     pub queued: Option<(String, Vec<PathBuf>)>,
+    /// Permission mode picked for this thread (a `permission-modes` id); `None`: the default
+    /// for new threads. Applied to every session the thread gets.
+    pub mode: Option<String>,
+    /// Modes that need confirming (Full access) and were confirmed in this thread.
+    pub confirmed: HashSet<String>,
     /// Expanded thought/tool items (transcript indices).
     pub expanded: HashSet<usize>,
     thought_started: HashMap<usize, Instant>,
@@ -226,6 +234,8 @@ impl Thread {
             draft: String::new(),
             attachments: Vec::new(),
             queued: None,
+            mode: None,
+            confirmed: HashSet::new(),
             expanded: HashSet::new(),
             thought_started: HashMap::new(),
             thought_secs: HashMap::new(),
@@ -298,6 +308,16 @@ pub struct SpaceApp {
     pub(crate) agent_models: Option<Vec<ModelInfo>>,
     pub(crate) agent_levels: Option<Vec<String>>,
     pub(crate) permission: NotificationPermission,
+    /// The `permission-modes` catalog (empty until a plugin publishes it).
+    pub(crate) permission_modes: Vec<CatalogEntry>,
+    /// Service plugins' settings, by plugin id.
+    pub(crate) plugin_settings: BTreeMap<String, Vec<SettingState>>,
+    /// Service plugins' process status, by plugin id.
+    pub(crate) plugin_status: HashMap<String, PluginStatus>,
+    /// Settings-page fields, by (plugin id, key), with the placeholder they show.
+    pub(crate) setting_inputs: HashMap<(String, String), (Entity<InputState>, Option<String>)>,
+    /// A mode that needs confirming before the thread switches to it: (thread, mode id).
+    pub(crate) pending_confirm: Option<(u64, String)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -410,6 +430,11 @@ impl SpaceApp {
             agent_models: None,
             agent_levels: None,
             permission: NotificationPermission::Checking,
+            permission_modes: Vec::new(),
+            plugin_settings: BTreeMap::new(),
+            plugin_status: HashMap::new(),
+            setting_inputs: HashMap::new(),
+            pending_confirm: None,
             _subscriptions: vec![sub, activation],
         };
         this.seed_threads(options.seed, options.select, window, cx);
@@ -460,6 +485,7 @@ impl SpaceApp {
         match event {
             HostEvent::PluginStatus { plugin_id, status } => {
                 if Some(&plugin_id) != self.agent_id.as_ref() {
+                    self.plugin_status.insert(plugin_id, status);
                     return;
                 }
                 if matches!(status, PluginStatus::Stopped | PluginStatus::Crashed(_)) {
@@ -475,7 +501,15 @@ impl SpaceApp {
                 }
                 self.logs.push_back(line);
             }
-            HostEvent::Catalog { .. } | HostEvent::PluginSettings { .. } => {}
+            HostEvent::Catalog { name, entries } => {
+                if name == CATALOG_PERMISSION_MODES {
+                    self.permission_modes = entries;
+                    self.sync_session_modes();
+                }
+            }
+            HostEvent::PluginSettings { plugin_id, settings } => {
+                self.plugin_settings.insert(plugin_id, settings);
+            }
             HostEvent::Session { session_id, event } => {
                 let Some(&key) = self.session_threads.get(&session_id) else {
                     // Arrived before `new_session` returned; applied once the thread knows its id.
@@ -649,6 +683,7 @@ impl SpaceApp {
         thread.state.plugin_id = session.agent().plugin_id().to_string();
         thread.session = Some(session);
         self.session_threads.insert(sid.clone(), key);
+        self.sync_session_modes();
         for event in self.orphans.remove(&sid).unwrap_or_default() {
             self.apply_session_event(key, &event, cx);
         }
@@ -693,6 +728,13 @@ impl SpaceApp {
         if thread.state.running || thread.queued.is_some() {
             return;
         }
+        // The thread's mode isn't set up yet (the composer says so, with a link).
+        if let Some(t) = self.thread(key)
+            && self.blocker(t).is_some()
+        {
+            return;
+        }
+        let Some(thread) = self.thread_mut(key) else { return };
         let attachments = std::mem::take(&mut thread.attachments);
         thread.draft.clear();
         self.input.update(cx, |s, cx| s.clean(window, cx));
@@ -839,8 +881,11 @@ impl SpaceApp {
         let fresh = Thread::new(key, dir);
         let thread = self.thread_mut(key).expect("thread exists");
         let draft = std::mem::take(&mut thread.draft);
+        let (mode, confirmed) = (thread.mode.take(), std::mem::take(&mut thread.confirmed));
         *thread = fresh;
         thread.draft = draft;
+        thread.mode = mode;
+        thread.confirmed = confirmed;
         self.create_session(key, cx);
         self.focus_composer(window, cx);
     }
@@ -921,10 +966,98 @@ impl SpaceApp {
         cx.notify();
     }
 
-    /// Start the service plugins (permissions and the like); failures show in the logs.
+    /// Start the service plugins (permissions and the like) with the saved plugin settings;
+    /// failures show in the Plugins section and the logs.
     fn start_services(&mut self, cx: &mut Context<Self>) {
+        let plugins = &self.settings.settings.plugins;
+        self.host.set_disabled(plugins.disabled.iter().cloned());
+        for (id, values) in &plugins.settings {
+            self.host.set_text_settings(id, values.clone());
+        }
         let host = self.host.clone();
         cx.spawn(async move |_, _| host.start_services().await).detach();
+    }
+
+    // ----- permission modes -------------------------------------------------------------
+
+    /// The thread's permission mode: its own choice, else the default for new threads (if the
+    /// catalog has it), else the catalog's default. `None` while there is no catalog.
+    pub(crate) fn effective_mode(&self, thread: &Thread) -> Option<String> {
+        let default = self.settings.settings.new_threads.permission_mode.as_deref();
+        resolve_mode(&self.permission_modes, thread.mode.as_deref(), default)
+    }
+
+    pub(crate) fn mode_entry(&self, thread: &Thread) -> Option<&CatalogEntry> {
+        let id = self.effective_mode(thread)?;
+        self.permission_modes.iter().find(|e| e.id == id)
+    }
+
+    /// Why the thread can't send right now (its mode isn't set up), if so.
+    pub(crate) fn blocker(&self, thread: &Thread) -> Option<space_core::protocol::service::Blocker> {
+        let entry = self.mode_entry(thread).filter(|e| !e.ready)?;
+        Some(entry.blocker.clone().unwrap_or_else(|| space_core::protocol::service::Blocker {
+            text: format!("{} isn't ready yet.", entry.name),
+            ..Default::default()
+        }))
+    }
+
+    /// Tell the host each live session's permission mode.
+    fn sync_session_modes(&self) {
+        for t in &self.threads {
+            if let (Some(session), Some(mode)) = (&t.session, self.effective_mode(t)) {
+                session.set_permission_mode(mode);
+            }
+        }
+    }
+
+    /// Switch the selected thread to mode `id`. A mode that asks for confirmation (Full access)
+    /// does so once per thread first. Applies from the agent's next tool call.
+    pub(crate) fn set_mode(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(key) = self.selected else { return };
+        let Some(entry) = self.permission_modes.iter().find(|e| e.id == id).cloned() else { return };
+        let Some(thread) = self.thread(key) else { return };
+        if entry.confirm.is_some() && !thread.confirmed.contains(&id) && self.effective_mode(thread).as_ref() != Some(&id) {
+            self.pending_confirm = Some((key, id));
+            cx.notify();
+            return;
+        }
+        self.apply_mode(key, id, cx);
+    }
+
+    fn apply_mode(&mut self, key: u64, id: String, cx: &mut Context<Self>) {
+        self.pending_confirm = None;
+        let Some(thread) = self.thread_mut(key) else { return };
+        thread.mode = Some(id);
+        self.sync_session_modes();
+        cx.notify();
+    }
+
+    /// The confirmation's answer.
+    pub(crate) fn confirm_mode(&mut self, confirmed: bool, cx: &mut Context<Self>) {
+        let Some((key, id)) = self.pending_confirm.take() else { return };
+        if confirmed {
+            if let Some(t) = self.thread_mut(key) {
+                t.confirmed.insert(id.clone());
+            }
+            self.apply_mode(key, id, cx);
+        }
+        cx.notify();
+    }
+
+    /// ⇧⌘R: the selected thread's next mode, in catalog order.
+    pub(crate) fn cycle_mode(&mut self, cx: &mut Context<Self>) {
+        if self.show_settings || self.permission_modes.is_empty() {
+            return;
+        }
+        let Some(current) = self.current().and_then(|t| self.effective_mode(t)) else { return };
+        let ix = self.permission_modes.iter().position(|e| e.id == current).map_or(0, |i| i + 1);
+        let next = self.permission_modes[ix % self.permission_modes.len()].id.clone();
+        self.set_mode(next, cx);
+    }
+
+    /// The composer blocker's link (`open-settings:<plugin>`).
+    pub(crate) fn blocker_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings(window, cx);
     }
 
     pub(crate) fn restart_agent(&mut self, cx: &mut Context<Self>) {
@@ -1033,6 +1166,89 @@ impl SpaceApp {
         self.settings.update(|s| s.notifications.sound = on);
         cx.notify();
     }
+
+    pub(crate) fn set_default_mode(&mut self, mode: Option<String>, cx: &mut Context<Self>) {
+        self.settings.update(|s| s.new_threads.permission_mode = mode);
+        self.sync_session_modes();
+        cx.notify();
+    }
+
+    /// Save a plugin setting from its Settings field (`clear`: remove it).
+    pub(crate) fn save_plugin_setting(
+        &mut self,
+        plugin_id: String,
+        key: String,
+        clear: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input = self.setting_inputs.get(&(plugin_id.clone(), key.clone())).map(|(i, _)| i.clone());
+        let value = if clear { None } else { input.as_ref().map(|i| i.read(cx).value().trim().to_string()) };
+        if !clear && value.as_deref().is_none_or(str::is_empty) {
+            return;
+        }
+        let secret = self
+            .plugin_settings
+            .get(&plugin_id)
+            .and_then(|fields| fields.iter().find(|f| f.field.key == key))
+            .is_some_and(|f| f.field.kind == space_core::protocol::service::SettingKind::Secret);
+        // Text values live in the settings file (secrets only in the Keychain).
+        if !secret {
+            let (id, k, v) = (plugin_id.clone(), key.clone(), value.clone());
+            self.settings.update(|s| {
+                let map = s.plugins.settings.entry(id).or_default();
+                match v {
+                    Some(v) => map.insert(k, v),
+                    None => map.remove(&k),
+                };
+            });
+        }
+        if let Some(input) = input {
+            input.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        let host = self.host.clone();
+        cx.spawn(async move |this, cx| {
+            if let Err(e) = host.set_setting(&plugin_id, &key, value).await {
+                let _ = this.update(cx, |this, cx| {
+                    this.banner = Some(format!("Couldn't save the setting: {e:#}"));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Turn a service plugin on or off (saved; takes effect at once).
+    pub(crate) fn set_plugin_enabled(&mut self, plugin_id: String, enabled: bool, cx: &mut Context<Self>) {
+        self.settings.update(|s| {
+            s.plugins.disabled.retain(|id| *id != plugin_id);
+            if !enabled {
+                s.plugins.disabled.push(plugin_id.clone());
+            }
+        });
+        self.host.set_disabled(self.settings.settings.plugins.disabled.iter().cloned());
+        if enabled {
+            let host = self.host.clone();
+            cx.spawn(async move |_, _| host.start_services().await).detach();
+        } else {
+            self.plugin_settings.remove(&plugin_id);
+            self.plugin_status.insert(plugin_id, PluginStatus::Stopped);
+        }
+        cx.notify();
+    }
+}
+
+/// A thread's permission mode: its own choice, else the default for new threads, else the
+/// catalog's default entry, else its first; ids the catalog doesn't have are skipped. `None`
+/// when there is no catalog.
+pub(crate) fn resolve_mode(entries: &[CatalogEntry], thread: Option<&str>, default: Option<&str>) -> Option<String> {
+    let known = |id: &&str| entries.iter().any(|e| e.id == *id);
+    thread
+        .filter(known)
+        .or(default.filter(known))
+        .map(str::to_string)
+        .or_else(|| entries.iter().find(|e| e.default).or(entries.first()).map(|e| e.id.clone()))
 }
 
 /// Switch a just-created session to `request`. When that fails (say the model is no longer
@@ -1054,5 +1270,24 @@ async fn apply_defaults(session: &Session, request: ConfigureSession) {
 impl Render for SpaceApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::view::render_root(self, window, cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CatalogEntry, resolve_mode};
+
+    #[test]
+    fn mode_resolution() {
+        let e = |id: &str, default: bool| CatalogEntry { id: id.into(), name: id.into(), default, ..Default::default() };
+        let modes = vec![e("read-only", false), e("workspace-write", true), e("full-access", false)];
+        assert_eq!(resolve_mode(&[], Some("read-only"), None), None);
+        assert_eq!(resolve_mode(&modes, None, None).as_deref(), Some("workspace-write"));
+        assert_eq!(resolve_mode(&modes, None, Some("read-only")).as_deref(), Some("read-only"));
+        assert_eq!(resolve_mode(&modes, Some("full-access"), Some("read-only")).as_deref(), Some("full-access"));
+        // Unknown ids fall through.
+        assert_eq!(resolve_mode(&modes, Some("gone"), Some("also-gone")).as_deref(), Some("workspace-write"));
+        let no_default = vec![e("a", false), e("b", false)];
+        assert_eq!(resolve_mode(&no_default, None, None).as_deref(), Some("a"));
     }
 }
