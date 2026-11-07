@@ -9,9 +9,11 @@
 //! wait 500            sleep 500 ms
 //! move 120 300        move the mouse to window coordinates (logical px)
 //! click 120 300       move + left mouse down + up
+//! scroll 400 300 -120 trackpad scroll at (400, 300) moving the view 120 px (negative: up)
 //! key cmd-n           dispatch a keystroke
 //! type some text      type text into the focused element
 //! resize 1280 820     resize the window (logical px)
+//! context             print the focused element's key context stack
 //! shot name           run `$SPACE_SHOT_CMD name` (e.g. a script calling `screencapture -l`)
 //! shotnow name        same as `shot` without the 250 ms settle delay (animation frames)
 //! quit                quit the app
@@ -86,6 +88,33 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                     });
                     cx.background_executor().timer(Duration::from_millis(16)).await;
                 }
+                "scroll" => {
+                    let position = point(px(num(0)), px(num(1)));
+                    // GPUI adds the delta to the offset, so content moving down = view moving up.
+                    let delta = ScrollDelta::Pixels(point(px(0.), px(-num(2))));
+                    let _ = window.update(cx, |_, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseMove(MouseMoveEvent {
+                                position,
+                                pressed_button: None,
+                                modifiers: Modifiers::default(),
+                            }),
+                            cx,
+                        );
+                        window.dispatch_event(
+                            PlatformInput::Scroll(ScrollEvent {
+                                position,
+                                delta,
+                                modifiers: Modifiers::default(),
+                                touch_phase: TouchPhase::Moved,
+                                source: ScrollSource::Pointer,
+                            }),
+                            cx,
+                        );
+                        window.refresh();
+                    });
+                    cx.background_executor().timer(Duration::from_millis(16)).await;
+                }
                 "key" => {
                     if let Some(k) = args.first().and_then(|k| Keystroke::parse(Box::leak(k.to_string().into_boxed_str())).ok()) {
                         let _ = window.update(cx, |_, window, cx| {
@@ -125,6 +154,12 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                 "size" => {
                     let _ = window.update(cx, |_, window, _| {
                         eprintln!("script: viewport {:?} scale {}", window.viewport_size(), window.scale_factor())
+                    });
+                }
+                "context" => {
+                    let _ = window.update(cx, |_, window, _| {
+                        let stack: Vec<String> = window.context_stack().iter().map(|c| format!("{c:?}")).collect();
+                        eprintln!("script: context {}", stack.join(" > "));
                     });
                 }
                 "quit" => {
