@@ -16,6 +16,8 @@ pub enum RowIndicator {
     Working,
     /// Waiting for a permission answer: yellow dot.
     NeedsInput,
+    /// A tool call waits for the guardrail (fail closed): yellow pause.
+    Paused,
     /// New reply since last viewed: blue dot.
     Unread,
     /// New error since last viewed: red dot.
@@ -23,10 +25,15 @@ pub enum RowIndicator {
 }
 
 impl RowIndicator {
-    /// Priority: waiting for input > working > unseen news. The selected row hides dots
-    /// (you are looking at it) but keeps showing work in progress.
+    /// Priority: paused > waiting for input > working > unseen news. The selected row hides
+    /// dots (you are looking at it) but keeps showing work in progress, and a pause.
     pub fn resolve(selected: bool, working: bool, needs_input: bool, unread: bool, failed: bool) -> Self {
+        Self::resolve_paused(false, selected, working, needs_input, unread, failed)
+    }
+
+    pub fn resolve_paused(paused: bool, selected: bool, working: bool, needs_input: bool, unread: bool, failed: bool) -> Self {
         match () {
+            _ if paused => Self::Paused,
             _ if needs_input && !selected => Self::NeedsInput,
             _ if working => Self::Working,
             _ if unread && !selected && failed => Self::UnreadError,
@@ -86,6 +93,12 @@ impl RenderOnce for ThreadRow {
             RowIndicator::None => None,
             RowIndicator::Working => Some(Dots::new().into_any_element()),
             RowIndicator::NeedsInput => Some(status_dot(color::yellow()).into_any_element()),
+            RowIndicator::Paused => Some(
+                gpui::component::Icon::new(gpui::assets::IconName::CirclePause)
+                    .size(size::ICON)
+                    .text_color(color::yellow())
+                    .into_any_element(),
+            ),
             RowIndicator::Unread => Some(status_dot(color::blue()).into_any_element()),
             RowIndicator::UnreadError => Some(status_dot(color::red()).into_any_element()),
         };
@@ -137,6 +150,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 row("working", |r| r.indicator(RowIndicator::Working)),
                 row("working, selected", |r| r.selected(true).indicator(RowIndicator::Working)),
                 row("unread", |r| r.indicator(RowIndicator::Unread)),
+                row("paused (waiting for the guardrail)", |r| r.indicator(RowIndicator::Paused)),
                 row("error", |r| r.indicator(RowIndicator::UnreadError)),
                 row("waiting for input", |r| r.indicator(RowIndicator::NeedsInput)),
             ]),

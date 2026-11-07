@@ -11,8 +11,12 @@
 //! capability, not by plugin id:
 //!
 //! * `_space/tools/preExecute` from an agent runs the `tools/pre-execute` hook chain (lowest
-//!   `order` first). `deny` stops it; `ask` is remembered and the user is asked after the last
-//!   listener; `allow`/`next` pass on. A listener that fails or times out counts as `ask`.
+//!   `order` first). `deny` wins; `ask` is remembered and the user is asked after the last
+//!   listener; `allow`/`next` pass on. A listener that answers `unavailable`, fails, times out
+//!   or isn't running **holds** the call (fail closed): the agent waits, and the whole chain
+//!   runs again when a listener sends `hooks/ready`, a service (re)starts, the session's mode
+//!   changes, or every [`HostOptions::held_recheck`]; stopping the turn ends the wait.
+//! * `required` service plugins can't be turned off.
 //! * `_space/sandbox/confine` goes to the `sandbox` provider (none: the argv is unchanged; a
 //!   failing provider: an error, so the agent doesn't spawn).
 //! * Before each prompt, every `context` provider adds hidden sections (`_meta`).
@@ -48,8 +52,14 @@ use crate::session::{
     PermissionDecision, PermissionKind, PermissionOption, PermissionRequest, SessionEvent, SessionId, ToolCallPatch,
 };
 
-/// How long one hook listener may take before the call is put to the user.
-const HOOK_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long one hook listener may take before the call is held. Generous: a listener may
+/// retry a slow network call within it.
+const HOOK_TIMEOUT: Duration = Duration::from_secs(15);
+/// `settings/validate` may reach the network.
+const VALIDATE_TIMEOUT: Duration = Duration::from_secs(20);
+/// This many crashes within [`CRASH_WINDOW`] and a held call says the plugin keeps crashing.
+const CRASH_LIMIT: usize = 3;
+const CRASH_WINDOW: Duration = Duration::from_secs(300);
 /// Other service calls (confine, context, catalogs, settings).
 const SERVICE_TIMEOUT: Duration = Duration::from_secs(5);
 /// A service that exited is restarted on next use, at most this often.
@@ -114,14 +124,38 @@ pub struct HostOptions {
     pub discovery: DiscoveryOptions,
     /// Where plugin secrets live.
     pub secrets: Secrets,
+    /// A held tool call runs the hook chain again at least this often (in case no listener
+    /// says when it's ready, e.g. a crashed plugin to restart).
+    pub held_recheck: Duration,
 }
+
+/// Default of [`HostOptions::held_recheck`].
+pub const HELD_RECHECK: Duration = Duration::from_secs(10);
 
 impl HostOptions {
     /// Standard discovery locations for `project_dir`.
     pub fn for_project(project_dir: impl Into<PathBuf>) -> Self {
         let project_dir = project_dir.into();
-        Self { discovery: DiscoveryOptions::standard(Some(&project_dir)), project_dir, secrets: Secrets::default() }
+        Self {
+            discovery: DiscoveryOptions::standard(Some(&project_dir)),
+            project_dir,
+            secrets: Secrets::default(),
+            held_recheck: HELD_RECHECK,
+        }
     }
+}
+
+/// Why a plugin setting wasn't saved.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SettingError {
+    /// The plugin rejected the value; nothing was stored.
+    #[error("{0}")]
+    Invalid(String),
+    /// The plugin couldn't check the value right now; save again with `force` to keep it.
+    #[error("{0}")]
+    Unverifiable(String),
+    #[error("{0}")]
+    Failed(String),
 }
 
 /// The plugin host. Cheap to clone.
@@ -149,6 +183,8 @@ struct HostInner {
     catalogs: Mutex<HashMap<String, Vec<CatalogEntry>>>,
     /// What the pipeline knows of each session.
     sessions: Mutex<HashMap<SessionId, SessionMeta>>,
+    /// Recent crash times by service id.
+    crashes: Mutex<HashMap<String, VecDeque<Instant>>>,
 }
 
 /// A running service plugin.
@@ -172,6 +208,22 @@ struct SessionMeta {
     /// The permission mode chosen for the session (`None`: the catalog's default).
     mode: Option<String>,
     history: VecDeque<HistoryItem>,
+    signals: HoldSignals,
+}
+
+/// What a held call of a session waits on.
+#[derive(Clone, Default)]
+struct HoldSignals {
+    /// Run the chain again now.
+    wake: Arc<tokio::sync::Notify>,
+    /// Bumped when the user stops the turn: held calls give up.
+    stops: Arc<AtomicU64>,
+}
+
+impl SessionMeta {
+    fn new(cwd: PathBuf) -> Self {
+        Self { cwd, mode: None, history: VecDeque::new(), signals: HoldSignals::default() }
+    }
 }
 
 impl Host {
@@ -191,6 +243,7 @@ impl Host {
                 text_settings: Mutex::new(HashMap::new()),
                 catalogs: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashMap::new()),
+                crashes: Mutex::new(HashMap::new()),
             }),
         };
         host.discover();
@@ -226,9 +279,11 @@ impl Host {
     }
 
     /// Turn plugins off (by id); every other plugin is on. Disabled services stop at once,
-    /// and their hooks, seams, catalogs and context go with them.
+    /// and their hooks, seams, catalogs and context go with them. `required` plugins stay on.
     pub fn set_disabled(&self, ids: impl IntoIterator<Item = String>) {
-        let ids: HashSet<String> = ids.into_iter().collect();
+        let required: HashSet<String> =
+            self.plugins().into_iter().filter(|p| p.manifest.required).map(|p| p.id().to_string()).collect();
+        let ids: HashSet<String> = ids.into_iter().filter(|id| !required.contains(id)).collect();
         *self.inner.disabled.lock().unwrap() = ids.clone();
         for id in ids {
             self.inner.stop_service(&id);
@@ -262,6 +317,25 @@ impl Host {
         self.inner.rt.spawn(async move { inner.service(&id).await.map(|_| ()) }).await?.map_err(|e| anyhow!(e))
     }
 
+    /// "Retry now" on a blocker of `plugin_id`: tell it (starting it first if it isn't
+    /// running), and run held calls through the chain again.
+    pub async fn retry_plugin(&self, plugin_id: &str) {
+        let inner = self.inner.clone();
+        let id = plugin_id.to_string();
+        let _ = self
+            .inner
+            .rt
+            .spawn(async move {
+                inner.started_at.lock().unwrap().remove(&id);
+                match inner.service(&id).await {
+                    Ok(service) => service.peer.notify(svc::PLUGIN_RETRY, serde_json::json!({})),
+                    Err(e) => tracing::warn!("retry `{id}`: {e}"),
+                }
+                inner.wake_held();
+            })
+            .await;
+    }
+
     /// The entries of catalog `name` (empty until its provider has started).
     pub fn catalog(&self, name: &str) -> Vec<CatalogEntry> {
         self.inner.catalogs.lock().unwrap().get(name).cloned().unwrap_or_default()
@@ -278,27 +352,58 @@ impl Host {
         service.map(|s| self.inner.setting_states(&s)).unwrap_or_default()
     }
 
-    /// Change one setting of a service plugin (`None` clears it). Secrets go to the Keychain;
-    /// a text value is kept for the plugin (the app persists it). The plugin is told every
-    /// setting's new value.
-    pub async fn set_setting(&self, plugin_id: &str, key: &str, value: Option<String>) -> Result<()> {
+    /// Change one setting of a service plugin (`None` clears it). A new value is first checked
+    /// by the plugin (`settings/validate`): an invalid one isn't stored, and one that couldn't
+    /// be checked is stored only with `force`. Secrets go to the Keychain; a text value is kept
+    /// for the plugin (the app persists it). The plugin is told every setting's new value.
+    pub async fn set_setting(
+        &self,
+        plugin_id: &str,
+        key: &str,
+        value: Option<String>,
+        force: bool,
+    ) -> Result<(), SettingError> {
         let inner = self.inner.clone();
         let (plugin_id, key) = (plugin_id.to_string(), key.to_string());
+        let failed = |e: anyhow::Error| SettingError::Failed(format!("{e:#}"));
         self.inner
             .rt
             .spawn(async move {
-                let service = inner.service(&plugin_id).await.map_err(|e| anyhow!(e))?;
+                let service = inner.service(&plugin_id).await.map_err(SettingError::Failed)?;
                 let field = service
                     .fields
                     .iter()
                     .find(|f| f.key == key)
-                    .with_context(|| format!("`{plugin_id}` has no setting `{key}`"))?;
+                    .ok_or_else(|| SettingError::Failed(format!("`{plugin_id}` has no setting `{key}`")))?;
                 let value = value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+                if let Some(v) = &value {
+                    let check = svc::SettingCheck { key: key.clone(), value: v.clone() };
+                    match service.peer.call::<_, svc::SettingVerdict>(svc::SETTINGS_VALIDATE, &check, Some(VALIDATE_TIMEOUT)).await {
+                        Ok(verdict) => match verdict.status {
+                            svc::SettingStatus::Ok => {}
+                            svc::SettingStatus::Invalid => {
+                                return Err(SettingError::Invalid(verdict.message.unwrap_or_else(|| "Not accepted.".into())));
+                            }
+                            svc::SettingStatus::Unverifiable if !force => {
+                                let message = verdict.message.unwrap_or_else(|| "It couldn't be checked right now.".into());
+                                return Err(SettingError::Unverifiable(message));
+                            }
+                            svc::SettingStatus::Unverifiable => {}
+                        },
+                        // A plugin that doesn't validate accepts everything.
+                        Err(e) if e.code == RpcError::METHOD_NOT_FOUND => {}
+                        Err(e) if force => tracing::warn!("validating `{plugin_id}`.{key}: {e}"),
+                        Err(e) => return Err(SettingError::Unverifiable(format!("It couldn't be checked ({}).", e.message))),
+                    }
+                }
                 match field.kind {
                     SettingKind::Secret => {
                         let secrets = inner.options.secrets.clone();
                         let (id, k, v) = (plugin_id.clone(), key.clone(), value.clone());
-                        tokio::task::spawn_blocking(move || secrets.set(&id, &k, v.as_deref())).await??;
+                        tokio::task::spawn_blocking(move || secrets.set(&id, &k, v.as_deref()))
+                            .await
+                            .map_err(|e| failed(anyhow!(e)))?
+                            .map_err(failed)?;
                     }
                     SettingKind::Text => {
                         let mut text = inner.text_settings.lock().unwrap();
@@ -309,15 +414,16 @@ impl Host {
                         };
                     }
                 }
-                let values = inner.setting_values(&service).await;
-                service.peer.notify(svc::SETTINGS_CHANGED, svc::SettingsChanged { values });
+                let (values, unreadable) = inner.setting_values(&service).await;
+                service.peer.notify(svc::SETTINGS_CHANGED, svc::SettingsChanged { values, unreadable });
                 inner.emit(HostEvent::PluginSettings {
                     plugin_id: plugin_id.clone(),
                     settings: inner.setting_states(&service),
                 });
                 Ok(())
             })
-            .await?
+            .await
+            .map_err(|e| failed(anyhow!(e)))?
     }
 
     /// Spawn an `agent` plugin and complete the ACP `initialize` handshake.
@@ -446,7 +552,11 @@ impl HostInner {
                 move |kind, tail| {
                     exit_dead.store(true, Ordering::SeqCst);
                     if let Some(host) = exit_weak.upgrade() {
-                        host.emit_status(&exit_id, exit_status(kind, &tail));
+                        let status = exit_status(kind, &tail);
+                        if matches!(status, PluginStatus::Crashed(_)) {
+                            host.crashed(&exit_id);
+                        }
+                        host.emit_status(&exit_id, status);
                     }
                 },
             )?
@@ -456,11 +566,14 @@ impl HostInner {
         let on_notification: rpc::NotificationHandler = {
             let (weak, id) = (Arc::downgrade(self), plugin_id.clone());
             Arc::new(move |method: String, _params| {
-                if method == svc::CATALOG_CHANGED
-                    && let Some(host) = weak.upgrade()
-                {
-                    let id = id.clone();
-                    host.rt.clone().spawn(async move { host.refresh_catalogs(&id).await });
+                let Some(host) = weak.upgrade() else { return };
+                match method.as_str() {
+                    svc::CATALOG_CHANGED => {
+                        let id = id.clone();
+                        host.rt.clone().spawn(async move { host.refresh_catalogs(&id).await });
+                    }
+                    svc::HOOKS_READY => host.wake_held(),
+                    _ => {}
                 }
             })
         };
@@ -481,8 +594,8 @@ impl HostInner {
             Vec::new()
         };
         let mut service = Service { plugin, peer, _process: process, dead, fields };
-        let settings = self.setting_values(&service).await;
-        let init = svc::Initialize { protocol_version: svc::PROTOCOL_VERSION, settings };
+        let (settings, unreadable) = self.setting_values(&service).await;
+        let init = svc::Initialize { protocol_version: svc::PROTOCOL_VERSION, settings, unreadable };
         let _: svc::Initialized = service
             .peer
             .call(svc::INITIALIZE, &init, Some(SERVICE_TIMEOUT))
@@ -495,6 +608,8 @@ impl HostInner {
         if !service.fields.is_empty() {
             self.emit(HostEvent::PluginSettings { plugin_id, settings: self.setting_states(&service) });
         }
+        // A (re)started listener may decide calls held while it wasn't running.
+        self.wake_held();
         Ok(service)
     }
 
@@ -513,9 +628,11 @@ impl HostInner {
         }
     }
 
-    /// Every set setting of `service`: text values, and secrets read from the Keychain.
-    async fn setting_values(&self, service: &Service) -> SettingValues {
+    /// Every set setting of `service` (text values, and secrets read from the Keychain), and
+    /// the secrets that couldn't be read.
+    async fn setting_values(&self, service: &Service) -> (SettingValues, Vec<String>) {
         let mut values = SettingValues::new();
+        let mut unreadable = Vec::new();
         let text = self.text_settings.lock().unwrap().get(service.plugin.id()).cloned().unwrap_or_default();
         for field in &service.fields {
             let value = match field.kind {
@@ -526,6 +643,7 @@ impl HostInner {
                         Ok(Ok(v)) => v,
                         Ok(Err(e)) => {
                             tracing::warn!("{e:#}");
+                            unreadable.push(field.key.clone());
                             None
                         }
                         Err(_) => None,
@@ -536,7 +654,7 @@ impl HostInner {
                 values.insert(field.key.clone(), v);
             }
         }
-        values
+        (values, unreadable)
     }
 
     fn setting_states(&self, service: &Service) -> Vec<SettingState> {
@@ -570,6 +688,31 @@ impl HostInner {
     }
 
     // ----- sessions and the pipeline ---------------------------------------------------
+
+    fn crashed(&self, plugin_id: &str) {
+        let mut crashes = self.crashes.lock().unwrap();
+        let times = crashes.entry(plugin_id.to_string()).or_default();
+        times.push_back(Instant::now());
+        while times.front().is_some_and(|t| t.elapsed() > CRASH_WINDOW) || times.len() > CRASH_LIMIT {
+            times.pop_front();
+        }
+    }
+
+    fn keeps_crashing(&self, plugin_id: &str) -> bool {
+        let crashes = self.crashes.lock().unwrap();
+        crashes.get(plugin_id).is_some_and(|t| t.iter().filter(|t| t.elapsed() <= CRASH_WINDOW).count() >= CRASH_LIMIT)
+    }
+
+    /// Run every held call through the chain again.
+    fn wake_held(&self) {
+        for meta in self.sessions.lock().unwrap().values() {
+            meta.signals.wake.notify_waiters();
+        }
+    }
+
+    fn signals(&self, session_id: &str) -> HoldSignals {
+        self.sessions.lock().unwrap().get(session_id).map(|m| m.signals.clone()).unwrap_or_default()
+    }
 
     /// The session's mode (or the catalog default), project root and history.
     fn session_facts(&self, session_id: &str) -> (String, String, Vec<HistoryItem>) {
@@ -640,67 +783,131 @@ fn exit_status(kind: ExitKind, tail: &[String]) -> PluginStatus {
     }
 }
 
-/// `_space/tools/preExecute`: run the hook chain, ask the user if a listener said so.
+/// One pass through the `tools/pre-execute` chain.
+enum Pass {
+    Allow,
+    Deny(String),
+    /// Ask the user, with the listeners' reasons.
+    Ask(Vec<String>),
+    /// A listener can't decide right now: wait.
+    Hold(String),
+}
+
+/// Every listener, in order. A deny wins over a hold, a hold over asks.
+async fn run_chain(host: &Arc<HostInner>, hook: &svc::HookCall) -> Pass {
+    let (mut asks, mut hold) = (Vec::new(), None);
+    for plugin in host.hook_listeners(HOOK_TOOLS_PRE_EXECUTE) {
+        let name = &plugin.manifest.name;
+        match host.call_service::<_, svc::HookDecision>(plugin.id(), svc::HOOK_PRE_EXECUTE, hook, HOOK_TIMEOUT).await {
+            Ok(d) => match d.decision {
+                svc::HookVerdict::Deny => {
+                    tracing::info!("{} {}: denied by {}", hook.call.tool, hook.call.id, plugin.id());
+                    return Pass::Deny(d.reason.unwrap_or_else(|| format!("Blocked by {name}.")));
+                }
+                svc::HookVerdict::Ask => asks.push(d.reason.unwrap_or_else(|| format!("{name} wants you to check this call."))),
+                svc::HookVerdict::Unavailable => {
+                    hold.get_or_insert(d.reason.unwrap_or_else(|| format!("{name} can't check tool calls right now.")));
+                }
+                svc::HookVerdict::Allow | svc::HookVerdict::Next => {}
+            },
+            Err(e) => {
+                let reason = if host.keeps_crashing(plugin.id()) {
+                    format!("The {name} plugin keeps crashing, so tool calls can't be checked. See the logs.")
+                } else {
+                    format!("The {name} plugin couldn't check this call ({e}).")
+                };
+                hold.get_or_insert(reason);
+            }
+        }
+    }
+    match hold {
+        Some(reason) => Pass::Hold(reason),
+        None if asks.is_empty() => Pass::Allow,
+        None => Pass::Ask(asks),
+    }
+}
+
+/// `_space/tools/preExecute`: run the hook chain; hold the call while a listener can't decide;
+/// ask the user if a listener said so.
 async fn pre_execute(shared: Arc<Shared>, req: PreExecute) -> PreExecuteResult {
     let host = shared.host.clone();
     let session_id = req.session_id.clone();
-    let (mode, root, history) = host.session_facts(&session_id);
-    let call = svc::ToolCallFacts {
-        id: req.tool_call_id.clone(),
-        tool: req.tool.clone(),
-        kind: req.kind.clone(),
-        args: req.args.clone(),
-        cwd: req.cwd.clone().unwrap_or_else(|| root.clone()),
+    let title = call_title(&req.tool, &req.args);
+    let signals = host.signals(&session_id);
+    let stops = signals.stops.load(Ordering::SeqCst);
+    let stopped = || signals.stops.load(Ordering::SeqCst) != stops;
+    let held = |reason: Option<String>| {
+        host.emit_session(&session_id, SessionEvent::ToolCallHeld { id: req.tool_call_id.clone(), title: title.clone(), reason })
     };
-    let hook = svc::HookCall { session_id: session_id.clone(), mode, project_root: root, call: call.clone(), history };
+    let mut held_for: Option<String> = None;
+    let (pass, call) = loop {
+        // Listen before running the chain, so a wake-up during it isn't lost.
+        let wake = signals.wake.notified();
+        tokio::pin!(wake);
+        wake.as_mut().enable();
+        // Facts are read on every pass: the mode may have changed while the call was held.
+        let (mode, root, history) = host.session_facts(&session_id);
+        let call = svc::ToolCallFacts {
+            id: req.tool_call_id.clone(),
+            tool: req.tool.clone(),
+            kind: req.kind.clone(),
+            args: req.args.clone(),
+            cwd: req.cwd.clone().unwrap_or_else(|| root.clone()),
+        };
+        let hook = svc::HookCall { session_id: session_id.clone(), mode, project_root: root, call: call.clone(), history };
+        let pass = run_chain(&host, &hook).await;
+        let Pass::Hold(reason) = pass else { break (pass, call) };
+        if stopped() {
+            break (Pass::Hold(reason), call);
+        }
+        if held_for.as_ref() != Some(&reason) {
+            tracing::info!("{} {}: held: {reason}", req.tool, req.tool_call_id);
+            held(Some(reason.clone()));
+            held_for = Some(reason);
+        }
+        tokio::select! {
+            () = &mut wake => {}
+            () = tokio::time::sleep(host.options.held_recheck) => {}
+        }
+        if stopped() {
+            break (Pass::Hold(String::new()), call);
+        }
+    };
+    if held_for.is_some() {
+        held(None);
+    }
     let record = |allowed: bool| {
         host.record(
             &session_id,
             HistoryItem::Tool { id: call.id.clone(), tool: call.tool.clone(), kind: call.kind.clone(), args: call.args.clone(), allowed },
         )
     };
-    let mut asks = Vec::new();
-    for plugin in host.hook_listeners(HOOK_TOOLS_PRE_EXECUTE) {
-        let name = plugin.manifest.name.clone();
-        match host.call_service::<_, svc::HookDecision>(plugin.id(), svc::HOOK_PRE_EXECUTE, &hook, HOOK_TIMEOUT).await {
-            Ok(d) => match d.decision {
-                svc::HookVerdict::Deny => {
-                    record(false);
-                    let reason = d.reason.unwrap_or_else(|| format!("Blocked by {name}."));
-                    tracing::info!("{} {}: denied by {}: {reason}", req.tool, req.tool_call_id, plugin.id());
-                    host.emit_session(&session_id, SessionEvent::ToolCallBlocked { id: req.tool_call_id.clone(), reason: reason.clone() });
-                    return PreExecuteResult { decision: Verdict::Deny, reason: Some(reason) };
-                }
-                svc::HookVerdict::Ask => asks.push(d.reason.unwrap_or_else(|| format!("{name} wants you to check this call."))),
-                svc::HookVerdict::Allow | svc::HookVerdict::Next => {}
-            },
-            Err(e) => asks.push(format!("{name} couldn't check this call ({e}).")),
+    let block = |reason: String| {
+        host.emit_session(&session_id, SessionEvent::ToolCallBlocked { id: req.tool_call_id.clone(), reason: reason.clone() });
+        PreExecuteResult { decision: Verdict::Deny, reason: Some(reason) }
+    };
+    let asks = match pass {
+        Pass::Allow => {
+            record(true);
+            return PreExecuteResult { decision: Verdict::Allow, reason: None };
         }
-    }
-    if asks.is_empty() {
-        record(true);
-        return PreExecuteResult { decision: Verdict::Allow, reason: None };
-    }
+        Pass::Deny(reason) => {
+            record(false);
+            return block(reason);
+        }
+        // Only when the user stopped the turn while the call was held.
+        Pass::Hold(_) => return PreExecuteResult { decision: Verdict::Deny, reason: Some("The turn was stopped.".into()) },
+        Pass::Ask(asks) => asks,
+    };
     let options = vec![
         PermissionOption { id: ASK_ALLOW.into(), name: "Allow once".into(), kind: PermissionKind::AllowOnce },
         PermissionOption { id: ASK_REJECT.into(), name: "Reject".into(), kind: PermissionKind::RejectOnce },
     ];
-    let patch = ToolCallPatch {
-        id: req.tool_call_id.clone(),
-        title: Some(call_title(&req.tool, &req.args)),
-        kind: Some(req.kind.clone()),
-        ..Default::default()
-    };
+    let patch = ToolCallPatch { id: req.tool_call_id.clone(), title: Some(title.clone()), kind: Some(req.kind.clone()), ..Default::default() };
     let rx = shared.request_permission(&session_id, patch, options, Some(asks.join(" ")));
     let allowed = matches!(rx.await, Ok(PermissionDecision::Selected(id)) if id == ASK_ALLOW);
     record(allowed);
-    if allowed {
-        PreExecuteResult { decision: Verdict::Allow, reason: None }
-    } else {
-        let reason = "The user didn't allow this call.".to_string();
-        host.emit_session(&session_id, SessionEvent::ToolCallBlocked { id: req.tool_call_id.clone(), reason: reason.clone() });
-        PreExecuteResult { decision: Verdict::Deny, reason: Some(reason) }
-    }
+    if allowed { PreExecuteResult { decision: Verdict::Allow, reason: None } } else { block("The user didn't allow this call.".into()) }
 }
 
 /// `bash: ls -la`, `read: src/main.rs`.
@@ -986,7 +1193,7 @@ impl AgentHandle {
             })
             .await??;
         let id = response.session_id.0.to_string();
-        host.sessions.lock().unwrap().insert(id.clone(), SessionMeta { cwd: cwd.clone(), mode: None, history: VecDeque::new() });
+        host.sessions.lock().unwrap().insert(id.clone(), SessionMeta::new(cwd.clone()));
         host.emit_session(&id, SessionEvent::Created { plugin_id: self.inner.plugin_id.clone(), cwd });
         let inner = SessionInner { id, agent: self.clone(), running: AtomicBool::new(false) };
         Ok(Session { inner: Arc::new(inner) })
@@ -1030,11 +1237,16 @@ impl Session {
     }
 
     /// Set the session's permission mode (an entry id of the `permission-modes` catalog).
-    /// Takes effect for the next tool call, also mid-turn.
+    /// Takes effect for the next tool call, also mid-turn; held calls are checked again under
+    /// the new mode.
     pub fn set_permission_mode(&self, mode: impl Into<String>) {
+        let mode = mode.into();
         let host = &self.inner.agent.inner.shared.host;
-        if let Some(meta) = host.sessions.lock().unwrap().get_mut(&self.inner.id) {
-            meta.mode = Some(mode.into());
+        if let Some(meta) = host.sessions.lock().unwrap().get_mut(&self.inner.id)
+            && meta.mode.as_ref() != Some(&mode)
+        {
+            meta.mode = Some(mode);
+            meta.signals.wake.notify_waiters();
         }
     }
 
@@ -1114,6 +1326,9 @@ impl Session {
     /// requests for this session are answered with `cancelled`, as ACP requires.
     pub fn cancel(&self) -> Result<()> {
         let agent = &self.inner.agent.inner;
+        let signals = agent.shared.host.signals(&self.inner.id);
+        signals.stops.fetch_add(1, Ordering::SeqCst);
+        signals.wake.notify_waiters();
         agent.shared.cancel_permissions(&self.inner.id);
         agent
             .conn

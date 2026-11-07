@@ -1,7 +1,9 @@
 //! The three permission modes: their catalog entries, the hidden context line each adds to a
 //! prompt, and the Read Only rule for file tools.
 
-use space_plugin::protocol::service::{Blocker, CatalogEntry, ContextSection, HookDecision, ToolCallFacts};
+use space_plugin::protocol::service::{Blocker, BlockerAction, CatalogEntry, ContextSection, HookDecision, ToolCallFacts};
+
+use crate::health::{BILLING_URL, Health, State, unix_ms};
 
 pub const READ_ONLY: &str = "read-only";
 pub const WORKSPACE_WRITE: &str = "workspace-write";
@@ -10,15 +12,42 @@ pub const FULL_ACCESS: &str = "full-access";
 /// The mode the Settings page's field is named after.
 pub const API_KEY: &str = "openai_api_key";
 
-/// The modes, in menu order. Workspace Write and Full access need the decision model's key.
-pub fn catalog(has_key: bool) -> Vec<CatalogEntry> {
-    let needs_key = |mut e: CatalogEntry| {
-        if !has_key {
+/// The name of a mode id, for messages.
+pub fn mode_name(id: &str) -> &'static str {
+    match id {
+        READ_ONLY => "Read Only",
+        FULL_ACCESS => "Full access",
+        _ => "Workspace Write",
+    }
+}
+
+/// What a blocker offers in each state: a way to fix it, "Retry now" where a retry can help,
+/// and Read Only (which needs no key) as the way out.
+fn actions(health: &Health) -> Vec<BlockerAction> {
+    let settings = |label: &str| BlockerAction::new(label, "open-settings:permissions");
+    let retry = BlockerAction::new("Retry now", "retry:permissions");
+    let read_only = BlockerAction::new("Use Read Only", format!("use-mode:{READ_ONLY}"));
+    match health.state {
+        State::Healthy | State::Checking => Vec::new(),
+        State::NotSet => vec![settings("Open Settings"), read_only],
+        State::KeyRejected => vec![settings("Update key"), retry, read_only],
+        State::NoAccess => vec![settings("Open Settings"), retry, read_only],
+        State::NoCredit => vec![BlockerAction::new("Open billing", format!("open-url:{BILLING_URL}")), retry, read_only],
+        State::Unreachable | State::Incompatible => vec![retry, read_only],
+    }
+}
+
+/// The modes, in menu order. Workspace Write and Full access can be used only while the
+/// decision model can (`health`); until then they carry a blocker saying why.
+pub fn catalog(health: &Health) -> Vec<CatalogEntry> {
+    let needs_model = |mut e: CatalogEntry| {
+        if let Some(text) = health.problem(&e.name) {
             e.ready = false;
             e.blocker = Some(Blocker {
-                text: format!("{} needs the decision model. Add an OpenAI API key to use it.", e.name),
-                action_label: Some("Open Settings".into()),
-                action: Some("open-settings:permissions".into()),
+                text,
+                actions: actions(health),
+                last_attempt_ms: health.last_attempt.map(unix_ms),
+                next_attempt_ms: health.next_attempt.map(unix_ms),
             });
         }
         e
@@ -34,7 +63,7 @@ pub fn catalog(has_key: bool) -> Vec<CatalogEntry> {
             ready: true,
             ..Default::default()
         },
-        needs_key(CatalogEntry {
+        needs_model(CatalogEntry {
             id: WORKSPACE_WRITE.into(),
             name: "Workspace Write".into(),
             icon: Some("shield-half".into()),
@@ -45,7 +74,7 @@ pub fn catalog(has_key: bool) -> Vec<CatalogEntry> {
             ready: true,
             ..Default::default()
         }),
-        needs_key(CatalogEntry {
+        needs_model(CatalogEntry {
             id: FULL_ACCESS.into(),
             name: "Full access".into(),
             icon: Some("shield-alert".into()),
@@ -103,13 +132,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_readiness_follows_the_key() {
-        let without = catalog(false);
+    fn catalog_readiness_follows_health() {
+        use std::time::{Duration, UNIX_EPOCH};
+
+        use crate::health::Failure;
+
+        let now = UNIX_EPOCH + Duration::from_secs(1000);
+        let without = catalog(&Health::new(false, false, now));
         assert_eq!(without.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), [READ_ONLY, WORKSPACE_WRITE, FULL_ACCESS]);
         assert!(without[0].ready && !without[1].ready && !without[2].ready);
-        assert_eq!(without[1].blocker.as_ref().unwrap().action.as_deref(), Some("open-settings:permissions"));
+        let b = without[1].blocker.as_ref().unwrap();
+        assert_eq!(b.actions[0].action, "open-settings:permissions");
+        assert!(b.text.starts_with("Workspace Write checks every action with OpenAI"), "{}", b.text);
         assert!(without[1].default && without[2].confirm.is_some());
-        assert!(catalog(true).iter().all(|e| e.ready && e.blocker.is_none()));
+
+        let mut h = Health::new(true, false, now);
+        h.failure(&Failure::new(State::NoCredit, "quota"), now, Duration::from_secs(300));
+        let entries = catalog(&h);
+        let b = entries[2].blocker.as_ref().unwrap();
+        assert!(b.text.contains("out of credit"));
+        let actions: Vec<&str> = b.actions.iter().map(|a| a.action.as_str()).collect();
+        assert_eq!(actions, [format!("open-url:{BILLING_URL}").as_str(), "retry:permissions", "use-mode:read-only"]);
+        assert_eq!((b.last_attempt_ms, b.next_attempt_ms), (Some(1_000_000), Some(1_300_000)));
+
+        h.success(now);
+        assert!(catalog(&h).iter().all(|e| e.ready && e.blocker.is_none()));
     }
 
     #[test]

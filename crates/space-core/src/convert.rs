@@ -36,6 +36,7 @@ pub(crate) fn tool_call(call: acp::ToolCall) -> ToolCallInfo {
         output: tool_output(&call.content),
         locations: call.locations.iter().map(|l| l.path.display().to_string()).collect(),
         blocked: None,
+        held: None,
     }
 }
 

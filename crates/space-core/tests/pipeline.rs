@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use space_core::protocol::service::SettingKind;
 use space_core::{
-    DiscoveryOptions, EventReceiver, Host, HostEvent, HostOptions, PermissionDecision, PluginStatus, Secrets,
+    SettingError, DiscoveryOptions, EventReceiver, Host, HostEvent, HostOptions, PermissionDecision, PluginStatus, Secrets,
     SessionEvent, SessionState, ToolCallInfo, TranscriptItem,
 };
 
@@ -16,13 +16,23 @@ const TEST_KEYCHAIN: &str = "dev.brijesh.space.test";
 
 /// A plugin root with the stub agent and one stub guard per `(id, manifest extras, config)`.
 fn root(guards: &[(&str, &str, &str)]) -> tempfile::TempDir {
+    root_with_script(guards, None)
+}
+
+/// Like [`root`], with the stub agent playing `script` (a [`space_core::stub_script`] JSON).
+fn root_with_script(guards: &[(&str, &str, &str)], script: Option<&str>) -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     let write = |dir: &str, manifest: String| {
         let d = tmp.path().join(dir);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("space-plugin.toml"), manifest).unwrap();
     };
-    write("stub", format!("id='stub'\nname='Stub'\nversion='1'\nprovides=['agent']\n[run]\ncommand='{STUB}'\n"));
+    let env = script.map_or(String::new(), |json| {
+        let path = tmp.path().join("script.json");
+        std::fs::write(&path, json).unwrap();
+        format!("[run.env]\nSPACE_STUB_SCRIPT='{}'\n", path.display())
+    });
+    write("stub", format!("id='stub'\nname='Stub'\nversion='1'\nprovides=['agent']\n[run]\ncommand='{STUB}'\n{env}"));
     for (id, extras, config) in guards {
         write(
             id,
@@ -35,12 +45,26 @@ fn root(guards: &[(&str, &str, &str)]) -> tempfile::TempDir {
 }
 
 fn host(root: &Path) -> (Host, EventReceiver) {
+    host_rechecking(root, Duration::from_secs(60))
+}
+
+/// A host whose held calls run the chain again every `recheck` (else only when woken).
+fn host_rechecking(root: &Path, recheck: Duration) -> (Host, EventReceiver) {
     let options = HostOptions {
         project_dir: root.to_path_buf(),
         discovery: DiscoveryOptions { bundled_roots: vec![root.to_path_buf()], user_root: None, project_root: None },
         secrets: Secrets::new(TEST_KEYCHAIN),
+        held_recheck: recheck,
     };
     Host::new(tokio::runtime::Handle::current(), options)
+}
+
+fn held(e: &HostEvent) -> bool {
+    matches!(e, HostEvent::Session { event: SessionEvent::ToolCallHeld { reason: Some(_), .. }, .. })
+}
+
+fn released(e: &HostEvent) -> bool {
+    matches!(e, HostEvent::Session { event: SessionEvent::ToolCallHeld { reason: None, .. }, .. })
 }
 
 /// Wait for an event matching `pred`, folding session events into `state`.
@@ -179,8 +203,47 @@ async fn a_later_deny_wins_over_an_earlier_ask_and_order_counts() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_failing_listener_fails_closed_to_the_user() {
-    let root = root(&[("guard", HOOK, r#"{"decision":"crash"}"#)]);
+async fn a_crashing_listener_holds_the_call_until_it_runs_again() {
+    // Case 13: the guard exits on every call until `ok` exists. The call waits (never asks),
+    // the reason turns to "keeps crashing" after repeated crashes, and the call goes through
+    // once the guard runs again.
+    let tmp = tempfile::tempdir().unwrap();
+    let ok = tmp.path().join("ok");
+    let config = format!(r#"{{"decision":"allow","crashUntil":"{}"}}"#, ok.display());
+    let manifest = format!("{HOOK}\nrequired=true");
+    let root = root(&[("guard", &manifest, &config)]);
+    let (host, mut events) = host_rechecking(root.path(), Duration::from_millis(300));
+    host.start_services().await;
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.new_session(root.path()).await.unwrap();
+    let mut state = SessionState::new(session.id());
+    let s = session.clone();
+    let turn = tokio::spawn(async move { s.prompt("hello").await });
+    until(&mut events, &mut state, held).await;
+    assert!(state.held().unwrap().contains("couldn't check this call"), "{:?}", state.held());
+    // Restarts are 3 s apart; after the third crash the reason says so.
+    let keeps = |e: &HostEvent| {
+        matches!(e, HostEvent::Session { event: SessionEvent::ToolCallHeld { reason: Some(r), .. }, .. } if r.contains("keeps crashing"))
+    };
+    tokio::time::timeout(Duration::from_secs(30), until(&mut events, &mut state, keeps)).await.expect("keeps crashing");
+    assert!(state.pending_permission().is_none(), "a failing guard never asks");
+    // A required guard can't be turned off.
+    host.set_disabled(["guard".to_string()]);
+    assert!(!host.is_disabled("guard"));
+    std::fs::write(&ok, "").unwrap();
+    tokio::time::timeout(Duration::from_secs(30), until(&mut events, &mut state, turn_ended)).await.expect("turn ended");
+    turn.await.unwrap().unwrap();
+    assert_eq!(tool(&state).status, space_core::ToolStatus::Completed);
+    assert_eq!(state.held(), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_held_call_resumes_when_the_listener_is_ready() {
+    // `hooks/ready` releases it at once (the recheck interval here is a minute).
+    let tmp = tempfile::tempdir().unwrap();
+    let ready = tmp.path().join("ready");
+    let config = format!(r#"{{"decision":"allow","reason":"key rejected","readyFile":"{}"}}"#, ready.display());
+    let root = root(&[("guard", HOOK, &config)]);
     let (host, mut events) = host(root.path());
     host.start_services().await;
     let agent = host.start_agent("stub").await.unwrap();
@@ -188,14 +251,115 @@ async fn a_failing_listener_fails_closed_to_the_user() {
     let mut state = SessionState::new(session.id());
     let s = session.clone();
     let turn = tokio::spawn(async move { s.prompt("hello").await });
-    until(&mut events, &mut state, |e| matches!(e, HostEvent::Session { event: SessionEvent::PermissionRequested(_), .. }))
-        .await;
-    let req = state.pending_permission().cloned().unwrap();
-    assert!(req.reason.as_deref().unwrap().contains("couldn't check this call"), "{:?}", req.reason);
-    session.resolve_permission(req.request_id, PermissionDecision::Selected("reject".into())).unwrap();
+    until(&mut events, &mut state, held).await;
+    assert_eq!(state.held(), Some("key rejected"));
+    assert!(state.running);
+    // Still held a moment later: nothing ran.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(tool(&state).status, space_core::ToolStatus::Pending);
+    std::fs::write(&ready, "").unwrap();
+    let started = std::time::Instant::now();
+    until(&mut events, &mut state, released).await;
+    assert!(started.elapsed() < Duration::from_secs(5), "released by hooks/ready, not the recheck");
     until(&mut events, &mut state, turn_ended).await;
     turn.await.unwrap().unwrap();
-    assert_eq!(tool(&state).status, space_core::ToolStatus::Failed);
+    assert_eq!(tool(&state).status, space_core::ToolStatus::Completed);
+    // The call reaches the history once, as allowed.
+    let logs = agent.logs();
+    assert!(logs.iter().any(|l| l.contains("argv:")) || tool(&state).output.contains("argv:"), "{logs:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stopping_the_turn_ends_a_held_call() {
+    let root = root(&[("guard", HOOK, r#"{"decision":"unavailable","reason":"offline"}"#)]);
+    let (host, mut events) = host(root.path());
+    host.start_services().await;
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.new_session(root.path()).await.unwrap();
+    let mut state = SessionState::new(session.id());
+    let s = session.clone();
+    let turn = tokio::spawn(async move { s.prompt("hello").await });
+    until(&mut events, &mut state, held).await;
+    session.cancel().unwrap();
+    until(&mut events, &mut state, turn_ended).await;
+    turn.await.unwrap().unwrap();
+    let t = tool(&state);
+    assert_ne!(t.status, space_core::ToolStatus::Completed, "the held call never ran: {t:?}");
+    assert_eq!(state.held(), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn switching_mode_rechecks_held_calls() {
+    // Held in workspace-write; the user switches the thread to read-only, where the guard
+    // decides: the call goes through the whole chain again under the new mode.
+    let root = root(&[("guard", HOOK, r#"{"decision":"deny","reason":"denied in {mode}","holdModes":["workspace-write"]}"#)]);
+    let (host, mut events) = host(root.path());
+    host.start_services().await;
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.new_session(root.path()).await.unwrap();
+    session.set_permission_mode("workspace-write");
+    let mut state = SessionState::new(session.id());
+    let s = session.clone();
+    let turn = tokio::spawn(async move { s.prompt("hello").await });
+    until(&mut events, &mut state, held).await;
+    session.set_permission_mode("read-only");
+    until(&mut events, &mut state, turn_ended).await;
+    turn.await.unwrap().unwrap();
+    assert_eq!(tool(&state).blocked.as_deref(), Some("denied in read-only"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_recovery_releases_every_held_call_in_turn_order() {
+    // Two sessions held at once, one with two calls in a row: one `hooks/ready` lets them all go.
+    let tmp = tempfile::tempdir().unwrap();
+    let ready = tmp.path().join("ready");
+    let config = format!(r#"{{"decision":"allow","reason":"down","readyFile":"{}"}}"#, ready.display());
+    let script = r#"{"turns":[{"prompt":"two","steps":[
+        {"type":"guard","id":"a","title":"bash: first","tool":"bash","args":{"command":"first"},"output":"1"},
+        {"type":"guard","id":"b","title":"bash: second","tool":"bash","args":{"command":"second"},"output":"2"}]}]}"#;
+    let root = root_with_script(&[("guard", HOOK, &config)], Some(&script.replace('\n', " ")));
+    let (host, mut events) = host(root.path());
+    host.start_services().await;
+    let agent = host.start_agent("stub").await.unwrap();
+    let one = agent.new_session(root.path()).await.unwrap();
+    let two = agent.new_session(root.path()).await.unwrap();
+    let mut s1 = SessionState::new(one.id());
+    let mut s2 = SessionState::new(two.id());
+    let (o, t) = (one.clone(), two.clone());
+    let turn1 = tokio::spawn(async move { o.prompt("two").await });
+    let turn2 = tokio::spawn(async move { t.prompt("hello").await });
+    // Fold both sessions' events until each has a held call.
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while s1.held().is_none() || s2.held().is_none() {
+            if let Some(HostEvent::Session { session_id, event }) = events.recv().await {
+                if session_id == s1.id { s1.apply(&event) } else if session_id == s2.id { s2.apply(&event) }
+            }
+        }
+    })
+    .await
+    .expect("both held");
+    std::fs::write(&ready, "").unwrap();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while s1.running || s2.running {
+            if let Some(HostEvent::Session { session_id, event }) = events.recv().await {
+                if session_id == s1.id { s1.apply(&event) } else if session_id == s2.id { s2.apply(&event) }
+            }
+        }
+    })
+    .await
+    .expect("both turns ended");
+    turn1.await.unwrap().unwrap();
+    turn2.await.unwrap().unwrap();
+    let outputs: Vec<(String, String)> = s1
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            TranscriptItem::Tool(t) => Some((t.id.clone(), t.output.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(outputs, [("a".to_string(), "1".to_string()), ("b".to_string(), "2".to_string())]);
+    assert_eq!(tool(&s2).status, space_core::ToolStatus::Completed);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -221,7 +385,7 @@ async fn sandbox_wraps_the_argv_and_context_reaches_the_agent() {
 #[tokio::test(flavor = "multi_thread")]
 async fn catalogs_default_mode_and_secret_settings() {
     let manifest = "provides=['settings','catalog:permission-modes']";
-    let config = r#"{"secret":"api_key","needsSecret":["b"],
+    let config = r#"{"secret":"api_key","needsSecret":["b"],"invalid":["bad"],"unverifiable":["offline"],
         "catalog":[{"id":"a","name":"A"},{"id":"b","name":"B","default":true}]}"#;
     let root = root(&[("guard", manifest, &config.replace('\n', " "))]);
     let secrets = Secrets::new(TEST_KEYCHAIN);
@@ -232,7 +396,7 @@ async fn catalogs_default_mode_and_secret_settings() {
     let entries = host.catalog("permission-modes");
     assert_eq!(entries.len(), 2);
     let b = entries.iter().find(|e| e.id == "b").unwrap();
-    assert!(!b.ready && b.blocker.as_ref().unwrap().action.as_deref() == Some("open-settings:guard"));
+    assert!(!b.ready && b.blocker.as_ref().unwrap().actions[0].action == "open-settings:guard");
     let settings = host.plugin_settings("guard");
     assert_eq!(settings.len(), 1);
     assert_eq!(settings[0].field.kind, SettingKind::Secret);
@@ -242,16 +406,27 @@ async fn catalogs_default_mode_and_secret_settings() {
     let session = agent.new_session(root.path()).await.unwrap();
     assert_eq!(session.permission_mode(), "b");
 
-    host.set_setting("guard", "api_key", Some("sk-test".into())).await.unwrap();
+    // The plugin checks a value before it's stored: rejected ones never are; ones it couldn't
+    // check are stored only when forced.
+    assert_eq!(
+        host.set_setting("guard", "api_key", Some("bad".into()), false).await,
+        Err(SettingError::Invalid("That key was rejected.".into()))
+    );
+    assert_eq!(secrets.get("guard", "api_key").unwrap(), None);
+    assert!(matches!(host.set_setting("guard", "api_key", Some("offline".into()), false).await, Err(SettingError::Unverifiable(_))));
+    assert_eq!(secrets.get("guard", "api_key").unwrap(), None);
+    host.set_setting("guard", "api_key", Some("offline".into()), true).await.unwrap();
+    assert_eq!(secrets.get("guard", "api_key").unwrap().as_deref(), Some("offline"));
+    host.set_setting("guard", "api_key", Some("sk-test".into()), false).await.unwrap();
     until(&mut events, &mut state, |e| {
         matches!(e, HostEvent::Catalog { entries, .. } if entries.iter().all(|e| e.ready))
     })
     .await;
     assert!(host.plugin_settings("guard")[0].set);
     assert_eq!(secrets.get("guard", "api_key").unwrap().as_deref(), Some("sk-test"));
-    host.set_setting("guard", "api_key", None).await.unwrap();
+    host.set_setting("guard", "api_key", None, false).await.unwrap();
     assert_eq!(secrets.get("guard", "api_key").unwrap(), None);
-    assert!(host.set_setting("guard", "nope", None).await.is_err());
+    assert!(host.set_setting("guard", "nope", None, false).await.is_err());
 
     // Turning the provider off empties its catalog.
     host.set_disabled(["guard".to_string()]);

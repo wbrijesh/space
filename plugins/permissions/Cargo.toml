@@ -19,5 +19,6 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [dev-dependencies]
+space-core.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["net", "rt-multi-thread"] }

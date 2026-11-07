@@ -144,6 +144,16 @@ pub fn tool_row(ix: usize, call: &ToolCallInfo, open: bool, on_toggle: ToggleHan
     let (name, detail) = format::tool_parts(&title);
     let has_body = !call.output.trim().is_empty() || !call.locations.is_empty();
     let status: AnyElement = match call.status {
+        // Waiting for the guardrail (fail closed): paused, not failed.
+        _ if call.held.is_some() => div()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .text_size(text::XS)
+            .text_color(color::yellow())
+            .child("Paused")
+            .child(Icon::new(Lucide::CirclePause).size(size::ICON_SM))
+            .into_any_element(),
         // Stopped by the tool pipeline: a calm shield, not an error.
         _ if call.blocked.is_some() => div()
             .flex()
@@ -224,10 +234,13 @@ pub fn tool_row(ix: usize, call: &ToolCallInfo, open: bool, on_toggle: ToggleHan
             .when(more > 0, |d| d.child(div().text_color(color::text_3()).child(format!("… {more} more lines"))))
     });
 
-    // Why it was stopped, without opening the row.
-    let reason = call.blocked.as_ref().map(|r| {
-        div().ml(px(30.)).mb_1().text_size(text::SM).text_color(color::text_2()).line_clamp(2).child(r.clone())
-    });
+    // Why it waits or was stopped, without opening the row.
+    let reason = match (&call.held, &call.blocked) {
+        (Some(r), _) => Some(format!("Waiting for the guardrail: {r}")),
+        (None, Some(r)) => Some(r.clone()),
+        (None, None) => None,
+    };
+    let reason = reason.map(|r| div().ml(px(30.)).mb_1().text_size(text::SM).text_color(color::text_2()).line_clamp(2).child(r));
     div().flex().flex_col().child(header).children(reason).children(body)
 }
 
@@ -493,6 +506,7 @@ Invalid manifests are reported, not fatal.";
             output: output.into(),
             locations: vec![],
             blocked: None,
+            held: None,
         }
     }
 
@@ -506,6 +520,21 @@ Invalid manifests are reported, not fatal.";
             output: "Blocked by guardrail: it changes files outside the project folder.".into(),
             locations: vec![],
             blocked: Some("Blocked by guardrail: it changes files outside the project folder.".into()),
+            held: None,
+        }
+    }
+
+    /// A call held while the guardrail can't be used.
+    pub fn held_tool() -> ToolCallInfo {
+        ToolCallInfo {
+            id: "t3".into(),
+            title: "bash: cargo build --release".into(),
+            kind: "execute".into(),
+            status: ToolStatus::Pending,
+            output: String::new(),
+            locations: vec![],
+            blocked: None,
+            held: Some("OpenAI rejected your API key, so actions are paused.".into()),
         }
     }
 
@@ -585,8 +614,8 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         .width(w)
     };
 
-    let (t1, t2, t3, t4, t5, t6, t7, t8) =
-        (t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t);
+    let (t1, t2, t3, t4, t5, t6, t7, t8, t9) =
+        (t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t);
     let (a1, a2, a3) = (answer.clone(), answer.clone(), answer);
     vec![
         ComponentPreview::new(Area::Transcript, "Messages", "User bubble and markdown reply.").stacked().examples([
@@ -610,6 +639,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             ex("failed", Rc::new(move || tool_row(2, &tool(ToolStatus::Failed, "error: could not compile"), false, t6.clone()))),
             ex("expanded", Rc::new(move || tool_row(3, &tool(ToolStatus::Completed, TEST_OUTPUT), true, t7.clone()))),
             ex("blocked by the guardrail", Rc::new(move || tool_row(4, &blocked_tool(), false, t8.clone()))),
+            ex("paused for the guardrail", Rc::new(move || tool_row(5, &held_tool(), false, t9.clone()))),
         ]),
         ComponentPreview::new(Area::Transcript, "Permission", "Allow/Reject; a one-line record once answered.")
             .stacked()

@@ -24,7 +24,7 @@ use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
 
 use crate::app::{
-    CloseSettings, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, ScrollToBottom,
+    SaveKind, CloseSettings, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, ScrollToBottom,
     SpaceApp, Thread, ToggleLogs, ToggleSidebar,
 };
 
@@ -109,7 +109,8 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, cx: &mut Context<SpaceApp>) -> impl
             // On the Settings page no thread is shown, so none is highlighted.
             let selected = app.selected == Some(key) && !app.show_settings;
             let failed = matches!(format::thread_preview(&t.state), Preview::Error(_)) || t.error.is_some();
-            let indicator = RowIndicator::resolve(
+            let indicator = RowIndicator::resolve_paused(
+                t.state.held().is_some(),
                 selected,
                 t.state.running || (t.queued.is_some() && t.error.is_none()),
                 t.state.pending_permission().is_some(),
@@ -267,13 +268,19 @@ fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>)
         on_save_field: {
             let this = cx.entity().downgrade();
             Rc::new(move |plugin, key, w, cx| {
-                let _ = this.update(cx, |this, cx| this.save_plugin_setting(plugin, key, false, w, cx));
+                let _ = this.update(cx, |this, cx| this.save_plugin_setting(plugin, key, SaveKind::Checked, w, cx));
+            })
+        },
+        on_save_anyway: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |plugin, key, w, cx| {
+                let _ = this.update(cx, |this, cx| this.save_plugin_setting(plugin, key, SaveKind::Anyway, w, cx));
             })
         },
         on_clear_field: {
             let this = cx.entity().downgrade();
             Rc::new(move |plugin, key, w, cx| {
-                let _ = this.update(cx, |this, cx| this.save_plugin_setting(plugin, key, true, w, cx));
+                let _ = this.update(cx, |this, cx| this.save_plugin_setting(plugin, key, SaveKind::Clear, w, cx));
             })
         },
         on_plugin_enabled: {
@@ -334,6 +341,7 @@ fn plugin_settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
                     *shown = Some(placeholder);
                 }
                 let input = input.clone();
+                let check = app.field_checks.get(&(plugin_id.clone(), st.field.key.clone())).cloned().unwrap_or_default();
                 FieldView {
                     plugin_id: plugin_id.clone(),
                     key: st.field.key.clone(),
@@ -342,6 +350,8 @@ fn plugin_settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
                     secret,
                     set: st.set,
                     input,
+                    check,
+                    status: st.set.then(|| app.plugin_health(&plugin_id)).flatten(),
                 }
             })
             .collect();
@@ -375,6 +385,7 @@ fn plugin_rows(app: &SpaceApp) -> Vec<PluginRow> {
                 name: p.manifest.name.clone().into(),
                 description: p.manifest.description.clone().into(),
                 agent,
+                required: p.manifest.required,
                 enabled,
                 status: status.into(),
             }
@@ -433,14 +444,20 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
                 let _ = this.update(cx, |this, cx| this.set_mode(id, cx));
             })
         },
-        on_blocker_action: handler(cx, |this, w, cx| this.blocker_action(w, cx)),
+        on_blocker_action: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |action, w: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| this.blocker_action(&action, w, cx));
+            })
+        },
     };
     let mode = app
         .effective_mode(thread)
         .map(|current| ModeChoice { entries: app.permission_modes.clone(), current });
     let blocker = app.blocker(thread).map(|b| ComposerBlocker {
+        times: format::attempt_times(b.last_attempt_ms, b.next_attempt_ms, crate::app::now_ms()).map(Into::into),
         text: b.text.into(),
-        action_label: b.action_label.map(Into::into),
+        actions: b.actions.into_iter().map(|a| (a.label.into(), a.action.into())).collect(),
     });
     Composer::new("composer", &app.input)
         .running(thread.state.running)

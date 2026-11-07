@@ -222,6 +222,32 @@ pub fn compact_tokens(n: u64) -> String {
     }
 }
 
+/// "45s", "2m 14s", "1h 5m": a short, human duration (whole seconds).
+pub fn short_duration(d: std::time::Duration) -> String {
+    let s = d.as_secs();
+    match s {
+        0..60 => format!("{s}s"),
+        60..3600 => format!("{}m {}s", s / 60, s % 60),
+        _ => format!("{}h {}m", s / 3600, (s % 3600) / 60),
+    }
+}
+
+/// "Last tried 2m 14s ago · next try in 2m 46s", from Unix milliseconds; `None` when neither
+/// time is known. A next try that's due reads "trying again now".
+pub fn attempt_times(last_ms: Option<u64>, next_ms: Option<u64>, now_ms: u64) -> Option<String> {
+    let ms = std::time::Duration::from_millis;
+    let last = last_ms.map(|t| format!("Last tried {} ago", short_duration(ms(now_ms.saturating_sub(t)))));
+    let next = next_ms.map(|t| match t.checked_sub(now_ms).filter(|d| *d >= 1000) {
+        Some(wait) => format!("next try in {}", short_duration(ms(wait))),
+        None => "trying again now".to_string(),
+    });
+    match (last, next) {
+        (Some(l), Some(n)) => Some(format!("{l} · {n}")),
+        (Some(one), None) | (None, Some(one)) => Some(one),
+        (None, None) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,5 +305,20 @@ mod tests {
         assert_eq!(truncate_chars("abcdef", 4), "abc…");
         let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         assert!(git_branch(repo).is_some_and(|b| !b.is_empty()));
+    }
+
+    #[test]
+    fn durations_and_attempt_times() {
+        use std::time::Duration;
+        assert_eq!(short_duration(Duration::from_secs(45)), "45s");
+        assert_eq!(short_duration(Duration::from_secs(134)), "2m 14s");
+        assert_eq!(short_duration(Duration::from_secs(3900)), "1h 5m");
+        let now = 1_000_000;
+        assert_eq!(
+            attempt_times(Some(now - 134_000), Some(now + 166_000), now).as_deref(),
+            Some("Last tried 2m 14s ago · next try in 2m 46s")
+        );
+        assert_eq!(attempt_times(Some(now - 1_000), Some(now - 5), now).as_deref(), Some("Last tried 1s ago · trying again now"));
+        assert_eq!(attempt_times(None, None, now), None);
     }
 }

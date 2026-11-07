@@ -6399,6 +6399,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "space-core",
  "space-plugin",
  "tempfile",
  "tokio",

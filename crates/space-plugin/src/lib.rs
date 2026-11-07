@@ -50,10 +50,20 @@ pub trait Plugin: Send + Sync + 'static {
         SettingsSchema::default()
     }
 
-    /// The user changed a setting; `values` holds every setting's current value.
-    fn settings_changed(&self, values: SettingValues) {
-        let _ = values;
+    /// `provides = ["settings"]`: check a value before the host stores it (e.g. try an API
+    /// key). Accepts everything by default.
+    fn validate_setting(&self, check: SettingCheck) -> impl Future<Output = Result<SettingVerdict, RpcError>> + Send {
+        let _ = check;
+        async { Ok(SettingVerdict::ok()) }
     }
+
+    /// The user changed a setting; `changed.values` holds every setting's current value.
+    fn settings_changed(&self, changed: SettingsChanged) {
+        let _ = changed;
+    }
+
+    /// The user pressed "Retry now" on one of the plugin's blockers.
+    fn retry(&self) {}
 
     /// `provides = ["catalog:<name>"]`: the named catalog's entries.
     fn catalog(&self, name: &str) -> Result<Catalog, RpcError> {
@@ -89,6 +99,12 @@ impl Host {
     pub fn catalog_changed(&self, name: &str) {
         self.peer.notify(CATALOG_CHANGED, CatalogName { name: name.to_string() });
     }
+
+    /// Tell the host the plugin's hooks can decide again (after answering `unavailable`); it
+    /// runs the calls it held through the chain again.
+    pub fn hooks_ready(&self) {
+        self.peer.notify(HOOKS_READY, serde_json::json!({}));
+    }
 }
 
 /// Serve `plugin` on `reader`/`writer` until `reader` closes.
@@ -109,13 +125,13 @@ where
     };
     let on_notification: rpc::NotificationHandler = {
         let plugin = plugin.clone();
-        Arc::new(move |method: String, params: Value| {
-            if method == SETTINGS_CHANGED {
-                match rpc::params::<SettingsChanged>(params) {
-                    Ok(changed) => plugin.settings_changed(changed.values),
-                    Err(e) => eprintln!("space-plugin: bad {SETTINGS_CHANGED}: {e}"),
-                }
-            }
+        Arc::new(move |method: String, params: Value| match method.as_str() {
+            SETTINGS_CHANGED => match rpc::params::<SettingsChanged>(params) {
+                Ok(changed) => plugin.settings_changed(changed),
+                Err(e) => eprintln!("space-plugin: bad {SETTINGS_CHANGED}: {e}"),
+            },
+            PLUGIN_RETRY => plugin.retry(),
+            _ => {}
         })
     };
     let (peer, done) = rpc::Peer::spawn(reader, writer, on_request, on_notification);
@@ -131,6 +147,7 @@ async fn handle<P: Plugin>(plugin: &P, host: &OnceLock<Host>, method: &str, para
             rpc::result(plugin.initialize(init, host).await?)
         }
         SETTINGS_SCHEMA => rpc::result(plugin.settings_schema()),
+        SETTINGS_VALIDATE => rpc::result(plugin.validate_setting(rpc::params(params)?).await?),
         CATALOG_GET => rpc::result(plugin.catalog(&rpc::params::<CatalogName>(params)?.name)?),
         CONTEXT_GET => rpc::result(plugin.context(rpc::params(params)?).await?),
         SANDBOX_CONFINE => rpc::result(plugin.confine(rpc::params(params)?).await?),
@@ -184,8 +201,8 @@ mod tests {
             let _ = self.host.set(host);
             Ok(Initialized { name: Some("demo".into()) })
         }
-        fn settings_changed(&self, values: SettingValues) {
-            *self.settings.lock().unwrap() = values;
+        fn settings_changed(&self, changed: SettingsChanged) {
+            *self.settings.lock().unwrap() = changed.values;
             if let Some(h) = self.host.get() {
                 h.catalog_changed("modes");
             }
@@ -210,7 +227,7 @@ mod tests {
         let cat: Catalog = host.call(CATALOG_GET, &CatalogName { name: "modes".into() }, None).await.unwrap();
         assert!(!cat.entries[0].ready);
 
-        host.notify(SETTINGS_CHANGED, SettingsChanged { values: [("key".into(), "v".into())].into() });
+        host.notify(SETTINGS_CHANGED, SettingsChanged { values: [("key".into(), "v".into())].into(), ..Default::default() });
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
         assert_eq!(seen.lock().unwrap()[0].0, CATALOG_CHANGED);
         let cat: Catalog = host.call(CATALOG_GET, &CatalogName { name: "modes".into() }, None).await.unwrap();
@@ -231,5 +248,11 @@ mod tests {
             .unwrap();
         assert_eq!(c.argv, ["ls"]);
         assert_eq!(host.request("nope", Value::Null, None).await.unwrap_err().code, RpcError::METHOD_NOT_FOUND);
+        // Settings are accepted by default.
+        let v: SettingVerdict = host
+            .call(SETTINGS_VALIDATE, &SettingCheck { key: "key".into(), value: "v".into() }, None)
+            .await
+            .unwrap();
+        assert_eq!(v, SettingVerdict::ok());
     }
 }

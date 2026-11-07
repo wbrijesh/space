@@ -15,7 +15,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::component::input::{InputEvent, InputState, TextareaState};
 use gpui::*;
@@ -23,8 +23,9 @@ use space_core::protocol::service::CatalogEntry;
 use space_core::protocol::{CATALOG_PERMISSION_MODES, ConfigureSession, ModelInfo};
 use space_core::{
     AgentHandle, EventReceiver, Host, HostEvent, PermissionDecision, PluginStatus, Session, SessionEvent, SessionId,
-    SessionState, SettingState, TranscriptItem,
+    SessionState, SettingError, SettingState, TranscriptItem,
 };
+use space_ui::components::settings::FieldCheck;
 
 pub use space_ui::actions::{
     CloseSettings, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, Quit, ScrollToBottom,
@@ -216,6 +217,8 @@ pub struct Thread {
     pub mode: Option<String>,
     /// Modes that need confirming (Full access) and were confirmed in this thread.
     pub confirmed: HashSet<String>,
+    /// This turn already alerted that a tool call is paused.
+    paused_alerted: bool,
     /// Expanded thought/tool items (transcript indices).
     pub expanded: HashSet<usize>,
     thought_started: HashMap<usize, Instant>,
@@ -238,6 +241,7 @@ impl Thread {
             queued: None,
             mode: None,
             confirmed: HashSet::new(),
+            paused_alerted: false,
             expanded: HashSet::new(),
             thought_started: HashMap::new(),
             thought_secs: HashMap::new(),
@@ -318,6 +322,8 @@ pub struct SpaceApp {
     pub(crate) plugin_status: HashMap<String, PluginStatus>,
     /// Settings-page fields, by (plugin id, key), with the placeholder they show.
     pub(crate) setting_inputs: HashMap<(String, String), (Entity<InputState>, Option<String>)>,
+    /// How each field's last save went, by (plugin id, key).
+    pub(crate) field_checks: HashMap<(String, String), FieldCheck>,
     /// A mode that needs confirming before the thread switches to it: (thread, mode id).
     pub(crate) pending_confirm: Option<(u64, String)>,
     _subscriptions: Vec<Subscription>,
@@ -359,6 +365,22 @@ impl SpaceApp {
                     window.activate_window();
                     if this.thread(key).is_some() {
                         this.select_thread(key, window, cx);
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        // "Last tried … ago · next try in …" counts live: redraw each second while shown.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let alive = this.update(cx, |this, cx| {
+                    if this.permission_modes.iter().any(|e| e.blocker.as_ref().is_some_and(|b| b.last_attempt_ms.is_some())) {
+                        cx.notify();
                     }
                 });
                 if alive.is_err() {
@@ -436,6 +458,7 @@ impl SpaceApp {
             plugin_settings: BTreeMap::new(),
             plugin_status: HashMap::new(),
             setting_inputs: HashMap::new(),
+            field_checks: HashMap::new(),
             pending_confirm: None,
             _subscriptions: vec![sub, activation],
         };
@@ -537,10 +560,23 @@ impl SpaceApp {
         let selected = self.selected == Some(key) && !self.show_settings;
         let Some(thread) = self.thread_mut(key) else { return };
         thread.apply(event);
-        let attention = matches!(
-            event,
-            SessionEvent::TurnEnded { .. } | SessionEvent::PermissionRequested(_) | SessionEvent::Error { .. }
-        );
+        // A tool call waiting for the guardrail: alert once per turn (it may stay paused long).
+        let paused = match event {
+            SessionEvent::TurnStarted => {
+                thread.paused_alerted = false;
+                None
+            }
+            SessionEvent::ToolCallHeld { reason: Some(reason), .. } if !thread.paused_alerted => {
+                thread.paused_alerted = true;
+                Some(reason.clone())
+            }
+            _ => None,
+        };
+        let attention = paused.is_some()
+            || matches!(
+                event,
+                SessionEvent::TurnEnded { .. } | SessionEvent::PermissionRequested(_) | SessionEvent::Error { .. }
+            );
         if !selected && attention && !matches!(event, SessionEvent::TurnEnded { stop_reason } if stop_reason == "error") {
             thread.unread += 1;
         }
@@ -555,6 +591,14 @@ impl SpaceApp {
             // Headline says what happened; the second line says which thread.
             let headline = if stop_reason == "error" { "Agent stopped with an error" } else { "Agent finished" };
             notify::turn_finished(key, headline, &thread.title(), selected && notify::app_active(), alerts);
+        }
+        if let Some(reason) = paused
+            && self.notify
+            && (alerts.notification || alerts.sound)
+            && let Some(thread) = self.thread(key)
+        {
+            let headline = format!("Paused: {}", reason.trim_end_matches('.'));
+            notify::turn_finished(key, &headline, &thread.title(), selected && notify::app_active(), alerts);
         }
     }
 
@@ -1058,9 +1102,43 @@ impl SpaceApp {
         self.set_mode(next, cx);
     }
 
-    /// The composer blocker's link (`open-settings:<plugin>`).
-    pub(crate) fn blocker_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_settings(window, cx);
+    /// A blocker link: `open-settings:<plugin>`, `open-url:<url>`, `retry:<plugin>` or
+    /// `use-mode:<mode>`.
+    pub(crate) fn blocker_action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let (verb, arg) = action.split_once(':').unwrap_or((action, ""));
+        match verb {
+            "open-settings" => self.open_settings(window, cx),
+            "open-url" if arg.starts_with("https://") => {
+                let url = arg.to_string();
+                std::thread::spawn(move || {
+                    if let Err(e) = std::process::Command::new("open").arg(&url).status() {
+                        tracing::warn!("opening {url}: {e}");
+                    }
+                });
+            }
+            "retry" => {
+                let (host, id) = (self.host.clone(), arg.to_string());
+                cx.spawn(async move |_, _| host.retry_plugin(&id).await).detach();
+            }
+            "use-mode" => self.set_mode(arg.to_string(), cx),
+            _ => tracing::warn!("unknown blocker action {action:?}"),
+        }
+    }
+
+    /// How a plugin's saved settings are doing, for its Settings section: the blocker of a
+    /// catalog it publishes (with retry times), or "Working." when nothing blocks.
+    pub(crate) fn plugin_health(&self, plugin_id: &str) -> Option<(SharedString, bool)> {
+        let plugin = self.host.plugin(plugin_id)?;
+        if !plugin.manifest.catalogs().any(|c| c == CATALOG_PERMISSION_MODES) || self.permission_modes.is_empty() {
+            return None;
+        }
+        Some(match self.permission_modes.iter().find_map(|e| e.blocker.as_ref()) {
+            Some(b) => {
+                let times = format::attempt_times(b.last_attempt_ms, b.next_attempt_ms, now_ms());
+                (times.map_or_else(|| b.text.clone(), |t| format!("{} {t}", b.text)).into(), false)
+            }
+            None => ("Working.".into(), true),
+        })
     }
 
     pub(crate) fn restart_agent(&mut self, cx: &mut Context<Self>) {
@@ -1176,47 +1254,68 @@ impl SpaceApp {
         cx.notify();
     }
 
-    /// Save a plugin setting from its Settings field (`clear`: remove it).
+    /// Save a plugin setting from its Settings field. The plugin checks a new value first:
+    /// the field shows "Checking…", then the outcome (a rejected value isn't stored; one that
+    /// couldn't be checked can be saved anyway).
     pub(crate) fn save_plugin_setting(
         &mut self,
         plugin_id: String,
         key: String,
-        clear: bool,
+        kind: SaveKind,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let input = self.setting_inputs.get(&(plugin_id.clone(), key.clone())).map(|(i, _)| i.clone());
-        let value = if clear { None } else { input.as_ref().map(|i| i.read(cx).value().trim().to_string()) };
-        if !clear && value.as_deref().is_none_or(str::is_empty) {
-            return;
-        }
+        let field = (plugin_id.clone(), key.clone());
+        let input = self.setting_inputs.get(&field).map(|(i, _)| i.clone());
+        let value = match kind {
+            SaveKind::Clear => None,
+            SaveKind::Checked | SaveKind::Anyway => {
+                let v = input.as_ref().map(|i| i.read(cx).value().trim().to_string()).unwrap_or_default();
+                if v.is_empty() {
+                    return;
+                }
+                Some(v)
+            }
+        };
         let secret = self
             .plugin_settings
             .get(&plugin_id)
             .and_then(|fields| fields.iter().find(|f| f.field.key == key))
             .is_some_and(|f| f.field.kind == space_core::protocol::service::SettingKind::Secret);
-        // Text values live in the settings file (secrets only in the Keychain).
-        if !secret {
-            let (id, k, v) = (plugin_id.clone(), key.clone(), value.clone());
-            self.settings.update(|s| {
-                let map = s.plugins.settings.entry(id).or_default();
-                match v {
-                    Some(v) => map.insert(k, v),
-                    None => map.remove(&k),
-                };
-            });
-        }
-        if let Some(input) = input {
-            input.update(cx, |s, cx| s.set_value("", window, cx));
-        }
+        self.field_checks.insert(field.clone(), if value.is_some() { FieldCheck::Checking } else { FieldCheck::Idle });
         let host = self.host.clone();
-        cx.spawn(async move |this, cx| {
-            if let Err(e) = host.set_setting(&plugin_id, &key, value).await {
-                let _ = this.update(cx, |this, cx| {
-                    this.banner = Some(format!("Couldn't save the setting: {e:#}"));
-                    cx.notify();
-                });
-            }
+        let force = kind == SaveKind::Anyway;
+        cx.spawn_in(window, async move |this, cx| {
+            let result = host.set_setting(&plugin_id, &key, value.clone(), force).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let check = match result {
+                    Ok(()) => {
+                        // Text values live in the settings file (secrets only in the Keychain).
+                        if !secret {
+                            let (id, k, v) = (plugin_id.clone(), key.clone(), value.clone());
+                            this.settings.update(|s| {
+                                let map = s.plugins.settings.entry(id).or_default();
+                                match v {
+                                    Some(v) => map.insert(k, v),
+                                    None => map.remove(&k),
+                                };
+                            });
+                        }
+                        if let Some(input) = &input {
+                            input.update(cx, |s, cx| s.set_value("", window, cx));
+                        }
+                        if value.is_some() { FieldCheck::Saved } else { FieldCheck::Idle }
+                    }
+                    Err(SettingError::Invalid(m)) => FieldCheck::Invalid(m.into()),
+                    Err(SettingError::Unverifiable(m)) => FieldCheck::Unverifiable(m.into()),
+                    Err(SettingError::Failed(e)) => {
+                        this.banner = Some(format!("Couldn't save the setting: {e}"));
+                        FieldCheck::Idle
+                    }
+                };
+                this.field_checks.insert(field, check);
+                cx.notify();
+            });
         })
         .detach();
         cx.notify();
@@ -1224,6 +1323,9 @@ impl SpaceApp {
 
     /// Turn a service plugin on or off (saved; takes effect at once).
     pub(crate) fn set_plugin_enabled(&mut self, plugin_id: String, enabled: bool, cx: &mut Context<Self>) {
+        if self.host.plugin(&plugin_id).is_some_and(|p| p.manifest.required) {
+            return; // required guards stay on
+        }
         self.settings.update(|s| {
             s.plugins.disabled.retain(|id| *id != plugin_id);
             if !enabled {
@@ -1240,6 +1342,22 @@ impl SpaceApp {
         }
         cx.notify();
     }
+}
+
+/// What a Settings field's button does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SaveKind {
+    /// Save the field's value once the plugin has checked it.
+    Checked,
+    /// Save it although it couldn't be checked.
+    Anyway,
+    /// Remove the setting.
+    Clear,
+}
+
+/// Now, in Unix milliseconds (for blockers' retry times).
+pub(crate) fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 /// A thread's permission mode: its own choice, else the default for new threads, else the

@@ -70,8 +70,8 @@ pub struct ComposerHandlers {
     pub on_configure: ConfigureHandler,
     /// A permission mode was picked (its catalog id).
     pub on_mode: StringHandler,
-    /// The blocker's link was clicked.
-    pub on_blocker_action: Handler,
+    /// One of the blocker's links was clicked (its action string).
+    pub on_blocker_action: StringHandler,
 }
 
 impl Default for ComposerHandlers {
@@ -87,7 +87,7 @@ impl Default for ComposerHandlers {
             on_choose_folder: noop,
             on_configure: Rc::new(|_, _, _| {}),
             on_mode: Rc::new(|_, _, _| {}),
-            on_blocker_action: Rc::new(|_, _| {}),
+            on_blocker_action: Rc::new(|_, _, _| {}),
         }
     }
 }
@@ -122,11 +122,15 @@ impl ModeChoice {
     }
 }
 
-/// Why the composer can't send, and the link that fixes it.
-#[derive(Clone)]
+/// Why the composer can't send, and the links that fix it.
+#[derive(Clone, Default)]
 pub struct ComposerBlocker {
     pub text: SharedString,
-    pub action_label: Option<SharedString>,
+    /// `(label, action)`; the first is the main one. The action string goes to
+    /// `on_blocker_action`.
+    pub actions: Vec<(SharedString, SharedString)>,
+    /// "Last tried 2m 14s ago · next try in 2m 46s", when the cause is being retried.
+    pub times: Option<SharedString>,
 }
 
 #[derive(IntoElement)]
@@ -248,7 +252,7 @@ impl RenderOnce for Composer {
                 })
                 .child(Icon::new(IconName::ArrowUp).size(size::ICON_MD))
                 .when(can_send, |d| d.tooltip(tip("Send  ⏎")).on_click(move |_, w, cx| send(w, cx)))
-                .when(blocker.is_some(), |d| d.tooltip(tip("Can't send in this mode yet")))
+                .when(blocker.is_some(), |d| d.tooltip(tip("Can't send in this mode right now")))
                 .into_any_element()
         };
 
@@ -317,38 +321,52 @@ impl RenderOnce for Composer {
     }
 }
 
-/// "Set up the decision model to use this mode · Open Settings", above the card.
-pub fn blocker_row(blocker: ComposerBlocker, on_action: Handler) -> Div {
-    // A centered pill in the warning tint, so it reads as "do this first", not as a caption.
-    let pill = div()
+/// Why sending is blocked, above the card: a centered pill in the warning tint, so it reads as
+/// "do this first", not as a caption. One line with its link when that's all there is; with
+/// retry times, a second line carries them and the links.
+pub fn blocker_row(blocker: ComposerBlocker, on_action: StringHandler) -> Div {
+    let links = blocker.actions.into_iter().enumerate().map(|(i, (label, action))| {
+        let f = on_action.clone();
+        let main = i == 0;
+        div()
+            .id(("blocker-action", i))
+            .flex()
+            .items_center()
+            .gap_0p5()
+            .when(main, |d| d.font_weight(gpui::FontWeight::MEDIUM).text_color(color::yellow()))
+            .when(!main, |d| d.text_color(color::text_2()))
+            .cursor_pointer()
+            .hover(|s| s.text_color(color::text()))
+            .child(label)
+            .when(main, |d| d.child(Icon::new(IconName::ChevronRight).size(size::ICON_SM)))
+            .on_click(move |_, w, cx| f(action.to_string(), w, cx))
+    });
+    let headline = div()
         .flex()
         .items_center()
         .gap_2()
+        .child(Icon::new(Lucide::ShieldAlert).size(size::ICON).text_color(color::yellow()))
+        .child(blocker.text);
+    let pill = div()
         .px_3()
         .py_1p5()
-        .rounded_full()
         .bg(color::yellow_bg())
         .border_1()
         .border_color(color::yellow_border())
         .text_size(text::SM)
         .text_color(color::text())
-        .child(Icon::new(Lucide::ShieldAlert).size(size::ICON).text_color(color::yellow()))
-        .child(blocker.text)
-        .when_some(blocker.action_label, |d, label| {
-            d.child(
+        .map(|d| match blocker.times {
+            None => d.rounded_full().flex().items_center().gap_3().child(headline).children(links),
+            Some(times) => d.rounded(radius::XXL).flex().flex_col().gap_1().child(headline).child(
                 div()
-                    .id("blocker-action")
                     .flex()
+                    .flex_wrap()
                     .items_center()
-                    .gap_0p5()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(color::yellow())
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(color::text()))
-                    .child(label)
-                    .child(Icon::new(IconName::ChevronRight).size(size::ICON_SM))
-                    .on_click(move |_, w, cx| on_action(w, cx)),
-            )
+                    .gap_x_3()
+                    .pl(size::ICON + px(8.))
+                    .child(div().text_color(color::text_2()).child(times))
+                    .children(links),
+            ),
         });
     // Extra space under it on top of the stack's gap, so it stands apart from the card.
     div().flex().justify_center().px(px(space::MD)).mb(px(space::MD)).child(pill)
@@ -629,11 +647,63 @@ pub mod fixtures {
     pub fn with_mode(mut c: ComposerControls, current: &str, ready: bool) -> ComposerControls {
         c.mode = Some(modes(current, ready));
         if !ready && current != "read-only" {
-            c.blocker = Some(ComposerBlocker {
-                text: "Set up the decision model to use this mode.".into(),
-                action_label: Some("Open Settings".into()),
-            });
+            c.blocker = Some(not_set_up());
         }
+        c
+    }
+
+    fn action(label: &str, action: &str) -> (SharedString, SharedString) {
+        (SharedString::from(label.to_string()), SharedString::from(action.to_string()))
+    }
+
+    const TIMES: &str = "Last tried 2m 14s ago · next try in 2m 46s";
+
+    /// The blockers the permissions plugin shows, by state (as the app formats them).
+    pub fn not_set_up() -> ComposerBlocker {
+        ComposerBlocker {
+            text: "Workspace Write checks every action with OpenAI first. Add an OpenAI API key to use it.".into(),
+            actions: vec![action("Open Settings", "open-settings:permissions"), action("Use Read Only", "use-mode:read-only")],
+            times: None,
+        }
+    }
+
+    pub fn checking() -> ComposerBlocker {
+        ComposerBlocker { text: "Checking your OpenAI API key…".into(), ..Default::default() }
+    }
+
+    pub fn failing(text: &str, fix: Option<(&str, &str)>) -> ComposerBlocker {
+        let mut actions: Vec<_> = fix.into_iter().map(|(l, a)| action(l, a)).collect();
+        actions.extend([action("Retry now", "retry:permissions"), action("Use Read Only", "use-mode:read-only")]);
+        ComposerBlocker { text: text.to_string().into(), actions, times: Some(TIMES.into()) }
+    }
+
+    pub fn key_rejected() -> ComposerBlocker {
+        failing("OpenAI rejected your API key, so actions are paused.", Some(("Update key", "open-settings:permissions")))
+    }
+
+    pub fn unreachable() -> ComposerBlocker {
+        failing("Can't reach OpenAI (no answer within 3s), so actions are paused.", None)
+    }
+
+    pub fn no_access() -> ComposerBlocker {
+        failing(
+            "This OpenAI account doesn't have the Decisions API (Decision API is not enabled for this user.), so actions \
+             are paused.",
+            Some(("Open Settings", "open-settings:permissions")),
+        )
+    }
+
+    pub fn no_credit() -> ComposerBlocker {
+        failing("OpenAI says the account is out of credit, so actions are paused.", Some(("Open billing", "open-url:https://platform.openai.com")))
+    }
+
+    pub fn incompatible() -> ComposerBlocker {
+        failing("OpenAI's decision API changed (Unknown parameter); Space needs an update. Actions are paused.", None)
+    }
+
+    pub fn with_blocker(mut c: ComposerControls, blocker: ComposerBlocker) -> ComposerControls {
+        c.mode = Some(modes("workspace-write", false));
+        c.blocker = Some(blocker);
         c
     }
 }
@@ -689,6 +759,24 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             example("full access", "", |c| c.controls(fixtures::with_mode(fixtures::controls(18_200, false), "full-access", true))),
             example("mode not set up (sending blocked)", "Clean up the build cache", |c| {
                 c.controls(fixtures::with_mode(fixtures::controls(18_200, false), "workspace-write", false))
+            }),
+            example("checking the key", "", |c| {
+                c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::checking()))
+            }),
+            example("key rejected (paused, retrying)", "", |c| {
+                c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::key_rejected()))
+            }),
+            example("can't reach OpenAI", "", |c| {
+                c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::unreachable()))
+            }),
+            example("no Decisions access", "", |c| {
+                c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::no_access()))
+            }),
+            example("out of credit", "", |c| {
+                c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::no_credit()))
+            }),
+            example("API changed", "", |c| {
+                c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::incompatible()))
             }),
             example("no permission modes (no plugin)", "", |c| {
                 c.controls(ComposerControls { mode: None, ..fixtures::controls(18_200, false) })

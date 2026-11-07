@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Read Only runs commands in the macOS sandbox; Workspace Write and Full access check every operation with a decision model first."
 provides = ["sandbox", "context", "settings", "catalog:permission-modes"]
 hooks = [{ event = "tools/pre-execute", order = 10 }]
+# Space doesn't run tools without permission checks: this plugin can't be turned off, and tool
+# calls wait while it isn't running.
+required = true
 
 [run]
 # Built with the workspace (`cargo build --workspace`); ${target} is the profile dir Space runs from.

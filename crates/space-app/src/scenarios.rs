@@ -28,6 +28,9 @@ pub struct Scenario {
     /// Also run the real permissions plugin (its Keychain items use a scenario-only prefix, so
     /// no decision-model key is set).
     pub permissions: bool,
+    /// With `permissions`: a decision-model key is set (in a scenario-only Keychain item) but
+    /// OpenAI can't be reached, so Workspace Write and Full access calls are paused.
+    pub model_offline: bool,
 }
 
 #[derive(Default)]
@@ -241,9 +244,18 @@ pub fn all() -> Vec<Scenario> {
         Scenario {
             name: "guardrail",
             description: "Permission modes with the real permissions plugin and no decision-model key: a Read Only \
-                          thread with a blocked edit, and a Workspace Write thread asking (sending is blocked).",
+                          thread with a blocked edit, and a Workspace Write thread paused (sending is blocked).",
             threads: vec![read_only_thread(), unchecked_thread()],
             permissions: true,
+            ..Default::default()
+        },
+        Scenario {
+            name: "guardrail-offline",
+            description: "The real permissions plugin with a key set but OpenAI unreachable: a Workspace Write thread \
+                          paused mid-turn, the retrying pill, and a Read Only thread that still works.",
+            threads: vec![read_only_thread(), paused_thread()],
+            permissions: true,
+            model_offline: true,
             ..Default::default()
         },
         Scenario {
@@ -281,7 +293,24 @@ fn read_only_thread() -> ScenarioThread {
     }
 }
 
-/// Workspace Write without the decision model's key: the call is put to the user.
+/// Workspace Write while OpenAI can't be reached: the first call ran, the next one waits.
+fn paused_thread() -> ScenarioThread {
+    ScenarioThread {
+        mode: Some("workspace-write"),
+        ..thread(
+            "Rebuild the release binary",
+            vec![
+                thought("Build it with the release profile."),
+                guard("t1", "bash: cargo build --release", "execute", "bash", serde_json::json!({"command": "cargo build --release"}), Some(
+                    "Finished `release` profile",
+                )),
+                say("Built."),
+            ],
+        )
+    }
+}
+
+/// Workspace Write without the decision model's key: the call waits (fail closed).
 fn unchecked_thread() -> ScenarioThread {
     ScenarioThread {
         mode: Some("workspace-write"),
@@ -383,7 +412,18 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         let repo = space_core::discovery::find_repo_root(&Path::new(env!("CARGO_MANIFEST_DIR")).join("x"))
             .context("the permissions plugin lives in the repo; run scenarios from a checkout")?;
         std::fs::create_dir_all(&permissions)?;
-        std::fs::copy(repo.join("plugins/permissions/space-plugin.toml"), permissions.join("space-plugin.toml"))?;
+        let mut manifest = std::fs::read_to_string(repo.join("plugins/permissions/space-plugin.toml"))?;
+        if scenario.model_offline {
+            // Nothing listens on port 9: every check fails as "can't connect".
+            manifest.push_str("\n[run.env]\nSPACE_LUNA_BASE_URL = \"http://127.0.0.1:9/v1\"\n");
+        }
+        std::fs::write(permissions.join("space-plugin.toml"), manifest)?;
+    }
+    // Scenario-only Keychain items; the offline scenario has its own, with a (fake) key.
+    let keychain = if scenario.model_offline { "dev.brijesh.space.scenario.offline" } else { "dev.brijesh.space.scenario" };
+    let secrets = space_core::Secrets::new(keychain);
+    if scenario.model_offline {
+        secrets.set("permissions", "openai_api_key", Some("sk-scenario-offline"))?;
     }
     let settings_path = root.join("settings.json");
     match scenario.settings {
@@ -396,7 +436,8 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
     let host = HostOptions {
         project_dir: project_dir.to_path_buf(),
         discovery: DiscoveryOptions { bundled_roots: vec![root], user_root: None, project_root: None },
-        secrets: space_core::Secrets::new("dev.brijesh.space.scenario"),
+        secrets,
+        held_recheck: space_core::HELD_RECHECK,
     };
     let seed = scenario
         .threads
@@ -449,6 +490,7 @@ mod tests {
             "long-composer",
             "scrolled-up",
             "guardrail",
+            "guardrail-offline",
             "settings",
         ] {
             assert!(find(wanted).is_some(), "missing scenario {wanted}");

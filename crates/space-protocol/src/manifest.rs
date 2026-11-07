@@ -76,6 +76,10 @@ pub struct Manifest {
     /// Events a service plugin listens to.
     #[serde(default)]
     pub hooks: Vec<HookSpec>,
+    /// A guard Space can't run tools without: it can't be turned off, and while it isn't
+    /// running, tool calls wait for it (fail closed).
+    #[serde(default)]
+    pub required: bool,
     pub run: RunConfig,
 }
 
@@ -145,8 +149,8 @@ impl Manifest {
                 return Err(format!("unknown capability {cap:?} in `provides`"));
             }
         }
-        if self.is_agent() && (self.provides.len() > 1 || !self.hooks.is_empty()) {
-            return Err("an `agent` plugin provides nothing else and has no hooks".into());
+        if self.is_agent() && (self.provides.len() > 1 || !self.hooks.is_empty() || self.required) {
+            return Err("an `agent` plugin provides nothing else, has no hooks and isn't `required`".into());
         }
         for hook in &self.hooks {
             if hook.event != HOOK_TOOLS_PRE_EXECUTE {
@@ -271,11 +275,11 @@ FOO = "bar"
     fn service_plugin_with_hooks_and_catalogs() {
         let m = Manifest::parse(
             "id='permissions'\nname='P'\nversion='1'\nprovides=['sandbox','context','settings','catalog:permission-modes']\n\
-             hooks=[{event='tools/pre-execute', order=10}]\n[run]\ncommand='${target}/space-permissions'\n",
+             hooks=[{event='tools/pre-execute', order=10}]\nrequired=true\n[run]\ncommand='${target}/space-permissions'\n",
             Path::new("m.toml"),
         )
         .unwrap();
-        assert!(!m.is_agent());
+        assert!(!m.is_agent() && m.required);
         assert!(m.provides(CAP_SANDBOX) && !m.provides(CAP_AGENT));
         assert_eq!(m.catalogs().collect::<Vec<_>>(), [CATALOG_PERMISSION_MODES]);
         assert_eq!(m.hook_order(HOOK_TOOLS_PRE_EXECUTE), Some(10));
@@ -290,6 +294,12 @@ FOO = "bar"
         )
         .unwrap_err();
         assert!(err.to_string().contains("nothing else"), "{err}");
+        let err = Manifest::parse(
+            "id='a'\nname='A'\nversion='1'\nprovides=['agent']\nrequired=true\n[run]\ncommand='x'\n",
+            Path::new("m.toml"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("required"), "{err}");
         let err = Manifest::parse(
             "id='a'\nname='A'\nversion='1'\nprovides=['context']\nhooks=[{event='tools/post'}]\n[run]\ncommand='x'\n",
             Path::new("m.toml"),

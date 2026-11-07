@@ -44,6 +44,24 @@ pub struct FieldView {
     pub secret: bool,
     pub set: bool,
     pub input: Entity<InputState>,
+    /// The last save: being checked, or what the plugin said.
+    pub check: FieldCheck,
+    /// How the saved value is doing, from the plugin (e.g. "Working", or why not): `(text, ok)`.
+    pub status: Option<(SharedString, bool)>,
+}
+
+/// A save's progress: plugins check a value before it's stored.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum FieldCheck {
+    #[default]
+    Idle,
+    Checking,
+    /// Accepted and stored.
+    Saved,
+    /// Rejected; nothing was stored.
+    Invalid(SharedString),
+    /// Couldn't be checked now; "Save anyway" stores it.
+    Unverifiable(SharedString),
 }
 
 /// A plugin's settings section.
@@ -61,6 +79,8 @@ pub struct PluginRow {
     pub description: SharedString,
     /// Agents can't be turned off here.
     pub agent: bool,
+    /// A required guard: can't be turned off either.
+    pub required: bool,
     pub enabled: bool,
     /// "Running", "Exited: …", "Off".
     pub status: SharedString,
@@ -105,6 +125,8 @@ pub struct SettingsHandlers {
     pub on_mode: LevelHandler,
     /// Save the field's input as the setting's value.
     pub on_save_field: FieldHandler,
+    /// Store the field's value although it couldn't be checked.
+    pub on_save_anyway: FieldHandler,
     pub on_clear_field: FieldHandler,
     pub on_plugin_enabled: PluginToggleHandler,
 }
@@ -120,6 +142,7 @@ impl Default for SettingsHandlers {
             on_open_system_settings: Rc::new(|_, _| {}),
             on_mode: Rc::new(|_, _, _| {}),
             on_save_field: Rc::new(|_, _, _, _| {}),
+            on_save_anyway: Rc::new(|_, _, _, _| {}),
             on_clear_field: Rc::new(|_, _, _, _| {}),
             on_plugin_enabled: Rc::new(|_, _, _, _| {}),
         }
@@ -332,38 +355,68 @@ fn mode_row(modes: &[CatalogEntry], chosen: Option<&str>, on_mode: LevelHandler,
     row("Permission mode", "What the agent may do in a new thread.", Some(control))
 }
 
-/// One plugin setting: its label, whether it's set, a field, Save and (when set) Remove.
+/// One plugin setting: its label, whether it's set, a field, Save and (when set) Remove; under
+/// it, how the last save went (checking, rejected, "Save anyway") or how the value is doing.
 pub fn field_row(f: &FieldView, h: &SettingsHandlers, _window: &Window) -> Div {
-    let status = match (f.secret, f.set) {
+    let stored = match (f.secret, f.set) {
         (true, true) => "Saved in your Keychain.",
         (true, false) => "Not set. Stored in your Keychain once saved.",
         (false, true) => "Saved.",
         (false, false) => "Not set.",
     };
     let description: SharedString = if f.description.is_empty() {
-        status.into()
+        stored.into()
     } else {
-        format!("{} {status}", f.description).into()
+        format!("{} {stored}", f.description).into()
     };
-    let (save, clear) = (h.on_save_field.clone(), h.on_clear_field.clone());
+    let checking = f.check == FieldCheck::Checking;
+    let (save, clear, anyway) = (h.on_save_field.clone(), h.on_clear_field.clone(), h.on_save_anyway.clone());
+    let id = |what: &str| SharedString::from(format!("{what}-{}-{}", f.plugin_id, f.key));
     let (pid, key) = (f.plugin_id.clone(), f.key.clone());
-    let (pid2, key2) = (pid.clone(), key.clone());
+    let (pid2, key2, pid3, key3) = (pid.clone(), key.clone(), pid.clone(), key.clone());
     let control = div()
         .flex()
         .items_center()
         .gap_2()
         .child(div().w(size::SETTINGS_SELECT_W).child(Input::new(&f.input).small()))
         .child(
-            pill_button(SharedString::from(format!("save-{}-{}", f.plugin_id, f.key)), "Save", true)
-                .on_click(move |_, w, cx| save(pid.clone(), key.clone(), w, cx)),
+            pill_button(id("save"), if checking { "Checking…" } else { "Save" }, !checking)
+                .when(!checking, |b| b.on_click(move |_, w, cx| save(pid.clone(), key.clone(), w, cx))),
         )
-        .when(f.set, |d| {
-            d.child(
-                pill_button(SharedString::from(format!("clear-{}-{}", f.plugin_id, f.key)), "Remove", false)
-                    .on_click(move |_, w, cx| clear(pid2.clone(), key2.clone(), w, cx)),
-            )
+        .when(f.set && !checking, |d| {
+            d.child(pill_button(id("clear"), "Remove", false).on_click(move |_, w, cx| clear(pid2.clone(), key2.clone(), w, cx)))
         });
-    row(f.label.clone(), description, Some(control.into_any_element()))
+    let line = |icon: IconName, tone: Hsla, text: SharedString| {
+        div()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .text_size(text::SM)
+            .text_color(tone)
+            .child(Icon::new(icon).size(size::ICON_SM))
+            .child(div().text_color(color::text_2()).child(text))
+    };
+    let note: Option<AnyElement> = match &f.check {
+        FieldCheck::Checking => Some(line(IconName::Loader, color::text_3(), "Checking it with the service…".into()).into_any_element()),
+        FieldCheck::Invalid(m) => Some(line(IconName::CircleX, color::red(), format!("{m} It wasn't saved.").into()).into_any_element()),
+        FieldCheck::Unverifiable(m) => Some(
+            line(IconName::TriangleAlert, color::yellow(), m.clone())
+                .child(pill_button(id("anyway"), "Save anyway", false).on_click(move |_, w, cx| anyway(pid3.clone(), key3.clone(), w, cx)))
+                .into_any_element(),
+        ),
+        FieldCheck::Saved | FieldCheck::Idle => f.status.as_ref().map(|(text, ok)| {
+            if *ok {
+                line(IconName::CircleCheck, color::green(), text.clone()).into_any_element()
+            } else {
+                line(IconName::TriangleAlert, color::yellow(), text.clone()).into_any_element()
+            }
+        }),
+    };
+    div()
+        .flex()
+        .flex_col()
+        .child(row(f.label.clone(), description, Some(control.into_any_element())))
+        .children(note.map(|n| div().pl_4().pb_3().child(n)))
 }
 
 /// A plugin: name, status and what it does; a switch for service plugins.
@@ -373,8 +426,11 @@ pub fn plugin_row(p: &PluginRow, on_enabled: PluginToggleHandler, window: &Windo
     } else {
         format!("{} · {}", p.status, p.description).into()
     };
+    let label = |t: &'static str| div().text_size(text::MD).text_color(color::text_3()).child(t).into_any_element();
     let control = if p.agent {
-        div().text_size(text::MD).text_color(color::text_3()).child("Agent").into_any_element()
+        label("Agent")
+    } else if p.required {
+        label("Required")
     } else {
         let id = p.id.clone();
         let element_id = SharedString::from(format!("plugin-{}", p.id));
@@ -604,7 +660,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         super::composer::fixtures::modes("workspace-write", true).entries
     }
     /// The permissions plugin's section, its key field over a persistent input.
-    fn key_section(name: &'static str, set: bool) -> Example {
+    fn key_section(name: &'static str, set: bool, check: fn() -> FieldCheck, status: Option<(&'static str, bool)>) -> Example {
         Example::new(name, move |window, cx| {
             let input = window.use_keyed_state(SharedString::from(format!("p-key-{name}")), cx, |window, cx| {
                 InputState::new(window, cx).masked(true).placeholder(if set { "Enter a new key to replace it" } else { "sk-…" })
@@ -618,6 +674,8 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 secret: true,
                 set,
                 input,
+                check: check(),
+                status: status.map(|(t, ok)| (t.into(), ok)),
             };
             section("Permissions", None, vec![field_row(&field, &SettingsHandlers::default(), window).into_any_element()])
                 .into_any_element()
@@ -631,6 +689,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 name: "Pi Agent".into(),
                 description: "Coding agent on the pi SDK, using the Claude CLI subscription.".into(),
                 agent: true,
+                required: false,
                 enabled: true,
                 status: "Running".into(),
             },
@@ -641,6 +700,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                               operation with a decision model first."
                     .into(),
                 agent: false,
+                required: true,
                 enabled: true,
                 status: "Running".into(),
             },
@@ -679,8 +739,25 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             ]),
         ComponentPreview::new(Area::Settings, "Plugin settings", "Fields a plugin declares; secrets are masked.")
             .stacked()
-            .examples([key_section("key not set", false), key_section("key saved", true)]),
-        ComponentPreview::new(Area::Settings, "Plugins", "Service plugins can be turned off; agents can't.")
+            .examples([
+                key_section("key not set", false, || FieldCheck::Idle, None),
+                key_section("checking a new key", false, || FieldCheck::Checking, None),
+                key_section("rejected", false, || FieldCheck::Invalid("OpenAI rejected this key.".into()), None),
+                key_section(
+                    "couldn't check (save anyway)",
+                    false,
+                    || FieldCheck::Unverifiable("Couldn't reach OpenAI to check it (can't connect; offline?).".into()),
+                    None,
+                ),
+                key_section("saved and working", true, || FieldCheck::Saved, Some(("Working.", true))),
+                key_section(
+                    "saved, stopped working",
+                    true,
+                    || FieldCheck::Idle,
+                    Some(("OpenAI rejected your API key, so actions are paused. Last tried 2m 14s ago · next try in 2m 46s", false)),
+                ),
+            ]),
+        ComponentPreview::new(Area::Settings, "Plugins", "Service plugins can be turned off; agents and required guards can't.")
             .stacked()
             .examples([Example::new("plugins", |window, _| {
                 let mut rows = plugins();
@@ -689,6 +766,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                     name: "Audit log".into(),
                     description: "Writes every tool call to a file.".into(),
                     agent: false,
+                    required: false,
                     enabled: false,
                     status: "Off".into(),
                 });

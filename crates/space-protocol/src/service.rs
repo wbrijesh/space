@@ -9,12 +9,15 @@
 //! |---|---|---|
 //! | `plugin/initialize` | host → plugin | first, with the plugin's settings |
 //! | `settings/schema` | host → plugin | `provides` `settings` |
+//! | `settings/validate` | host → plugin | `provides` `settings`, before a new value is stored |
 //! | `settings/changed` (notification) | host → plugin | the user changed a setting |
 //! | `catalog/get` | host → plugin | `provides` `catalog:<name>` |
 //! | `catalog/changed` (notification) | plugin → host | a catalog's entries changed |
 //! | `context/get` | host → plugin | `provides` `context`, before each prompt |
 //! | `sandbox/confine` | host → plugin | `provides` `sandbox`, before an agent spawns a command |
 //! | `hooks/tools.preExecute` | host → plugin | hook `tools/pre-execute`, before every tool call |
+//! | `hooks/ready` (notification) | plugin → host | a listener's answers may have changed (e.g. it can decide again): held calls run the chain again |
+//! | `plugin/retry` (notification) | host → plugin | the user pressed a blocker's "Retry now" |
 
 use std::collections::BTreeMap;
 
@@ -28,11 +31,14 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const INITIALIZE: &str = "plugin/initialize";
 pub const SETTINGS_SCHEMA: &str = "settings/schema";
 pub const SETTINGS_CHANGED: &str = "settings/changed";
+pub const SETTINGS_VALIDATE: &str = "settings/validate";
 pub const CATALOG_GET: &str = "catalog/get";
 pub const CATALOG_CHANGED: &str = "catalog/changed";
 pub const CONTEXT_GET: &str = "context/get";
 pub const SANDBOX_CONFINE: &str = "sandbox/confine";
 pub const HOOK_PRE_EXECUTE: &str = "hooks/tools.preExecute";
+pub const HOOKS_READY: &str = "hooks/ready";
+pub const PLUGIN_RETRY: &str = "plugin/retry";
 
 /// Setting values by key. Secrets are included in clear (the host keeps them in the Keychain);
 /// an unset setting is absent.
@@ -45,6 +51,9 @@ pub struct Initialize {
     pub protocol_version: u32,
     #[serde(default)]
     pub settings: SettingValues,
+    /// Secret settings that are set but couldn't be read (e.g. the Keychain refused).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unreadable: Vec<String>,
 }
 
 /// `plugin/initialize` result.
@@ -89,6 +98,47 @@ pub struct SettingsSchema {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SettingsChanged {
     pub values: SettingValues,
+    /// As in [`Initialize::unreadable`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unreadable: Vec<String>,
+}
+
+/// `settings/validate` params: a value the user is about to save.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SettingCheck {
+    pub key: String,
+    pub value: String,
+}
+
+/// `settings/validate` result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SettingVerdict {
+    pub status: SettingStatus,
+    /// Shown under the field (why it's invalid or couldn't be checked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl SettingVerdict {
+    pub fn ok() -> Self {
+        Self { status: SettingStatus::Ok, message: None }
+    }
+    pub fn invalid(message: impl Into<String>) -> Self {
+        Self { status: SettingStatus::Invalid, message: Some(message.into()) }
+    }
+    pub fn unverifiable(message: impl Into<String>) -> Self {
+        Self { status: SettingStatus::Unverifiable, message: Some(message.into()) }
+    }
+}
+
+/// `ok`: store it. `invalid`: don't. `unverifiable`: it couldn't be checked now; the user may
+/// save it anyway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SettingStatus {
+    Ok,
+    Invalid,
+    Unverifiable,
 }
 
 /// `catalog/get` params, and `catalog/changed` params.
@@ -131,17 +181,34 @@ fn yes() -> bool {
     true
 }
 
-/// What stops a catalog entry from being used, and where to fix it.
+/// What stops a catalog entry from being used, and how to fix it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Blocker {
     pub text: String,
-    /// Link label (e.g. "Open Settings").
+    /// Links shown after the text, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<BlockerAction>,
+    /// When the provider last tried to resolve it, and when it tries next (Unix ms). The UI
+    /// shows them as live "last tried … ago · next try in …" times.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub action_label: Option<String>,
-    /// What the link does: `open-settings:<plugin id>`.
+    pub last_attempt_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub action: Option<String>,
+    pub next_attempt_ms: Option<u64>,
+}
+
+/// A blocker's link. `action` is one of `open-settings:<plugin id>`, `open-url:<url>`,
+/// `retry:<plugin id>` (sends `plugin/retry`) and `use-mode:<entry id>`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BlockerAction {
+    pub label: String,
+    pub action: String,
+}
+
+impl BlockerAction {
+    pub fn new(label: impl Into<String>, action: impl Into<String>) -> Self {
+        Self { label: label.into(), action: action.into() }
+    }
 }
 
 /// `context/get` params.
@@ -235,10 +302,16 @@ impl HookDecision {
     pub fn ask(reason: impl Into<String>) -> Self {
         Self { decision: HookVerdict::Ask, reason: Some(reason.into()) }
     }
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        Self { decision: HookVerdict::Unavailable, reason: Some(reason.into()) }
+    }
 }
 
 /// `deny` stops the chain; `allow` and `next` pass the call on; `ask` is remembered and the
-/// user is asked after the last listener, unless a later one denies.
+/// user is asked after the last listener, unless a later one denies. `unavailable`: the
+/// listener can't decide right now (fail closed): the host holds the call and runs the whole
+/// chain again once the listener sends `hooks/ready`, the thread's mode changes, or the user
+/// stops the turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum HookVerdict {
@@ -246,6 +319,7 @@ pub enum HookVerdict {
     Deny,
     Ask,
     Next,
+    Unavailable,
 }
 
 #[cfg(test)]
@@ -271,5 +345,23 @@ mod tests {
         assert!(e.ready && !e.default && e.blocker.is_none());
         let f: SettingField = serde_json::from_value(serde_json::json!({"key": "k", "label": "K", "kind": "secret"})).unwrap();
         assert_eq!(f.kind, SettingKind::Secret);
+        assert_eq!(
+            serde_json::to_value(HookDecision::unavailable("down")).unwrap(),
+            serde_json::json!({"decision": "unavailable", "reason": "down"})
+        );
+        let b = Blocker {
+            text: "t".into(),
+            actions: vec![BlockerAction::new("Retry now", "retry:p")],
+            last_attempt_ms: Some(1),
+            next_attempt_ms: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&b).unwrap(),
+            serde_json::json!({"text": "t", "actions": [{"label": "Retry now", "action": "retry:p"}], "lastAttemptMs": 1})
+        );
+        assert_eq!(
+            serde_json::to_value(SettingVerdict::unverifiable("offline")).unwrap(),
+            serde_json::json!({"status": "unverifiable", "message": "offline"})
+        );
     }
 }

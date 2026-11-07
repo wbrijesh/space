@@ -21,7 +21,9 @@ pub mod smoke;
 pub mod stub_script;
 
 pub use discovery::{DiscoveredPlugin, DiscoveryOptions, DiscoveryReport, PluginSource};
-pub use host::{AgentHandle, EventReceiver, Host, HostEvent, HostOptions, PluginStatus, Session, SettingState};
+pub use host::{
+    AgentHandle, EventReceiver, HELD_RECHECK, Host, HostEvent, HostOptions, PluginStatus, Session, SettingError, SettingState,
+};
 pub use secrets::Secrets;
 pub use session::{
     PermissionDecision, PermissionKind, PermissionOption, PermissionRequest, PlanEntry, SessionEvent, SessionId,

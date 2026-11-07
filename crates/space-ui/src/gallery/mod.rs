@@ -58,7 +58,14 @@ impl Gallery {
             let p = v.start();
             AnimationClock::update(cx, |c| c.pin(Some(p)));
         });
-        let previews = registry();
+        let mut previews = registry();
+        // `SPACE_GALLERY_ONLY=<text>|<text>…`: keep only examples whose name contains one of
+        // them (for screenshots of examples further down a long page).
+        if let Ok(only) = std::env::var("SPACE_GALLERY_ONLY") {
+            for p in &mut previews {
+                p.examples.retain(|e| only.split('|').any(|o| e.name.contains(o)));
+            }
+        }
         let page = std::env::var("SPACE_GALLERY_PAGE")
             .ok()
             .and_then(|want| {

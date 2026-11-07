@@ -6,16 +6,22 @@
 //! { "decision": "ask", "reason": "mode={mode} history={history}",
 //!   "sandbox": ["/usr/bin/env"], "context": "Mode: {mode}",
 //!   "catalog": [{ "id": "a", "name": "A", "default": true }],
-//!   "secret": "api_key", "needsSecret": ["b"] }
+//!   "secret": "api_key", "needsSecret": ["b"],
+//!   "readyFile": "/tmp/x", "invalid": ["bad"], "unverifiable": ["offline"] }
 //! ```
 //!
-//! * `decision` — the `tools/pre-execute` answer: `allow`, `deny`, `ask`, `next` (default), or
-//!   `crash` (exit at once, so the host sees a failing listener).
+//! * `decision` — the `tools/pre-execute` answer: `allow`, `deny`, `ask`, `next` (default),
+//!   `unavailable`, or `crash` (exit at once, so the host sees a failing listener).
+//! * `readyFile` — answer `unavailable` until this file exists; once it appears, send
+//!   `hooks/ready` (checked every 50 ms).
+//! * `holdModes` — answer `unavailable` in these permission modes.
+//! * `crashUntil` — exit at once on every call until this file exists.
 //! * `reason` — `{mode}`, `{tool}` and `{history}` (the number of earlier items) are filled in.
 //! * `sandbox` — `sandbox/confine` puts these words in front of the argv.
 //! * `context` — one hidden context section with this text.
 //! * `catalog` — the entries of `permission-modes`; ids listed in `needsSecret` are not ready
 //!   until the secret setting named by `secret` is set.
+//! * `invalid`, `unverifiable` — `settings/validate` answers so for these values (else ok).
 
 use std::sync::{Mutex, OnceLock};
 
@@ -35,6 +41,14 @@ struct Config {
     secret: Option<String>,
     #[serde(default)]
     needs_secret: Vec<String>,
+    ready_file: Option<String>,
+    #[serde(default)]
+    hold_modes: Vec<String>,
+    crash_until: Option<String>,
+    #[serde(default)]
+    invalid: Vec<String>,
+    #[serde(default)]
+    unverifiable: Vec<String>,
 }
 
 struct Guard {
@@ -53,6 +67,16 @@ impl Plugin for Guard {
     async fn initialize(&self, init: Initialize, host: Host) -> Result<Initialized, RpcError> {
         eprintln!("space-stub-guard: initialized with {} setting(s)", init.settings.len());
         *self.settings.lock().unwrap() = init.settings;
+        if let Some(path) = self.config.ready_file.clone() {
+            let host = host.clone();
+            tokio::spawn(async move {
+                while !std::path::Path::new(&path).exists() {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                eprintln!("space-stub-guard: ready");
+                host.hooks_ready();
+            });
+        }
         let _ = self.host.set(host);
         Ok(Initialized { name: Some("stub guard".into()) })
     }
@@ -68,9 +92,19 @@ impl Plugin for Guard {
         SettingsSchema { fields: fields.collect() }
     }
 
-    fn settings_changed(&self, values: SettingValues) {
-        eprintln!("space-stub-guard: settings changed ({} set)", values.len());
-        *self.settings.lock().unwrap() = values;
+    async fn validate_setting(&self, check: SettingCheck) -> Result<SettingVerdict, RpcError> {
+        Ok(if self.config.invalid.contains(&check.value) {
+            SettingVerdict::invalid("That key was rejected.")
+        } else if self.config.unverifiable.contains(&check.value) {
+            SettingVerdict::unverifiable("Couldn't reach the service.")
+        } else {
+            SettingVerdict::ok()
+        })
+    }
+
+    fn settings_changed(&self, changed: SettingsChanged) {
+        eprintln!("space-stub-guard: settings changed ({} set)", changed.values.len());
+        *self.settings.lock().unwrap() = changed.values;
         if let Some(host) = self.host.get() {
             host.catalog_changed(space_plugin::protocol::CATALOG_PERMISSION_MODES);
         }
@@ -88,8 +122,8 @@ impl Plugin for Guard {
                     e.ready = false;
                     e.blocker = Some(Blocker {
                         text: "Set up the key to use this mode".into(),
-                        action_label: Some("Open Settings".into()),
-                        action: Some("open-settings:guard".into()),
+                        actions: vec![BlockerAction::new("Open Settings", "open-settings:guard")],
+                        ..Default::default()
                     });
                 }
                 e
@@ -116,10 +150,20 @@ impl Plugin for Guard {
         let reason = self.config.reason.as_deref().unwrap_or("stub guard");
         let reason = self.fill(reason, &call.mode, &call.call.tool, call.history.len());
         eprintln!("space-stub-guard: {} {} in {}", call.call.tool, call.call.args, call.mode);
+        if let Some(path) = &self.config.crash_until
+            && !std::path::Path::new(path).exists()
+        {
+            std::process::exit(7);
+        }
+        let missing = |p: &Option<String>| p.as_ref().is_some_and(|p| !std::path::Path::new(p).exists());
+        if missing(&self.config.ready_file) || self.config.hold_modes.contains(&call.mode) {
+            return Ok(HookDecision::unavailable(reason));
+        }
         Ok(match self.config.decision.as_deref().unwrap_or("next") {
             "allow" => HookDecision::allow(),
             "deny" => HookDecision::deny(reason),
             "ask" => HookDecision::ask(reason),
+            "unavailable" => HookDecision::unavailable(reason),
             "crash" => std::process::exit(7),
             _ => HookDecision::next(),
         })

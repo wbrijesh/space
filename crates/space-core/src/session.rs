@@ -44,6 +44,8 @@ pub struct ToolCallInfo {
     pub locations: Vec<String>,
     /// The host's tool pipeline stopped this call, and why.
     pub blocked: Option<String>,
+    /// The pipeline is holding this call until a guard can decide again, and why.
+    pub held: Option<String>,
 }
 
 /// Partial update to a tool call; `None` fields are unchanged.
@@ -120,6 +122,9 @@ pub enum SessionEvent {
     PermissionRequested(PermissionRequest),
     /// The host's tool pipeline denied a tool call (a guard plugin, or the user via its card).
     ToolCallBlocked { id: String, reason: String },
+    /// The pipeline holds a tool call (`reason`: a guard can't decide right now; it waits) or
+    /// lets it go again (`None`). `title` names the call for a card the agent hasn't sent yet.
+    ToolCallHeld { id: String, title: String, reason: Option<String> },
     PermissionResolved { request_id: u64, decision: PermissionDecision },
     /// The prompt request settled. `stop_reason` is the ACP stop reason (`end_turn`,
     /// `cancelled`, ...) or `error`.
@@ -179,9 +184,10 @@ impl SessionState {
             },
             SessionEvent::ToolCall(call) => {
                 if let Some(existing) = self.tool_mut(&call.id) {
-                    let blocked = existing.blocked.take();
+                    let (blocked, held) = (existing.blocked.take(), existing.held.take());
                     *existing = call.clone();
                     existing.blocked = existing.blocked.take().or(blocked);
+                    existing.held = existing.held.take().or(held);
                 } else {
                     self.items.push(TranscriptItem::Tool(call.clone()));
                 }
@@ -199,6 +205,7 @@ impl SessionState {
                         output: String::new(),
                         locations: Vec::new(),
                         blocked: None,
+                        held: None,
                     };
                     patch_tool(&mut call, patch);
                     self.items.push(TranscriptItem::Tool(call));
@@ -224,7 +231,22 @@ impl SessionState {
                     output: String::new(),
                     locations: Vec::new(),
                     blocked: Some(reason.clone()),
+                    held: None,
                 })),
+            },
+            SessionEvent::ToolCallHeld { id, title, reason } => match self.tool_mut(id) {
+                Some(call) => call.held.clone_from(reason),
+                None if reason.is_some() => self.items.push(TranscriptItem::Tool(ToolCallInfo {
+                    id: id.clone(),
+                    title: title.clone(),
+                    kind: "other".into(),
+                    status: ToolStatus::Pending,
+                    output: String::new(),
+                    locations: Vec::new(),
+                    blocked: None,
+                    held: reason.clone(),
+                })),
+                None => {}
             },
             SessionEvent::PermissionRequested(request) => {
                 self.items.push(TranscriptItem::Permission { request: request.clone(), resolved: None })
@@ -241,6 +263,12 @@ impl SessionState {
             }
             SessionEvent::TurnEnded { stop_reason } => {
                 self.running = false;
+                // Nothing waits once the turn is over.
+                for item in &mut self.items {
+                    if let TranscriptItem::Tool(t) = item {
+                        t.held = None;
+                    }
+                }
                 // Any unanswered permission card is moot now.
                 for item in &mut self.items {
                     if let TranscriptItem::Permission { resolved: resolved @ None, .. } = item {
@@ -253,6 +281,14 @@ impl SessionState {
             }
             SessionEvent::Error { message } => self.items.push(TranscriptItem::Error(message.clone())),
         }
+    }
+
+    /// Why the turn is paused: the reason of a tool call the pipeline is holding, if any.
+    pub fn held(&self) -> Option<&str> {
+        self.items.iter().find_map(|i| match i {
+            TranscriptItem::Tool(t) => t.held.as_deref(),
+            _ => None,
+        })
     }
 
     /// The first unresolved permission request, if any.
@@ -312,6 +348,7 @@ mod tests {
                 output: String::new(),
                 locations: vec![],
                 blocked: None,
+                held: None,
             })),
             ev(SessionEvent::ToolCallUpdate(ToolCallPatch {
                 id: "t1".into(),
@@ -352,6 +389,7 @@ mod tests {
             output: String::new(),
             locations: vec![],
             blocked: None,
+            held: None,
         }));
         s.apply(&SessionEvent::ToolCallUpdate(ToolCallPatch {
             id: "t".into(),
@@ -363,6 +401,41 @@ mod tests {
         // After the agent's report, too.
         s.apply(&SessionEvent::ToolCallBlocked { id: "t".into(), reason: "again".into() });
         assert_eq!(s.items.len(), 1);
+    }
+
+    #[test]
+    fn held_calls_show_until_released_or_the_turn_ends() {
+        let mut s = SessionState::new("s1");
+        let held = |reason: Option<&str>| SessionEvent::ToolCallHeld {
+            id: "t".into(),
+            title: "bash: ls".into(),
+            reason: reason.map(Into::into),
+        };
+        // Held before the agent reports the call: a card with the host's title.
+        s.apply(&held(Some("OpenAI rejected your API key")));
+        assert_eq!(s.held(), Some("OpenAI rejected your API key"));
+        let [TranscriptItem::Tool(t)] = s.items.as_slice() else { panic!("{:?}", s.items) };
+        assert_eq!((t.title.as_str(), t.status), ("bash: ls", ToolStatus::Pending));
+        // The agent's report keeps the hold; releasing clears it.
+        s.apply(&SessionEvent::ToolCall(ToolCallInfo {
+            id: "t".into(),
+            title: "ls".into(),
+            kind: "execute".into(),
+            status: ToolStatus::Pending,
+            output: String::new(),
+            locations: vec![],
+            blocked: None,
+            held: None,
+        }));
+        assert_eq!(s.held(), Some("OpenAI rejected your API key"));
+        s.apply(&held(None));
+        assert_eq!(s.held(), None);
+        // A release for an unknown call adds nothing; the end of a turn clears any hold.
+        s.apply(&SessionEvent::ToolCallHeld { id: "x".into(), title: String::new(), reason: None });
+        assert_eq!(s.items.len(), 1);
+        s.apply(&held(Some("again")));
+        s.apply(&SessionEvent::TurnEnded { stop_reason: "cancelled".into() });
+        assert_eq!(s.held(), None);
     }
 
     #[test]
