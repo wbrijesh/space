@@ -1,9 +1,13 @@
 //! Session model: the events a session emits and a reducer that folds them into a
 //! transcript. The UI keeps one [`SessionState`] per session and calls
 //! [`SessionState::apply`] for every [`SessionEvent`] it receives.
+//!
+//! Events serialize as they are, so a saved thread is the list of its events, replayed through
+//! the same reducer.
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
 use space_protocol::SpaceStatus;
 
 /// Opaque ACP session id.
@@ -12,7 +16,7 @@ pub type SessionId = String;
 /// Tool call kind (mirrors ACP `ToolKind`, as a display string like `"execute"`).
 pub type ToolKind = String;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolStatus {
     Pending,
     InProgress,
@@ -32,7 +36,7 @@ impl ToolStatus {
 }
 
 /// A tool call as shown in the transcript.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCallInfo {
     pub id: String,
     pub title: String,
@@ -49,7 +53,7 @@ pub struct ToolCallInfo {
 }
 
 /// Partial update to a tool call; `None` fields are unchanged.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ToolCallPatch {
     pub id: String,
     pub title: Option<String>,
@@ -59,7 +63,7 @@ pub struct ToolCallPatch {
     pub locations: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PermissionKind {
     AllowOnce,
     AllowAlways,
@@ -73,7 +77,7 @@ impl PermissionKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PermissionOption {
     pub id: String,
     pub name: String,
@@ -81,7 +85,7 @@ pub struct PermissionOption {
 }
 
 /// A pending `session/request_permission`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PermissionRequest {
     /// Harness-local id used to answer the request.
     pub request_id: u64,
@@ -92,21 +96,21 @@ pub struct PermissionRequest {
 }
 
 /// The user's answer to a permission request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PermissionDecision {
     /// One of the request's option ids.
     Selected(String),
     Cancelled,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlanEntry {
     pub content: String,
     pub status: String,
 }
 
 /// Everything that can happen in a session.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SessionEvent {
     Created { plugin_id: String, cwd: PathBuf },
     /// The user sent a prompt (emitted by the harness, not the agent). `attachments` are

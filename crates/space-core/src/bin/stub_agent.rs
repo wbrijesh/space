@@ -6,6 +6,10 @@
 //! * `permission` — ask `session/request_permission` before running the tool.
 //! * `slow` — stream 50 chunks 100 ms apart (use with cancel).
 //! * `crash` — exit with code 3 mid-turn.
+//! * `recall` — answer how many earlier prompts of the session it remembers.
+//!
+//! Given a data folder (`_meta["space/dataDir"]`), a session keeps its prompts there and can be
+//! loaded again (`session/load`, which first replays a chunk, as agents replay history).
 //!
 //! With `SPACE_STUB_SCRIPT=<file>` (see `space_core::stub_script`), a prompt matching a
 //! scripted turn plays that turn's steps instead, which can hold a turn open indefinitely
@@ -25,7 +29,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use space_core::stub_script::{SCRIPT_ENV, Step, StubScript};
-use space_protocol::ext::{CONTEXT_META_KEY, PROTOCOL_VERSION_META_KEY};
+use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY};
 use space_protocol::{Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, SpaceStatus, Verdict};
 use space_protocol::acp::{self, Agent, ByteStreams, Client, Responder};
 use space_protocol::acp_schema::*;
@@ -46,6 +50,15 @@ struct StubSession {
     model: String,
     thinking: String,
     context_tokens: u64,
+    /// Where the session's prompts are kept (in its data folder).
+    history: Option<std::path::PathBuf>,
+}
+
+impl StubSession {
+    fn new(meta: Option<&Meta>) -> Self {
+        let dir = meta.and_then(|m| m.get(DATA_DIR_META_KEY)).and_then(|d| d.as_str()).map(std::path::PathBuf::from);
+        Self { model: MODELS[0].0.into(), thinking: "low".into(), context_tokens: 0, history: dir.map(|d| d.join("history.txt")) }
+    }
 }
 
 /// Overrides the Space protocol version the stub reports.
@@ -54,11 +67,7 @@ const MODELS: [(&str, &str); 2] = [("stub-model", "Stub Model"), ("stub-fast", "
 const LEVELS: [&str; 4] = ["low", "medium", "high", "max"];
 impl State {
     fn status(&self, session_id: &str) -> SpaceStatus {
-        let s = self.sessions.lock().unwrap().get(session_id).cloned().unwrap_or(StubSession {
-            model: MODELS[0].0.into(),
-            thinking: "low".into(),
-            context_tokens: 0,
-        });
+        let s = self.sessions.lock().unwrap().get(session_id).cloned().unwrap_or_else(|| StubSession::new(None));
         SpaceStatus {
             session_id: session_id.to_string(),
             provider: Some("stub".into()),
@@ -106,6 +115,7 @@ async fn main() -> acp::Result<()> {
                 meta.insert(PROTOCOL_VERSION_META_KEY.into(), version.into());
                 responder.respond(
                     InitializeResponse::new(req.protocol_version)
+                        .agent_capabilities(AgentCapabilities::new().load_session(true))
                         .agent_info(Implementation::new("space-stub-agent", env!("CARGO_PKG_VERSION")))
                         .meta(meta),
                 )
@@ -115,18 +125,29 @@ async fn main() -> acp::Result<()> {
         .on_receive_request(
             {
                 let state = state.clone();
-                async move |_req: NewSessionRequest, responder, cx: Conn| {
-                    let id = format!("stub-{}", state.next_session.fetch_add(1, Ordering::Relaxed) + 1);
-                    state.sessions.lock().unwrap().insert(
-                        id.clone(),
-                        StubSession {
-                            model: MODELS[0].0.into(),
-                            thinking: "low".into(),
-                            context_tokens: 0,
-                        },
-                    );
+                async move |req: NewSessionRequest, responder, cx: Conn| {
+                    // Unique across runs, so a loaded session can't clash with a new one.
+                    let run = std::process::id();
+                    let id = format!("stub-{run}-{}", state.next_session.fetch_add(1, Ordering::Relaxed) + 1);
+                    state.sessions.lock().unwrap().insert(id.clone(), StubSession::new(req.meta.as_ref()));
                     responder.respond(NewSessionResponse::new(id.clone()))?;
                     cx.send_notification(state.status(&id))
+                }
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = state.clone();
+                async move |req: LoadSessionRequest, responder, cx: Conn| {
+                    let id = req.session_id.clone();
+                    eprintln!("space-stub-agent: load {}", id.0);
+                    state.sessions.lock().unwrap().insert(id.0.to_string(), StubSession::new(req.meta.as_ref()));
+                    // Agents replay the conversation while loading.
+                    let replay = ContentChunk::new(ContentBlock::Text(TextContent::new("(replayed history)")));
+                    cx.send_notification(SessionNotification::new(id.clone(), SessionUpdate::AgentMessageChunk(replay)))?;
+                    responder.respond(LoadSessionResponse::new())?;
+                    cx.send_notification(state.status(&id.0))
                 }
             },
             acp::on_receive_request!(),
@@ -309,7 +330,21 @@ async fn run_turn(
         )))?;
     }
 
-    let words: Vec<String> = if text.contains("slow") {
+    // Earlier prompts of this session (kept in its data folder), then this one.
+    let history = state.sessions.lock().unwrap().get(&*sid.0).and_then(|s| s.history.clone());
+    let earlier = history.as_ref().and_then(|h| std::fs::read_to_string(h).ok()).map_or(0, |t| t.lines().count());
+    if let Some(h) = &history {
+        let line = format!("{}\n", text.replace('\n', " "));
+        let kept = std::fs::create_dir_all(h.parent().unwrap())
+            .and_then(|_| std::fs::OpenOptions::new().create(true).append(true).open(h))
+            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+        if let Err(e) = kept {
+            eprintln!("space-stub-agent: can't keep the session in {}: {e}", h.display());
+        }
+    }
+    let words: Vec<String> = if text.contains("recall") {
+        vec![format!("I remember {earlier} earlier prompt(s).")]
+    } else if text.contains("slow") {
         (1..=50).map(|i| format!("{i} ")).collect()
     } else {
         ["Hello ", "from ", "the ", "stub ", "agent."].map(String::from).to_vec()

@@ -1,6 +1,6 @@
 //! Agent plugins: the ACP client connection, sessions and permission requests.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context as _, Result, anyhow, bail};
 use space_protocol::acp::{self, Agent, ByteStreams, Client};
 use space_protocol::acp_schema as schema;
-use space_protocol::ext::{CONTEXT_META_KEY, PROTOCOL_VERSION_META_KEY};
+use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY};
 use space_protocol::service::HistoryItem;
 use space_protocol::{Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SpaceStatus};
 use tokio::sync::oneshot;
@@ -49,6 +49,8 @@ pub(super) struct Shared {
     plugin_id: String,
     next_permission: AtomicU64,
     permissions: Mutex<HashMap<u64, PendingPermission>>,
+    /// Sessions being loaded: the history an agent replays while loading is already on screen.
+    loading: Mutex<HashSet<SessionId>>,
     /// The process exited or was stopped.
     dead: AtomicBool,
 }
@@ -60,6 +62,9 @@ struct PendingPermission {
 
 impl Shared {
     pub(super) fn on_session_notification(&self, n: schema::SessionNotification) {
+        if self.loading.lock().unwrap().contains(n.session_id.0.as_ref()) {
+            return;
+        }
         if let Some(event) = convert::session_update(n.update) {
             self.host.emit_session(&n.session_id.0, event);
         }
@@ -129,6 +134,7 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
         plugin_id: plugin_id.clone(),
         next_permission: AtomicU64::new(1),
         permissions: Mutex::new(HashMap::new()),
+        loading: Mutex::new(HashSet::new()),
         dead: AtomicBool::new(false),
     });
 
@@ -254,8 +260,9 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
         check_protocol(version.as_u64().map(|v| v as u32))?;
     }
     let agent_name = init.agent_info.as_ref().map(|i| i.title.clone().unwrap_or_else(|| i.name.clone()));
+    let can_load = init.agent_capabilities.load_session;
 
-    let inner = Arc::new(AgentInner { plugin_id: plugin_id.clone(), conn, process, shared, agent_name });
+    let inner = Arc::new(AgentInner { plugin_id: plugin_id.clone(), conn, process, shared, agent_name, can_load });
     host.agents.lock().unwrap().insert(plugin_id, Arc::downgrade(&inner));
     Ok(AgentHandle { inner })
 }
@@ -268,6 +275,14 @@ impl AgentInner {
     pub(super) fn stop(&self) {
         self.process.kill();
     }
+}
+
+/// `_meta` with the session's data folder, if any.
+fn data_dir_meta(data_dir: Option<&std::path::Path>) -> Option<schema::Meta> {
+    let dir = data_dir?;
+    let mut meta = schema::Meta::new();
+    meta.insert(DATA_DIR_META_KEY.into(), dir.display().to_string().into());
+    Some(meta)
 }
 
 fn acp_error(what: &str, e: acp::Error, process: &PluginProcess) -> anyhow::Error {
@@ -291,6 +306,8 @@ pub(super) struct AgentInner {
     process: PluginProcess,
     shared: Arc<Shared>,
     agent_name: Option<String>,
+    /// The agent can load a session again (ACP `loadSession`).
+    can_load: bool,
 }
 
 impl AgentHandle {
@@ -319,26 +336,68 @@ impl AgentHandle {
 
     /// `session/new` with `cwd`.
     pub async fn new_session(&self, cwd: impl Into<PathBuf>) -> Result<Session> {
+        self.new_session_in(cwd, None).await
+    }
+
+    /// `session/new` with `cwd`, telling the agent the folder it may keep the session's own
+    /// files in (to load it again later).
+    pub async fn new_session_in(&self, cwd: impl Into<PathBuf>, data_dir: Option<PathBuf>) -> Result<Session> {
         let cwd = cwd.into();
         let this = self.clone();
         let host = self.inner.shared.host.clone();
-        let task_cwd = cwd.clone();
+        let request = schema::NewSessionRequest::new(cwd.clone()).meta(data_dir_meta(data_dir.as_deref()));
         let response = host
             .rt
             .spawn(async move {
                 this.inner
                     .conn
-                    .send_request(schema::NewSessionRequest::new(task_cwd))
+                    .send_request(request)
                     .block_task()
                     .await
                     .map_err(|e| acp_error("session/new", e, &this.inner.process))
             })
             .await??;
         let id = response.session_id.0.to_string();
-        host.sessions.lock().unwrap().insert(id.clone(), SessionMeta::new(cwd.clone()));
-        host.emit_session(&id, SessionEvent::Created { plugin_id: self.inner.plugin_id.clone(), cwd });
+        host.emit_session(&id, SessionEvent::Created { plugin_id: self.inner.plugin_id.clone(), cwd: cwd.clone() });
+        Ok(self.session(id, cwd))
+    }
+
+    /// Whether the agent can load a session again ([`AgentHandle::load_session`]).
+    pub fn can_load_session(&self) -> bool {
+        self.inner.can_load
+    }
+
+    /// ACP `session/load`: continue session `session_id` (from an earlier run) in `cwd`. The
+    /// history the agent replays while loading isn't reported; the thread already shows it.
+    pub async fn load_session(&self, session_id: &str, cwd: impl Into<PathBuf>, data_dir: Option<PathBuf>) -> Result<Session> {
+        if !self.inner.can_load {
+            bail!("{} can't load a saved session", self.agent_name().unwrap_or(&self.inner.plugin_id));
+        }
+        let cwd = cwd.into();
+        let (this, id) = (self.clone(), session_id.to_string());
+        let host = self.inner.shared.host.clone();
+        let request = schema::LoadSessionRequest::new(id.clone(), cwd.clone()).meta(data_dir_meta(data_dir.as_deref()));
+        self.inner.shared.loading.lock().unwrap().insert(id.clone());
+        let response = host
+            .rt
+            .spawn(async move {
+                this.inner
+                    .conn
+                    .send_request(request)
+                    .block_task()
+                    .await
+                    .map_err(|e| acp_error("session/load", e, &this.inner.process))
+            })
+            .await;
+        self.inner.shared.loading.lock().unwrap().remove(&id);
+        response??;
+        Ok(self.session(id, cwd))
+    }
+
+    fn session(&self, id: SessionId, cwd: PathBuf) -> Session {
+        self.inner.shared.host.sessions.lock().unwrap().insert(id.clone(), SessionMeta::new(cwd));
         let inner = SessionInner { id, agent: self.clone(), running: AtomicBool::new(false) };
-        Ok(Session { inner: Arc::new(inner) })
+        Session { inner: Arc::new(inner) }
     }
 
     /// Answer a `session/request_permission` from this agent.

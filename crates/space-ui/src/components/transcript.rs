@@ -390,7 +390,7 @@ pub fn turn_divider(reason: &str) -> Div {
         "cancelled" => "Stopped".to_string(),
         "max_tokens" | "max_turn_requests" => "Reply stopped at the output limit".to_string(),
         "refusal" => "The model declined to continue".to_string(),
-        "new-session" => "The agent restarted · continuing in a new session without the earlier context".to_string(),
+        "new-session" => "Continuing in a new session, without the earlier context".to_string(),
         other => format!("Turn ended: {other}"),
     };
     div()

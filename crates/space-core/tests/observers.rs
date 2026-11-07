@@ -40,7 +40,7 @@ fn host(root: &Path) -> (Host, EventReceiver) {
         discovery: DiscoveryOptions { bundled_roots: vec![root.to_path_buf()], user_root: None, project_root: None },
         secrets: Secrets::new(TEST_KEYCHAIN),
         held_recheck: Duration::from_secs(60),
-        grants: None,
+        space_dir: None,
     };
     Host::new(tokio::runtime::Handle::current(), options)
 }

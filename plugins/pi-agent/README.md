@@ -15,7 +15,7 @@ Rust types (`just protocol`; never edit it by hand). The contract with the harne
 ```
 Space harness (ACP client) ──stdin/stdout NDJSON──▶ node dist/main.js
                                                    ├─ @agentclientprotocol/sdk  agent() app, ACP v1
-                                                   ├─ pi AgentSessionRuntime per ACP session (in memory)
+                                                   ├─ pi AgentSessionRuntime per ACP session (kept in the host's data folder)
                                                    │    tools: read, bash, edit, write (run in-process),
                                                    │    each put to the host's tool pipeline first
                                                    └─ claude-cli provider ──▶ `claude --print` (subscription)
@@ -23,8 +23,9 @@ Space harness (ACP client) ──stdin/stdout NDJSON──▶ node dist/main.js
 
 | ACP | Behaviour |
 |---|---|
-| `initialize` | Returns `protocolVersion: 1`, `loadSession: false`, `agentInfo {name: "pi-agent", version}`, and the Space protocol version in `_meta["space/protocolVersion"]` |
-| `session/new {cwd}` | Creates an isolated pi session for `cwd`, then sends the `_space/status` notification (`provider`, `model`, `thinkingLevel`, `availableModels`, `thinkingLevels`, context usage). No ACP modes: permission modes belong to the host. |
+| `initialize` | Returns `protocolVersion: 1`, `loadSession: true`, `agentInfo {name: "pi-agent", version}`, and the Space protocol version in `_meta["space/protocolVersion"]` |
+| `session/new {cwd}` | Creates an isolated pi session for `cwd`, kept in `_meta["space/dataDir"]` when the host gives a folder (else in memory), then sends the `_space/status` notification (`provider`, `model`, `thinkingLevel`, `availableModels`, `thinkingLevels`, context usage). No ACP modes: permission modes belong to the host. |
+| `session/load {sessionId, cwd}` | Continues the pi session kept in `_meta["space/dataDir"]` (pi's own session file; never `~/.pi`) under the same id, then sends `_space/status`. Nothing is replayed: Space shows the conversation from its own saved thread. |
 | `session/prompt` | Joins the text blocks (other block types are described inline) and runs `session.prompt()`. Hidden context sections in `_meta["space/context"]` go into the run's system prompt. It streams pi events as `session/update` notifications and resolves with `end_turn`, `cancelled` or `max_tokens`. Provider errors become a JSON-RPC error (-32603) carrying pi's message, for example the claude-cli usage-credit stop. |
 | `session/cancel` | `session.abort()`; the pending prompt resolves with `cancelled` |
 | `_space/session/configure {sessionId, provider?, model?, thinkingLevel?}` | `session.setModel()` / `session.setThinkingLevel()` (session-only, pi clamps the level to the model), returns the new `_space/status` payload. Rejected while a prompt is running. |
@@ -57,15 +58,16 @@ An inline pi extension and a replacement bash tool connect pi to it:
   (`space_<id>`) for that run, through `before_agent_start`. They're never part of the user's message and
   never sent back over ACP; the previous run's sections are removed first.
 
-`pnpm test-host` checks all of this on a real pi session with no model requests: pi-ai's faux provider plays
+`pnpm test-host` checks all of this, and that a session kept in a folder loads again with its messages, on a real pi session with no model requests: pi-ai's faux provider plays
 the model (including tool calls) and a fake host answers the requests.
 
 ### Isolation from your pi setup
 
 - `PI_CODING_AGENT_DIR` is set to a private directory, `~/.space/pi-agent` by default. pi writes nothing to
-  `~/.pi`, and in practice nothing at all, because every store is in memory.
+  `~/.pi`, and in practice nothing at all: the only files are sessions, in the folder the host gives each
+  one (`~/.space/threads/<thread>/agent/`, deleted with the thread).
 - Settings are in memory (`SettingsManager.inMemory`) and credentials too (`InMemoryCredentialStore`). No
-  `models.json` is read, and sessions are in memory (`SessionManager.inMemory`).
+  `models.json` is read. Sessions without a host folder are in memory (`SessionManager.inMemory`).
 - Your configured pi packages, extensions, skills, prompt templates and themes are **not** loaded. This
   matters because your `~/.pi/agent/settings.json` may install `@pi-plugins/claude-cli` too. The provider
   is registered once, as an inline extension factory. Project context files such as `AGENTS.md` and

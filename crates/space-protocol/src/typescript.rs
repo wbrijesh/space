@@ -27,6 +27,7 @@ fn generate() -> String {
         ("PRE_EXECUTE_METHOD", format!("{PRE_EXECUTE_METHOD:?}")),
         ("CONFINE_METHOD", format!("{CONFINE_METHOD:?}")),
         ("CONTEXT_META_KEY", format!("{CONTEXT_META_KEY:?}")),
+        ("DATA_DIR_META_KEY", format!("{DATA_DIR_META_KEY:?}")),
     ];
     for (name, value) in consts {
         out.push_str(&format!("export const {name} = {value};\n"));

@@ -383,7 +383,8 @@ impl HostInner {
         let observer = (!plugin.manifest.observes.is_empty()).then(|| Observer::start(&self.rt, peer.clone(), plugin_id.clone()));
         let mut service = Service { plugin, peer, _process: process, dead, fields, observer };
         let (settings, unreadable) = self.setting_values(&service).await;
-        let init = svc::Initialize { protocol_version: svc::PROTOCOL_VERSION, settings, unreadable };
+        let space_dir = self.options.space_dir.as_ref().map(|d| d.display().to_string());
+        let init = svc::Initialize { protocol_version: svc::PROTOCOL_VERSION, settings, unreadable, space_dir };
         let initialized: svc::Initialized = service
             .peer
             .call(svc::INITIALIZE, &init, Some(SERVICE_TIMEOUT))

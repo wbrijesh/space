@@ -21,13 +21,13 @@ fn guard(root: &Path, id: &str, extras: &str, config: &str) {
     std::fs::write(dir.join("space-plugin.toml"), manifest).unwrap();
 }
 
-fn host(bundled: &Path, user: Option<PathBuf>, grants: Option<PathBuf>) -> (Host, EventReceiver) {
+fn host(bundled: &Path, user: Option<PathBuf>, space_dir: Option<PathBuf>) -> (Host, EventReceiver) {
     let options = HostOptions {
         project_dir: bundled.to_path_buf(),
         discovery: DiscoveryOptions { bundled_roots: vec![bundled.to_path_buf()], user_root: user, project_root: None },
         secrets: Secrets::new(TEST_KEYCHAIN),
         held_recheck: Duration::from_secs(60),
-        grants,
+        space_dir,
     };
     Host::new(tokio::runtime::Handle::current(), options)
 }
@@ -135,14 +135,15 @@ async fn each_plugin_gets_only_its_own_secrets() {
 #[tokio::test(flavor = "multi_thread")]
 async fn user_plugins_wait_for_approval_and_ask_again_for_more() {
     let tmp = tempfile::tempdir().unwrap();
-    let (bundled, user, grants) = (tmp.path().join("bundled"), tmp.path().join("user"), tmp.path().join("plugin-grants.json"));
+    let (bundled, user, space_dir) = (tmp.path().join("bundled"), tmp.path().join("user"), tmp.path().join("space"));
+    let grants = space_dir.join(space_core::GRANTS_FILE);
     std::fs::create_dir_all(&bundled).unwrap();
     guard(&bundled, "sb", "provides=['sandbox']", "{}");
     guard(&user, "extra", "provides=['context']\nrequires=['sandbox']", "{}");
     // A user plugin that isn't approved provides nothing.
     guard(&user, "lists", "provides=['catalog:x']", r#"{"catalog":[{"id":"a","name":"A"}]}"#);
 
-    let (host, mut events) = host(&bundled, Some(user.clone()), Some(grants.clone()));
+    let (host, mut events) = host(&bundled, Some(user.clone()), Some(space_dir.clone()));
     assert_eq!(host.approval("sb"), Approval::Trusted);
     assert_eq!(host.approval("extra"), Approval::Pending);
     host.start_services().await;
@@ -157,10 +158,10 @@ async fn user_plugins_wait_for_approval_and_ask_again_for_more() {
     host.shutdown();
 
     // Saved. Asking for more (here, to observe an event) asks again.
-    let (host, _) = self::host(&bundled, Some(user.clone()), Some(grants.clone()));
+    let (host, _) = self::host(&bundled, Some(user.clone()), Some(space_dir.clone()));
     assert_eq!(host.approval("extra"), Approval::Approved);
     guard(&user, "extra", "provides=['context']\nrequires=['sandbox']\nobserves=['turn/ended']", "{}");
-    let (host, mut events) = self::host(&bundled, Some(user.clone()), Some(grants.clone()));
+    let (host, mut events) = self::host(&bundled, Some(user.clone()), Some(space_dir.clone()));
     assert_eq!(host.approval("extra"), Approval::Pending);
     host.answer_approval("extra", false).unwrap();
     let s = status(&mut events, "extra", |s| matches!(s, PluginStatus::NotStarted(_))).await;
@@ -168,6 +169,6 @@ async fn user_plugins_wait_for_approval_and_ask_again_for_more() {
     assert_eq!(host.approval("extra"), Approval::Denied);
     // Asking for less keeps the answer.
     guard(&user, "extra", "provides=['context']", "{}");
-    let (host, _) = self::host(&bundled, Some(user), Some(grants));
+    let (host, _) = self::host(&bundled, Some(user), Some(space_dir));
     assert_eq!(host.approval("extra"), Approval::Denied);
 }

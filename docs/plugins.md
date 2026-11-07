@@ -33,6 +33,7 @@ command = "${target}/space-audit"   # or any executable; relative args resolve a
 | `catalog:<name>` | `catalog/get` | caches the entries; refetches on your `catalog/changed`; the UI renders them (`permission-modes`: the composer's mode menu) |
 | `context` | `context/get` | adds your sections to every prompt, hidden from the transcript |
 | `sandbox` | `sandbox/confine` | gives agents your argv to spawn (one provider at a time) |
+| `session-store` | `store/list`, `store/load`, `store/write`, `store/delete`, `store/data-dir` | saves threads through you (one provider at a time; needs `uses = ["read:transcript"]`). `plugin/initialize`'s `spaceDir` is Space's folder; `plugins/session-store` is the bundled one |
 
 Hook `tools/pre-execute`: answer `hooks/tools.preExecute` for every tool call of every agent.
 

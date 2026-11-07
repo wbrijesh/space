@@ -19,6 +19,7 @@
 //! | `hooks/ready` (notification) | plugin → host | a listener's answers may have changed (e.g. it can decide again): held calls run the chain again |
 //! | `plugin/retry` (notification) | host → plugin | the user pressed a blocker's "Retry now" |
 //! | `events/observe` | host → plugin | `observes` the event ([`Observed`]) |
+//! | `store/list`, `store/load`, `store/write`, `store/delete`, `store/data-dir` | host → plugin | `provides` `session-store` |
 //!
 //! A plugin may call the host's services ([`HOST_SERVICES`]) that its manifest lists in `uses`;
 //! any other call is answered [`NOT_PERMITTED`]. Notifications a plugin sends about something
@@ -50,6 +51,13 @@ pub const HOOK_PRE_EXECUTE: &str = "hooks/tools.preExecute";
 pub const HOOKS_READY: &str = "hooks/ready";
 pub const PLUGIN_RETRY: &str = "plugin/retry";
 pub const EVENTS_OBSERVE: &str = "events/observe";
+/// The `session-store` seam: threads as a summary ([`ThreadMeta`]) and an append-only list of
+/// events the store keeps as they are (the host decides what they mean).
+pub const STORE_LIST: &str = "store/list";
+pub const STORE_LOAD: &str = "store/load";
+pub const STORE_WRITE: &str = "store/write";
+pub const STORE_DELETE: &str = "store/delete";
+pub const STORE_DATA_DIR: &str = "store/data-dir";
 
 /// Host services: plugin → host calls, each allowed only when the manifest lists it in `uses`.
 pub const HOST_NOTIFY: &str = "host/notify";
@@ -74,6 +82,10 @@ pub struct Initialize {
     /// Secret settings that are set but couldn't be read (e.g. the Keychain refused).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unreadable: Vec<String>,
+    /// Space's own folder (`~/.space`), where a plugin that keeps files puts them (the session
+    /// store: `threads/`). Absent when Space keeps nothing on disk (tests, scenarios).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_dir: Option<String>,
 }
 
 /// `plugin/initialize` result.
@@ -503,4 +515,67 @@ mod tests {
         let n: Notify = serde_json::from_value(serde_json::json!({"title": "Done"})).unwrap();
         assert!(n.banner && !n.sound && n.body.is_none());
     }
+}
+
+/// A saved thread, as the sidebar lists it (`meta.json`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadMeta {
+    pub id: String,
+    pub title: String,
+    /// The project folder the thread works in.
+    pub project: String,
+    /// Its permission mode (a `permission-modes` id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The agent plugin, and its session to load to continue the conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Unix milliseconds.
+    pub created_ms: u64,
+    pub updated_ms: u64,
+}
+
+/// `store/load`, `store/delete` and `store/data-dir` params.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadRef {
+    pub thread_id: String,
+}
+
+/// `store/write` params: append `events` to the thread's log, and replace its summary when
+/// `meta` is set. Nothing is written for a thread until it has a summary.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreWrite {
+    pub thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<ThreadMeta>,
+    #[serde(default)]
+    pub events: Vec<serde_json::Value>,
+}
+
+/// `store/list` result: every saved thread, newest first.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StoredThreads {
+    pub threads: Vec<ThreadMeta>,
+}
+
+/// `store/load` result. A damaged event line is left out (the store logs it).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct StoredThread {
+    pub meta: ThreadMeta,
+    pub events: Vec<serde_json::Value>,
+}
+
+/// `store/data-dir` result: the folder the thread's agent may keep the session's own files in
+/// (deleted with the thread). It may not exist yet.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DataDir {
+    pub data_dir: String,
 }

@@ -17,6 +17,10 @@ pub const PRE_EXECUTE_METHOD: &str = "_space/tools/preExecute";
 pub const CONFINE_METHOD: &str = "_space/sandbox/confine";
 /// `_meta` key of a `session/prompt` carrying the prompt's hidden [`ContextSection`]s.
 pub const CONTEXT_META_KEY: &str = "space/context";
+/// `_meta` key of ACP `session/new` and `session/load` carrying a folder the agent may keep the
+/// session's own files in (to load it again later). It belongs to the thread and is deleted
+/// with it; the agent may not have been given one (then it keeps the session in memory).
+pub const DATA_DIR_META_KEY: &str = "space/dataDir";
 /// `_meta` key of ACP `initialize` carrying [`crate::PROTOCOL_VERSION`], both ways. An agent that
 /// speaks the `_space/*` methods answers with the version it was built for, and the host refuses
 /// it on a mismatch; a plain ACP agent leaves it out.

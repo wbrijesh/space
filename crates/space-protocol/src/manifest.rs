@@ -17,6 +17,9 @@ pub const CAP_SANDBOX: &str = "sandbox";
 pub const CAP_CONTEXT: &str = "context";
 /// Declares settings the host shows and stores (`settings/schema`, `settings/changed`).
 pub const CAP_SETTINGS: &str = "settings";
+/// Keeps threads so they survive a restart (`store/*`). One provider at a time; it gets what the
+/// user and the agent wrote, so it must also use `read:transcript`.
+pub const CAP_SESSION_STORE: &str = "session-store";
 /// Prefix of catalog capabilities: `catalog:<name>` publishes the named list (`catalog/get`).
 pub const CATALOG_PREFIX: &str = "catalog:";
 /// The catalog of permission modes the composer's mode menu shows.
@@ -88,8 +91,8 @@ pub struct Manifest {
     pub version: String,
     #[serde(default)]
     pub description: String,
-    /// Capabilities: `agent` (an ACP agent), or any of `sandbox`, `context`, `settings` and
-    /// `catalog:<name>` (a service plugin, spoken to over plain JSON-RPC).
+    /// Capabilities: `agent` (an ACP agent), or any of `sandbox`, `context`, `settings`,
+    /// `session-store` and `catalog:<name>` (a service plugin, spoken to over plain JSON-RPC).
     pub provides: Vec<String>,
     /// Events a service plugin listens to.
     #[serde(default)]
@@ -175,7 +178,7 @@ impl Manifest {
             return Err("`provides` must name at least one capability".into());
         }
         for cap in &self.provides {
-            let known = matches!(cap.as_str(), CAP_AGENT | CAP_SANDBOX | CAP_CONTEXT | CAP_SETTINGS)
+            let known = matches!(cap.as_str(), CAP_AGENT | CAP_SANDBOX | CAP_CONTEXT | CAP_SETTINGS | CAP_SESSION_STORE)
                 || cap.strip_prefix(CATALOG_PREFIX).is_some_and(is_kebab_case);
             if !known {
                 return Err(format!("unknown capability {cap:?} in `provides`"));
@@ -195,6 +198,9 @@ impl Manifest {
             && (self.provides.len() > 1 || !self.hooks.is_empty() || self.required || !self.observes.is_empty() || !self.uses.is_empty())
         {
             return Err("an `agent` plugin provides nothing else and has no hooks, `observes`, `uses` or `required`".into());
+        }
+        if self.provides(CAP_SESSION_STORE) && !self.uses(USE_READ_TRANSCRIPT) {
+            return Err(format!("a `{CAP_SESSION_STORE}` provider keeps the transcript, so it must list `{USE_READ_TRANSCRIPT}` in `uses`"));
         }
         for hook in &self.hooks {
             if hook.event != HOOK_TOOLS_PRE_EXECUTE {
@@ -442,5 +448,14 @@ FOO = "bar"
         let err = parse("provides=['agent']\nuses=['host/notify']").unwrap_err();
         assert!(err.to_string().contains("nothing else"), "{err}");
         assert_eq!(parse("provides=['agent']\nenv=['SPACE_PI_MODEL']").unwrap().permissions(), ["env:SPACE_PI_MODEL", "provides:agent"]);
+    }
+
+    #[test]
+    fn session_store_needs_the_transcript() {
+        let parse = |extra: &str| {
+            Manifest::parse(&format!("id='a'\nname='A'\nversion='1'\n{extra}\n[run]\ncommand='x'\n"), Path::new("m.toml"))
+        };
+        assert!(parse("provides=['session-store']\nuses=['read:transcript']").unwrap().provides(CAP_SESSION_STORE));
+        assert!(parse("provides=['session-store']").unwrap_err().to_string().contains("read:transcript"));
     }
 }

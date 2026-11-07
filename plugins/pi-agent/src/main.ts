@@ -12,6 +12,7 @@ import {
 	CONFIGURE_METHOD,
 	CONFINE_METHOD,
 	type ConfineResult,
+	DATA_DIR_META_KEY,
 	PRE_EXECUTE_METHOD,
 	type PreExecuteResult,
 	PROTOCOL_VERSION,
@@ -62,6 +63,39 @@ function turnError(message: string): acp.RequestError {
 	return new acp.RequestError(-32603, message);
 }
 
+/** The session's data folder from `session/new` or `session/load` `_meta`, if the host gave one. */
+function dataDirFromMeta(meta: unknown): string | undefined {
+	const dir = meta && typeof meta === "object" ? (meta as Record<string, unknown>)[DATA_DIR_META_KEY] : undefined;
+	return typeof dir === "string" && dir ? dir : undefined;
+}
+
+/** Start (or load) a pi session for `sessionId` and announce its status once the reply is out. */
+async function openSession(
+	sessionId: string,
+	cwd: string,
+	meta: unknown,
+	load: boolean,
+	client: { notify: (method: string, params: unknown) => Promise<void> },
+): Promise<void> {
+	const dataDir = dataDirFromMeta(meta);
+	if (load && !dataDir) throw acp.RequestError.invalidParams(undefined, "No saved session to load (no data folder)");
+	let pi: PiSession;
+	try {
+		pi = await createPiSession(cwd, config, { sessionId, host, dataDir, load });
+	} catch (error) {
+		log(`session/${load ? "load" : "new"} failed:`, error);
+		throw turnError(`Failed to start pi session: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	sessions.set(sessionId, { pi });
+	log(`session/${load ? "load" : "new"} ${sessionId} cwd=${cwd} model=${pi.provider}/${pi.model} thinking=${pi.thinkingLevel} ${dataDir ? `dir=${dataDir} messages=${pi.session.messages.length}` : "in memory"}`);
+	// Sent after the response is written so the client already knows the sessionId.
+	setImmediate(() => {
+		client
+			.notify(STATUS_METHOD, sessionStatus(sessionId, pi.session))
+			.catch((error: unknown) => log("failed to send _space/status:", error));
+	});
+}
+
 function lastAssistant(session: PiSession["session"]): { stopReason?: string; errorMessage?: string } | undefined {
 	const messages = session.messages;
 	for (let i = messages.length - 1; i >= 0; i--) {
@@ -79,7 +113,8 @@ const app = acp
 		return {
 			protocolVersion: acp.PROTOCOL_VERSION,
 			agentCapabilities: {
-				loadSession: false,
+				// Sessions given a data folder are kept there and can be loaded again.
+				loadSession: true,
 				promptCapabilities: { image: false, audio: false, embeddedContext: true },
 			},
 			agentInfo: { name: "pi-agent", title: "Pi Agent", version: VERSION },
@@ -90,22 +125,14 @@ const app = acp
 	})
 	.onRequest(acp.methods.agent.session.new, async ({ params, client }) => {
 		const sessionId = randomUUID();
-		let pi: PiSession;
-		try {
-			pi = await createPiSession(params.cwd, config, { sessionId, host });
-		} catch (error) {
-			log("session/new failed:", error);
-			throw turnError(`Failed to start pi session: ${error instanceof Error ? error.message : String(error)}`);
-		}
-		sessions.set(sessionId, { pi });
-		log(`session/new ${sessionId} cwd=${params.cwd} model=${pi.provider}/${pi.model} thinking=${pi.thinkingLevel}`);
-		// Sent after the response is written so the client already knows the sessionId.
-		setImmediate(() => {
-			client
-				.notify(STATUS_METHOD, sessionStatus(sessionId, pi.session))
-				.catch((error: unknown) => log("failed to send _space/status:", error));
-		});
+		await openSession(sessionId, params.cwd, params._meta, false, client);
 		return { sessionId };
+	})
+	// Continues a session kept in its data folder. ACP has the agent replay the conversation
+	// here; Space already shows it (from its own saved thread), so nothing is replayed.
+	.onRequest(acp.methods.agent.session.load, async ({ params, client }) => {
+		if (!sessions.has(params.sessionId)) await openSession(params.sessionId, params.cwd, params._meta, true, client);
+		return {};
 	})
 	.onRequest(acp.methods.agent.session.prompt, async ({ params, client }) => {
 		const state = sessions.get(params.sessionId);

@@ -89,6 +89,35 @@ pub trait Plugin: Send + Sync + 'static {
         async {}
     }
 
+    /// `provides = ["session-store"]`: every saved thread, newest first.
+    fn store_list(&self) -> impl Future<Output = Result<StoredThreads, RpcError>> + Send {
+        async { Err(RpcError::method_not_found(STORE_LIST)) }
+    }
+
+    /// `provides = ["session-store"]`: a thread's summary and events.
+    fn store_load(&self, thread: ThreadRef) -> impl Future<Output = Result<StoredThread, RpcError>> + Send {
+        let _ = thread;
+        async { Err(RpcError::method_not_found(STORE_LOAD)) }
+    }
+
+    /// `provides = ["session-store"]`: append events to a thread and replace its summary.
+    fn store_write(&self, write: StoreWrite) -> impl Future<Output = Result<(), RpcError>> + Send {
+        let _ = write;
+        async { Err(RpcError::method_not_found(STORE_WRITE)) }
+    }
+
+    /// `provides = ["session-store"]`: delete a thread and its agent's files.
+    fn store_delete(&self, thread: ThreadRef) -> impl Future<Output = Result<(), RpcError>> + Send {
+        let _ = thread;
+        async { Err(RpcError::method_not_found(STORE_DELETE)) }
+    }
+
+    /// `provides = ["session-store"]`: the folder the thread's agent may keep files in.
+    fn store_data_dir(&self, thread: ThreadRef) -> impl Future<Output = Result<DataDir, RpcError>> + Send {
+        let _ = thread;
+        async { Err(RpcError::method_not_found(STORE_DATA_DIR)) }
+    }
+
     /// Hook `tools/pre-execute`: a verdict on the pending tool call.
     fn pre_execute(&self, call: HookCall) -> impl Future<Output = Result<HookDecision, RpcError>> + Send {
         let _ = call;
@@ -167,6 +196,11 @@ async fn handle<P: Plugin>(plugin: &P, host: &OnceLock<Host>, method: &str, para
         CONTEXT_GET => rpc::result(plugin.context(rpc::params(params)?).await?),
         SANDBOX_CONFINE => rpc::result(plugin.confine(rpc::params(params)?).await?),
         HOOK_PRE_EXECUTE => rpc::result(plugin.pre_execute(rpc::params(params)?).await?),
+        STORE_LIST => rpc::result(plugin.store_list().await?),
+        STORE_LOAD => rpc::result(plugin.store_load(rpc::params(params)?).await?),
+        STORE_WRITE => rpc::result(plugin.store_write(rpc::params(params)?).await?),
+        STORE_DELETE => rpc::result(plugin.store_delete(rpc::params(params)?).await?),
+        STORE_DATA_DIR => rpc::result(plugin.store_data_dir(rpc::params(params)?).await?),
         EVENTS_OBSERVE => {
             plugin.observe(rpc::params(params)?).await;
             rpc::result(())

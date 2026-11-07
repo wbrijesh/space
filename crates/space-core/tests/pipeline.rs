@@ -55,7 +55,7 @@ fn host_rechecking(root: &Path, recheck: Duration) -> (Host, EventReceiver) {
         discovery: DiscoveryOptions { bundled_roots: vec![root.to_path_buf()], user_root: None, project_root: None },
         secrets: Secrets::new(TEST_KEYCHAIN),
         held_recheck: recheck,
-        grants: None,
+        space_dir: None,
     };
     Host::new(tokio::runtime::Handle::current(), options)
 }
@@ -543,7 +543,14 @@ async fn when_a_provider_crashes_its_dependents_stop_and_come_back() {
     assert_eq!(s, PluginStatus::NotStarted("Waiting for Guard sb.".into()));
     status_of(&mut events, &mut seen, "stub", not_started).await;
     let _ = turn.await;
-    assert!(!agent.is_running());
+    // Its status changes before the kill lands; the process is gone moments later.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while agent.is_running() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the agent stopped");
     // Restarted after the backoff, and `dep` with it.
     status_of(&mut events, &mut seen, "sb", |s| *s == PluginStatus::Running).await;
     status_of(&mut events, &mut seen, "dep", |s| *s == PluginStatus::Running).await;

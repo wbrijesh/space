@@ -1,0 +1,11 @@
+id = "session-store"
+name = "Session Store"
+version = "0.1.0"
+description = "Keeps your threads in ~/.space/threads, so they're still there after Space restarts."
+provides = ["session-store"]
+# A thread's log is what you and the agent wrote.
+uses = ["read:transcript"]
+
+[run]
+# Built with the workspace (`cargo build --workspace`); ${target} is the profile dir Space runs from.
+command = "${target}/space-session-store"

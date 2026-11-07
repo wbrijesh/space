@@ -20,6 +20,7 @@ mod dev;
 #[cfg(feature = "dev")]
 mod devscript;
 mod notify;
+mod persist;
 #[cfg(feature = "dev")]
 mod scenarios;
 mod settings;
@@ -104,8 +105,8 @@ fn main() -> Result<()> {
 
     #[allow(unused_mut)]
     let mut host_options = HostOptions::for_project(&args.project_dir);
-    // Plugin approvals live next to the settings file.
-    host_options.grants = settings::default_path().and_then(|p| Some(p.parent()?.join("plugin-grants.json")));
+    // Space's folder (plugin approvals, threads) is the settings file's.
+    host_options.space_dir = settings::default_path().and_then(|p| Some(p.parent()?.to_path_buf()));
     #[allow(unused_mut)]
     let mut options = Options {
         project_dir: args.project_dir.clone(),

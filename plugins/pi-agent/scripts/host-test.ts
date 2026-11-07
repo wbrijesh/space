@@ -4,7 +4,8 @@
 // Checks: every tool call is put to `_space/tools/preExecute` (tool, kind, args, call id) and a
 // denial blocks it with the reason; a failing request blocks too; bash asks
 // `_space/sandbox/confine` and runs the argv it gets (here: wrapped in sandbox-exec, so a write
-// outside the allowed folder fails); context sections reach the system prompt and leave it again.
+// outside the allowed folder fails); context sections reach the system prompt and leave it again;
+// a session given a data folder is kept there and loads again with its messages.
 //
 // Run: pnpm test-host   (or: node scripts/host-test.ts after `pnpm build`)
 
@@ -111,6 +112,20 @@ check(last.includes("Mode: Full access (test)."), "the next run carries the new 
 check(!(pi.session.systemPrompt as string).includes("Mode: Read Only (test)."), "the old section is gone from the system prompt");
 
 await pi.runtime.dispose();
+
+// Kept in a data folder, a session loads again with its conversation (ACP session/load).
+const dataDir = join(work, "thread-data");
+const providers = (runtime: { registerNativeProvider: (p: unknown) => void }) => runtime.registerNativeProvider(faux.provider);
+const kept = await createPiSession(work, config, { sessionId: "s2", host, dataDir, registerProviders: providers });
+faux.setResponses([fauxAssistantMessage("first answer")]);
+await kept.session.prompt("remember this");
+const before = kept.session.messages.length;
+await kept.runtime.dispose();
+const loaded = await createPiSession(work, config, { sessionId: "s2", host, dataDir, load: true, registerProviders: providers });
+check(before >= 2 && loaded.session.messages.length === before, `a loaded session has its messages (${loaded.session.messages.length}/${before})`);
+check(JSON.stringify(loaded.session.messages).includes("remember this"), "the loaded session has the earlier prompt");
+await loaded.runtime.dispose();
+
 for (const d of [agentDir, work, outside]) rmSync(d, { recursive: true, force: true });
 if (failures.length) {
 	console.log(`\n${failures.length} check(s) failed`);

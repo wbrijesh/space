@@ -32,16 +32,20 @@
 //! * Catalogs (`catalog:<name>`) and settings (`settings`) are cached and reported as events.
 //! * Session events are told to the plugins that `observe` them ([`observers`]); `host/notify`
 //!   and `host/open-url` calls are reported as events for the app to carry out.
+//! * Saved threads go to the `session-store` provider ([`store`]); without one, threads live in
+//!   memory only.
 //!
 //! Files: [`registry`] (who is discovered, turned off, provides what), [`services`] (service
 //! processes, settings, catalogs, seams, host services), [`pipeline`] (the hook chain and held
-//! calls), [`observers`] (observed events), [`agents`] (ACP connections and sessions).
+//! calls), [`observers`] (observed events), [`agents`] (ACP connections and sessions), [`store`]
+//! (saved threads).
 
 mod agents;
 mod observers;
 mod pipeline;
 mod registry;
 mod services;
+mod store;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -126,9 +130,14 @@ pub struct HostOptions {
     /// A held tool call runs the hook chain again at least this often (in case no listener
     /// says when it's ready, e.g. a crashed plugin to restart).
     pub held_recheck: Duration,
-    /// Where plugin approvals are saved (`None`: kept in memory only).
-    pub grants: Option<PathBuf>,
+    /// Space's own folder (`~/.space`): plugin approvals are saved there
+    /// (`plugin-grants.json`), and plugins are told it (the session store keeps threads in
+    /// it). `None`: nothing is kept on disk.
+    pub space_dir: Option<PathBuf>,
 }
+
+/// Plugin approvals, in [`HostOptions::space_dir`].
+pub const GRANTS_FILE: &str = "plugin-grants.json";
 
 /// Default of [`HostOptions::held_recheck`].
 pub const HELD_RECHECK: Duration = Duration::from_secs(10);
@@ -142,7 +151,7 @@ impl HostOptions {
             project_dir,
             secrets: Secrets::default(),
             held_recheck: HELD_RECHECK,
-            grants: None,
+            space_dir: None,
         }
     }
 }
@@ -201,7 +210,7 @@ impl Host {
     /// Create a host whose background work runs on `rt`. Runs an initial discovery.
     pub fn new(rt: Handle, options: HostOptions) -> (Self, EventReceiver) {
         let (events, rx) = mpsc::unbounded_channel();
-        let grants = Grants::load(options.grants.clone());
+        let grants = Grants::load(options.space_dir.as_ref().map(|d| d.join(GRANTS_FILE)));
         let host = Host {
             inner: Arc::new(HostInner {
                 rt,

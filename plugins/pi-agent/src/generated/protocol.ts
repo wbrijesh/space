@@ -7,6 +7,7 @@ export const CONFIGURE_METHOD = "_space/session/configure";
 export const PRE_EXECUTE_METHOD = "_space/tools/preExecute";
 export const CONFINE_METHOD = "_space/sandbox/confine";
 export const CONTEXT_META_KEY = "space/context";
+export const DATA_DIR_META_KEY = "space/dataDir";
 
 /**
  * A model the agent can switch a session to.

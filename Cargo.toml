@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "plugins/permissions", "plugins/alerts"]
+members = ["crates/*", "plugins/permissions", "plugins/alerts", "plugins/session-store"]
 
 [workspace.package]
 edition = "2024"

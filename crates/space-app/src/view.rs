@@ -125,6 +125,7 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, cx: &mut Context<SpaceApp>) -> impl
                 .selected(selected)
                 .indicator(indicator)
                 .on_click(cx.listener(move |this, _, w, cx| this.select_thread(key, w, cx)))
+                .on_delete(cx.listener(move |this, _, w, cx| this.delete_thread(key, w, cx)))
                 .into_any_element()
         })
         .collect();

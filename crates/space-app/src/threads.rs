@@ -1,5 +1,6 @@
 //! Threads: their state, applying session events, sessions and the message queue (a message
-//! sent before its session exists waits on the thread).
+//! sent before its session exists waits on the thread). Saving and reopening them is in
+//! [`crate::persist`].
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -7,6 +8,7 @@ use std::time::Instant;
 
 use gpui::*;
 use space_core::protocol::ConfigureSession;
+use space_core::protocol::service::ThreadMeta;
 use space_core::{AgentHandle, PluginStatus, Session, SessionEvent, SessionState, TranscriptItem};
 use space_ui::format;
 
@@ -16,6 +18,20 @@ use crate::settings::ModelRef;
 /// One conversation with the agent (an ACP session once it has been created).
 pub struct Thread {
     pub key: u64,
+    /// Stable id: the saved thread's folder name.
+    pub id: String,
+    pub created_ms: u64,
+    /// The summary last saved (or read from disk); `None` until the thread is first saved.
+    pub meta: Option<ThreadMeta>,
+    /// Events to save next (agent text and thoughts merged).
+    pub unsaved: Vec<SessionEvent>,
+    /// A save is in flight.
+    pub saving: bool,
+    /// A saved thread whose events haven't been read yet (they are when it's opened).
+    pub unloaded: bool,
+    pub loading: bool,
+    /// The agent session to load to continue a saved conversation: (agent plugin, session id).
+    pub resume: Option<(String, String)>,
     pub cwd: PathBuf,
     pub branch: Option<String>,
     pub session: Option<Session>,
@@ -47,6 +63,14 @@ impl Thread {
     pub(crate) fn new(key: u64, cwd: PathBuf) -> Self {
         Self {
             key,
+            id: crate::persist::new_thread_id(),
+            created_ms: crate::app::now_ms(),
+            meta: None,
+            unsaved: Vec::new(),
+            saving: false,
+            unloaded: false,
+            loading: false,
+            resume: None,
             branch: format::git_branch(&cwd),
             cwd,
             session: None,
@@ -67,11 +91,12 @@ impl Thread {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.state.items.is_empty() && self.queued.is_none()
+        self.state.items.is_empty() && self.queued.is_none() && self.meta.is_none()
     }
 
     pub fn title(&self) -> String {
         format::thread_title(&self.state)
+            .or_else(|| self.meta.as_ref().map(|m| m.title.clone()))
             .or_else(|| self.queued.as_ref().map(|(t, _)| format::truncate_chars(&format::one_line(t), 120)))
             .unwrap_or_else(|| "New thread".into())
     }
@@ -102,7 +127,7 @@ impl Thread {
 }
 
 impl SpaceApp {
-    pub(crate) fn apply_session_event(&mut self, key: u64, event: &SessionEvent, _cx: &mut Context<Self>) {
+    pub(crate) fn apply_session_event(&mut self, key: u64, event: &SessionEvent, cx: &mut Context<Self>) {
         if let SessionEvent::Status(status) = event {
             // What the agent offers, for the Settings page.
             if let Some(models) = &status.available_models {
@@ -116,6 +141,14 @@ impl SpaceApp {
         let selected = self.selected == Some(key) && !self.show_settings;
         let Some(thread) = self.thread_mut(key) else { return };
         thread.apply(event);
+        if self.saving_threads() {
+            let thread = self.thread_mut(key).expect("thread exists");
+            crate::persist::record(&mut thread.unsaved, event);
+            if matches!(event, SessionEvent::TurnEnded { .. }) {
+                self.save_thread(key, cx);
+            }
+        }
+        let Some(thread) = self.thread_mut(key) else { return };
         // A tool call waiting for the guardrail counts once per turn (it may stay paused long).
         let paused = match event {
             SessionEvent::TurnStarted => {
@@ -180,7 +213,8 @@ impl SpaceApp {
         let keys: Vec<u64> = self
             .threads
             .iter()
-            .filter(|t| t.session.is_none() && !t.creating && t.error.is_none())
+            // A saved conversation gets its session when you write in it.
+            .filter(|t| t.session.is_none() && !t.creating && t.error.is_none() && t.meta.is_none())
             .map(|t| t.key)
             .collect();
         for key in keys {
@@ -195,18 +229,42 @@ impl SpaceApp {
         };
         let Some(thread) = self.thread(key) else { return };
         let defaults = self.session_defaults(thread);
+        let host = self.host.clone();
+        // Sessions are kept (and can be loaded) only with a session store.
+        let can_load = agent.can_load_session() && self.saving_threads();
         let Some(thread) = self.thread_mut(key) else { return };
         thread.creating = true;
         thread.error = None;
-        let cwd = thread.cwd.clone();
+        // Continue the saved conversation if this agent can; else start over in a new session.
+        let resume = thread.resume.take().filter(|(plugin, _)| plugin == agent.plugin_id() && can_load);
+        if resume.is_none() && !thread.state.items.is_empty() {
+            thread.state.items.push(TranscriptItem::TurnEnd("new-session".into()));
+        }
+        let (cwd, id) = (thread.cwd.clone(), thread.id.clone());
         cx.spawn(async move |this, cx| {
-            let result = agent.new_session(cwd).await;
+            let data_dir = host.thread_data_dir(&id).await;
+            let result = match &resume {
+                Some((_, session_id)) => agent.load_session(session_id, cwd, data_dir).await,
+                // An agent that can't use the folder still gets a session (kept in memory).
+                None => match agent.new_session_in(cwd.clone(), data_dir.clone()).await {
+                    Err(e) if data_dir.is_some() => {
+                        tracing::warn!("a session in {}: {e:#}; keeping it in memory", data_dir.unwrap_or_default().display());
+                        agent.new_session_in(cwd, None).await
+                    }
+                    result => result,
+                },
+            };
             let session = match result {
                 Ok(s) => s,
                 Err(e) => {
                     let _ = this.update(cx, |this, cx| {
-                        if let Some(t) = this.thread_mut(key) {
-                            t.creating = false;
+                        let Some(t) = this.thread_mut(key) else { return };
+                        t.creating = false;
+                        if resume.is_some() {
+                            // The saved session is gone: go on in a new one.
+                            tracing::warn!("loading the saved session failed: {e:#}");
+                            this.create_session(key, cx);
+                        } else {
                             t.error = Some(format!("{e:#}"));
                         }
                         cx.notify();
@@ -304,7 +362,7 @@ impl SpaceApp {
         if text.is_empty() && thread.attachments.is_empty() {
             return;
         }
-        if thread.state.running || thread.queued.is_some() {
+        if thread.state.running || thread.queued.is_some() || thread.loading {
             return;
         }
         // The thread's mode isn't set up yet (the composer says so, with a link).
@@ -322,9 +380,10 @@ impl SpaceApp {
         if thread.live_session().is_some() {
             self.prompt(key, text, attachments, cx);
         } else {
-            // No session yet (agent starting) or its agent exited: send once there is one.
-            if thread.session.take().is_some() {
-                thread.state.items.push(TranscriptItem::TurnEnd("new-session".into()));
+            // No session yet (agent starting) or its agent exited: send once there is one (the
+            // old session is loaded again if the agent can).
+            if let Some(old) = thread.session.take() {
+                thread.resume = Some((old.agent().plugin_id().to_string(), old.id().to_string()));
             }
             thread.queued = Some((text, attachments));
             thread.error = None;

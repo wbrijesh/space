@@ -24,7 +24,7 @@ pub mod stub_script;
 pub use discovery::{DiscoveredPlugin, DiscoveryOptions, DiscoveryReport, PluginSource};
 pub use grants::Approval;
 pub use host::{
-    AgentHandle, EventReceiver, HELD_RECHECK, Host, HostEvent, HostOptions, PluginStatus, Session, SettingError, SettingState,
+    AgentHandle, EventReceiver, GRANTS_FILE, HELD_RECHECK, Host, HostEvent, HostOptions, PluginStatus, Session, SettingError, SettingState,
 };
 pub use secrets::Secrets;
 pub use session::{

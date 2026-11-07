@@ -1,5 +1,7 @@
-//! Sidebar thread row: one line with the thread title and an activity indicator.
+//! Sidebar thread row: one line with the thread title and an activity indicator; right-click
+//! for Delete Thread.
 
+use gpui::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
@@ -52,6 +54,7 @@ pub struct ThreadRow {
     /// Preview only: paint the hover state without a pointer.
     force_hover: bool,
     on_click: Option<ClickHandler>,
+    on_delete: Option<ClickHandler>,
 }
 
 impl ThreadRow {
@@ -63,6 +66,7 @@ impl ThreadRow {
             indicator: RowIndicator::None,
             force_hover: false,
             on_click: None,
+            on_delete: None,
         }
     }
 
@@ -85,6 +89,12 @@ impl ThreadRow {
         self.on_click = Some(std::rc::Rc::new(f));
         self
     }
+
+    /// The row's context menu offers Delete Thread.
+    pub fn on_delete(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
+        self.on_delete = Some(std::rc::Rc::new(f));
+        self
+    }
 }
 
 impl RenderOnce for ThreadRow {
@@ -103,7 +113,7 @@ impl RenderOnce for ThreadRow {
             RowIndicator::UnreadError => Some(status_dot(color::red()).into_any_element()),
         };
         let hover_bg = color::surface();
-        div()
+        let row = div()
             .id(self.id)
             .flex()
             .items_center()
@@ -127,7 +137,16 @@ impl RenderOnce for ThreadRow {
             })
             .child(div().flex_1().min_w_0().truncate().child(self.title))
             .children(indicator)
-            .when_some(self.on_click, |d, f| d.on_click(move |e, w, cx| f(e, w, cx)))
+            .when_some(self.on_click, |d, f| d.on_click(move |e, w, cx| f(e, w, cx)));
+        match self.on_delete {
+            Some(f) => row
+                .context_menu(move |menu, _, _| {
+                    let f = f.clone();
+                    menu.item(PopupMenuItem::new("Delete Thread").on_click(move |e, w, cx| f(e, w, cx)))
+                })
+                .into_any_element(),
+            None => row.into_any_element(),
+        }
     }
 }
 

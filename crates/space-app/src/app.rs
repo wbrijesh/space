@@ -303,8 +303,10 @@ impl SpaceApp {
         })
         .detach();
 
-        // Quitting: stop the plugins, each before what it requires.
+        // Quitting: save what the threads haven't yet, then stop the plugins, each before what
+        // it requires.
         let quit = cx.on_app_quit(|this, _| {
+            this.save_all_now();
             this.host.shutdown();
             async {}
         });
@@ -385,6 +387,7 @@ impl SpaceApp {
         };
         this.seed_threads(options.seed, options.select, window, cx);
         this.start_services(cx);
+        this.load_saved_threads(cx);
         this.ensure_agent(cx);
         this.refresh_permission(cx);
         if options.open_settings {
@@ -539,6 +542,7 @@ impl SpaceApp {
         if let Some(t) = self.thread_mut(key) {
             t.unread = 0;
         }
+        self.ensure_loaded(key, cx);
         self.transcript_scroll.jump_to_bottom();
         self.focus_composer(window, cx);
         cx.notify();
@@ -720,11 +724,32 @@ impl SpaceApp {
             let review = BlockerAction::new("Review in Settings", format!("open-settings:{}", first.id()));
             return Some(space_core::protocol::service::Blocker { text, actions: vec![review], ..Default::default() });
         }
+        if let Some(blocker) = self.resume_blocker(thread) {
+            return Some(blocker);
+        }
         let entry = self.mode_entry(thread).filter(|e| !e.ready)?;
         Some(entry.blocker.clone().unwrap_or_else(|| space_core::protocol::service::Blocker {
             text: format!("{} isn't ready yet.", entry.name),
             ..Default::default()
         }))
+    }
+
+    /// A saved conversation the running agent can't continue (it can't load sessions, or it
+    /// isn't the agent that had it): it reads, and continues only in a new session.
+    fn resume_blocker(&self, thread: &Thread) -> Option<space_core::protocol::service::Blocker> {
+        let (plugin, _) = thread.resume.as_ref().filter(|_| thread.session.is_none() && thread.queued.is_none())?;
+        let agent = self.agent.as_ref().filter(|a| a.is_running())?;
+        if agent.plugin_id() == plugin && agent.can_load_session() {
+            return None;
+        }
+        let name = self.host.plugin(plugin).map_or_else(|| plugin.clone(), |p| p.manifest.name);
+        let text = if agent.plugin_id() == plugin {
+            format!("{name} can't continue a saved conversation.")
+        } else {
+            format!("This conversation was with {name}.")
+        };
+        let fresh = BlockerAction::new("Continue in new session", format!("new-session:{}", thread.key));
+        Some(space_core::protocol::service::Blocker { text, actions: vec![fresh], ..Default::default() })
     }
 
     /// Plugins (turned on) that wait for you to approve or deny them.
@@ -760,7 +785,11 @@ impl SpaceApp {
         self.pending_confirm = None;
         let Some(thread) = self.thread_mut(key) else { return };
         thread.mode = Some(id);
+        let saved = thread.meta.is_some();
         self.sync_session_modes();
+        if saved {
+            self.save_thread(key, cx);
+        }
         cx.notify();
     }
 
@@ -787,8 +816,8 @@ impl SpaceApp {
         self.set_mode(next, cx);
     }
 
-    /// A blocker link: `open-settings:<plugin>`, `open-url:<url>`, `retry:<plugin>` or
-    /// `use-mode:<mode>`.
+    /// A blocker link: `open-settings:<plugin>`, `open-url:<url>`, `retry:<plugin>`,
+    /// `use-mode:<mode>` or `new-session:<thread key>`.
     pub(crate) fn blocker_action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) {
         let (verb, arg) = action.split_once(':').unwrap_or((action, ""));
         match verb {
@@ -799,6 +828,12 @@ impl SpaceApp {
                 cx.spawn(async move |_, _| host.retry_plugin(&id).await).detach();
             }
             "use-mode" => self.set_mode(arg.to_string(), cx),
+            "new-session" => {
+                if let Some(t) = arg.parse().ok().and_then(|key| self.thread_mut(key)) {
+                    t.resume = None;
+                }
+                cx.notify();
+            }
             _ => tracing::warn!("unknown blocker action {action:?}"),
         }
     }

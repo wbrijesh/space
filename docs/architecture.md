@@ -62,8 +62,9 @@ cwd = "plugin"                  # "plugin" or "project"
 ```
 
 Capabilities: `agent` (an ACP agent; provides nothing else), `sandbox` (`sandbox/confine`), `context`
-(hidden prompt sections), `settings` (fields on the Settings page), `catalog:<name>` (a list the UI renders,
-e.g. `catalog:permission-modes` for the composer's mode menu). Hook events: `tools/pre-execute`.
+(hidden prompt sections), `settings` (fields on the Settings page), `session-store` (saved threads; must
+also use `read:transcript`), `catalog:<name>` (a list the UI renders, e.g. `catalog:permission-modes` for
+the composer's mode menu). Hook events: `tools/pre-execute`.
 
 `requires` names capabilities (`sandbox`, `context`, `catalog:<name>`), not plugin ids, so any provider
 satisfies it. A plugin starts once a provider of each runs. With no provider, or with requirements that
@@ -90,7 +91,7 @@ and `<project>/.space/plugins` don't start until you approve them in Settings �
 permissions in plain words. Until then they count as not installed, and the composer shows "… needs your
 approval" and won't send.
 
-Answers are saved in `plugin-grants.json` next to the settings file, by plugin directory, with the
+Answers are saved in `plugin-grants.json` in Space's folder (the settings file's, `~/.space`), by plugin directory, with the
 permissions you answered for. A plugin that later asks for more asks again; one that asks for less keeps
 your answer.
 
@@ -104,7 +105,8 @@ The harness is the ACP **client**; agent plugins are ACP **agents**.
 | Direction | Method | Notes |
 |---|---|---|
 | client → agent | `initialize` | Protocol version and capabilities |
-| client → agent | `session/new` | `cwd` = the thread's folder |
+| client → agent | `session/new` | `cwd` = the thread's folder; `_meta["space/dataDir"]` = a folder for the session's own files, when a session store is installed |
+| client → agent | `session/load` | Continue a saved thread's session (agents with `loadSession`), same `_meta`; what the agent replays meanwhile isn't shown (the thread already is) |
 | client → agent | `session/prompt` | Text and `resource_link` blocks; `_meta["space/context"]` carries hidden context sections |
 | client → agent | `session/cancel` (notification) | Abort the running turn |
 | agent → client | `session/update` (notification) | message/thought chunks, `tool_call`, `tool_call_update`, `plan` |
@@ -152,6 +154,7 @@ another version is not started.
 | `plugin/retry` | host → plugin | the user pressed a blocker's "Retry now" |
 | `events/observe` | host → plugin | an event the plugin `observes`, one at a time per plugin; see below |
 | `host/notify`, `host/open-url` | plugin → host | host services the plugin `uses`; the app carries them out |
+| `store/list`, `store/load`, `store/write`, `store/delete`, `store/data-dir` | host → plugin | `provides session-store`: saved threads; see below |
 
 **Observed events** (`session/created`, `turn/started`, `turn/ended`, `tool/held`, `tool/result`,
 `thread/titled`) come from the host's own session events. Each observing plugin has a bounded queue
@@ -160,8 +163,22 @@ next, so events arrive in order and nothing else waits: a slow plugin only drops
 with a warning. `turn/ended` and `tool/held` say whether the user is `watching` the thread (the app tells
 the host which session is on screen while Space is frontmost).
 
+**Saved threads** go to the `session-store` provider (bundled: `plugins/session-store`, which keeps
+`~/.space/threads/<thread>/` with `meta.json`, an append-only `events.jsonl` and `agent/`, the session's
+own files). `plugin/initialize` tells every plugin Space's folder (`spaceDir`; absent in tests and
+scenarios, when nothing is kept). A thread is its summary (`ThreadMeta`: title, project, mode, model,
+agent and session, times) and its session events, which the store keeps without reading them. The app
+saves the user's messages, finished agent messages and thoughts (chunks merged), tool calls and
+results, permission and guardrail decisions, status changes and turn starts and ends, not held calls:
+when a turn ends, when the thread's mode changes, and on quit (up to 2 s). A failed save keeps the
+events for the next one and says so in the banner; the conversation goes on. At launch the sidebar lists
+saved threads; opening one reads its events and replays them through `SessionState::apply` (a turn cut
+short ends as cancelled, so no card waits). Writing in it loads its session again (`session/load`) when
+the agent can; otherwise the composer offers "Continue in new session". Right-click → Delete Thread
+removes the folder. Without a store, threads live in memory.
+
 Catalog entries can carry a **blocker** (`ready: false`): text, links (`open-settings:<plugin>`,
-`open-url:<url>`, `retry:<plugin>`, `use-mode:<entry>`) and the last/next attempt times. The composer
+`open-url:<url>`, `retry:<plugin>`, `use-mode:<entry>`, `new-session:<thread>`) and the last/next attempt times. The composer
 shows it as a pill above the input (times tick live) and won't send while the thread's mode has one.
 
 ## The tool pipeline
@@ -206,8 +223,9 @@ host's own records; never tool output).
   any relative file argument in `run.args` must exist, which catches unbuilt plugins with a clear error.
 - **App shell.** The window uses a transparent title bar (`appears_transparent`, traffic lights at
   18,17, `app_owns_titlebar_drag`) and draws its own 48px bar, which moves the window with
-  `start_window_move`. The default agent plugin starts on launch. Each thread owns one ACP session;
-  events that arrive before `session/new` returns are buffered and replayed. Colors, spacing and
+  `start_window_move`. The default agent plugin starts on launch. Each thread owns one ACP session
+  (a saved thread's is loaded when you write in it); events that arrive before `session/new` returns
+  are buffered and replayed. Saving and reopening threads is `space-app/src/persist.rs`. Colors, spacing and
   fonts are tokens in `space-ui` (`theme/`), which also maps them onto the gpui-component theme.
   Components live in `space-ui` and take props and callbacks only; `space-app/src/view.rs` wires
   them to app state. See [ui-development.md](ui-development.md).
@@ -244,7 +262,8 @@ host's own records; never tool output).
 - **Testing.** `space-core` ships `space-stub-agent` (a scripted ACP agent) and `space-stub-guard` (a
   scripted service plugin: decisions, holds, crashes, catalogs, validation). `crates/space-core/tests/`
   run the host and pipeline against them; `plugins/permissions/tests/guardrail.rs` runs the real
-  permissions plugin against a scripted local stand-in for OpenAI.
+  permissions plugin against a scripted local stand-in for OpenAI, and `plugins/session-store/tests/`
+  saves, restarts and continues a thread with the real store and the stub agent.
 
 ## Repository layout
 
@@ -259,6 +278,7 @@ space/
 ├─ plugins/
 │  ├─ pi-agent/         # TypeScript ACP agent on the pi SDK
 │  ├─ permissions/      # Rust service plugin: modes, sandbox, decision model
-│  └─ alerts/           # Rust service plugin: a notification or sound when a turn ends or pauses
+│  ├─ alerts/           # Rust service plugin: a notification or sound when a turn ends or pauses
+│  └─ session-store/    # Rust service plugin: saved threads in ~/.space/threads
 └─ docs/
 ```

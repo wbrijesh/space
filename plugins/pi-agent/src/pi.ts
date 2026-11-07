@@ -31,6 +31,10 @@ export interface PiSessionOptions {
 	/** The ACP session id (the host knows the session by it). */
 	sessionId: string;
 	host: HostLink;
+	/** A folder to keep the session in (the host's `_meta["space/dataDir"]`); else it lives in memory. */
+	dataDir?: string;
+	/** Continue the session kept in `dataDir` (ACP `session/load`) instead of starting one. */
+	load?: boolean;
 	/** Tests: register extra providers (e.g. pi-ai's faux provider) before the model is looked up. */
 	registerProviders?: (runtime: ModelRuntime) => void;
 }
@@ -93,10 +97,17 @@ export async function createPiSession(cwd: string, config: AgentConfig, options:
 		return { ...result, services, diagnostics: services.diagnostics };
 	};
 
+	// One session per data folder: loading continues the one kept there.
+	const { dataDir, load, sessionId } = options;
+	const sessionManager = !dataDir
+		? SessionManager.inMemory(cwd)
+		: load
+			? SessionManager.continueRecent(cwd, dataDir)
+			: SessionManager.create(cwd, dataDir, { id: sessionId });
 	const runtime = await createAgentSessionRuntime(createRuntime, {
 		cwd,
 		agentDir: config.agentDir,
-		sessionManager: SessionManager.inMemory(cwd),
+		sessionManager,
 	});
 	const session = runtime.session;
 	// Emits session_start to extensions (claude-cli manages its CLI process per session).

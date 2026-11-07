@@ -29,7 +29,7 @@ fn host(root: &Path) -> (Host, EventReceiver) {
         discovery: DiscoveryOptions { bundled_roots: vec![root.to_path_buf()], user_root: None, project_root: None },
         secrets: space_core::Secrets::new("dev.brijesh.space.test"),
         held_recheck: space_core::HELD_RECHECK,
-        grants: None,
+        space_dir: None,
     };
     Host::new(tokio::runtime::Handle::current(), options)
 }
