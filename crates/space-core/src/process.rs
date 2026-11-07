@@ -154,9 +154,37 @@ pub fn spawn(
     Ok(Spawned { process: PluginProcess { pid, logs, kill_tx: Mutex::new(Some(kill_tx)) }, stdin, stdout })
 }
 
-/// Resolve the command: paths with a `/` are relative to the plugin dir; bare names are
-/// looked up on `PATH` plus common install locations (GUI apps get a minimal `PATH`).
+/// Placeholder in `run.command` for the cargo target profile directory Space runs from
+/// (`target/debug`), so bundled Rust plugins can point at their binary.
+pub const TARGET_PLACEHOLDER: &str = "${target}";
+/// Env var overriding what `${target}` expands to.
+pub const TARGET_DIR_ENV: &str = "SPACE_TARGET_DIR";
+
+/// What `${target}` expands to: `SPACE_TARGET_DIR`, else the `target/<profile>` directory
+/// above this executable (also inside `Space.app`), else this repo's `target/debug`.
+pub fn target_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os(TARGET_DIR_ENV).filter(|d| !d.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    let from_exe = std::env::current_exe().ok().and_then(|exe| {
+        exe.ancestors()
+            .find(|d| d.parent().and_then(Path::file_name).is_some_and(|n| n == "target"))
+            .map(Path::to_path_buf)
+    });
+    from_exe.unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug"))
+}
+
+/// Resolve the command: paths with a `/` are relative to the plugin dir (`${target}`
+/// expands first); bare names are looked up on `PATH` plus common install locations (GUI apps
+/// get a minimal `PATH`).
 fn resolve_program(command: &str, plugin_dir: &Path) -> Result<PathBuf> {
+    if command.contains(TARGET_PLACEHOLDER) {
+        let p = PathBuf::from(command.replace(TARGET_PLACEHOLDER, &target_dir().display().to_string()));
+        if !p.is_file() {
+            bail!("plugin command not found: {} (is it built? `cargo build --workspace`)", p.display());
+        }
+        return Ok(p);
+    }
     if command.contains('/') {
         let p = plugin_dir.join(command);
         if !p.exists() {
@@ -211,5 +239,14 @@ mod tests {
         assert!(err.to_string().contains("is the plugin built"));
         assert!(resolve_program("definitely-not-a-command-xyz", tmp.path()).is_err());
         assert!(resolve_program("sh", tmp.path()).is_ok());
+        // ${target} expands to the profile dir this test binary runs from.
+        let stub = resolve_program("${target}/space-stub-agent", tmp.path());
+        let target = target_dir();
+        assert!(target.ends_with("debug") || target.ends_with("release"), "{}", target.display());
+        if target.join("space-stub-agent").is_file() {
+            assert_eq!(stub.unwrap(), target.join("space-stub-agent"));
+        }
+        let err = resolve_program("${target}/no-such-plugin", tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("is it built"), "{err}");
     }
 }

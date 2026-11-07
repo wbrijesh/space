@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
         cwd,
         prompt,
         allow_permissions: allow,
-        mode: None,
+        permission_mode: None,
         timeout: Duration::from_secs(120),
     };
     let state = smoke::run(&host, events, opts).await?;

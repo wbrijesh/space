@@ -64,6 +64,6 @@ smoke-stub prompt="hello, permission please":
     set -e
     cargo build -p space-core --bin space-stub-agent -p space-app
     dir=$(mktemp -d)/stub && mkdir -p "$dir"
-    printf 'id="stub"\nname="Stub Agent"\nversion="0.1.0"\nkind="agent"\n[run]\ncommand="%s"\n' \
+    printf 'id="stub"\nname="Stub Agent"\nversion="0.1.0"\nprovides=["agent"]\n[run]\ncommand="%s"\n' \
         "{{project}}/target/debug/space-stub-agent" > "$dir/space-plugin.toml"
     SPACE_PLUGIN_DIRS="$(dirname "$dir")" ./target/debug/Space --smoke "{{prompt}}" --allow {{project}}

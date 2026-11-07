@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 space-protocol.workspace = true
+space-plugin.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 serde.workspace = true
@@ -24,6 +25,10 @@ tracing-subscriber.workspace = true
 [[bin]]
 name = "space-stub-agent"
 path = "src/bin/stub_agent.rs"
+
+[[bin]]
+name = "space-stub-guard"
+path = "src/bin/stub_guard.rs"
 
 [[example]]
 name = "smoke"

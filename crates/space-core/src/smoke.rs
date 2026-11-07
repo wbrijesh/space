@@ -6,8 +6,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use space_protocol::PluginKind;
-
 use crate::host::{EventReceiver, Host, HostEvent};
 use crate::session::{PermissionDecision, SessionEvent, SessionState};
 
@@ -19,8 +17,8 @@ pub struct SmokeOptions {
     pub prompt: String,
     /// Answer permission requests with the first allow option (else reject/cancel).
     pub allow_permissions: bool,
-    /// Switch the session to this mode (`session/set_mode`, e.g. `read`) before prompting.
-    pub mode: Option<String>,
+    /// Run the session in this permission mode (e.g. `read-only`) instead of the default.
+    pub permission_mode: Option<String>,
     pub timeout: Duration,
 }
 
@@ -29,13 +27,19 @@ pub async fn run(host: &Host, mut events: EventReceiver, opts: SmokeOptions) -> 
     let plugins = host.plugins();
     println!("discovered {} plugin(s):", plugins.len());
     for p in &plugins {
-        println!("  - {} ({}, {}) at {}", p.manifest.id, p.manifest.kind, p.manifest.name, p.dir.display());
+        println!("  - {} ({}, {}) at {}", p.manifest.id, p.manifest.role(), p.manifest.name, p.dir.display());
+    }
+    host.start_services().await;
+    let modes = host.catalog(space_protocol::CATALOG_PERMISSION_MODES);
+    if !modes.is_empty() {
+        let ids: Vec<_> = modes.iter().map(|m| if m.default { format!("{} (default)", m.id) } else { m.id.clone() }).collect();
+        println!("permission modes: {}", ids.join(", "));
     }
     let plugin_id = match opts.plugin_id.clone() {
         Some(id) => id,
         None => plugins
             .iter()
-            .find(|p| p.manifest.kind == PluginKind::Agent)
+            .find(|p| p.manifest.is_agent())
             .map(|p| p.manifest.id.clone())
             .context("no agent plugin discovered")?,
     };
@@ -45,14 +49,10 @@ pub async fn run(host: &Host, mut events: EventReceiver, opts: SmokeOptions) -> 
     println!("initialized (agent: {})", agent.agent_name().unwrap_or("?"));
     let session = agent.new_session(&opts.cwd).await?;
     println!("session {} in {}", session.id(), opts.cwd.display());
-    if let Some(modes) = session.modes() {
-        let ids: Vec<_> = modes.available.iter().map(|m| m.id.as_str()).collect();
-        println!("modes: {} (current {})", ids.join(", "), modes.current);
+    if let Some(mode) = &opts.permission_mode {
+        session.set_permission_mode(mode.clone());
     }
-    if let Some(mode) = &opts.mode {
-        session.set_mode(mode.clone()).await?;
-        println!("mode set to {mode}");
-    }
+    println!("permission mode: {}", session.permission_mode());
     println!("> {}", opts.prompt);
 
     let mut state = SessionState::new(session.id());
@@ -81,9 +81,9 @@ pub async fn run(host: &Host, mut events: EventReceiver, opts: SmokeOptions) -> 
                 println!("[plugin {plugin_id}: {status:?}]");
                 continue;
             }
-            HostEvent::PluginLog { line, .. } => {
+            HostEvent::PluginLog { plugin_id, line } => {
                 if std::env::var_os("SPACE_SMOKE_LOGS").is_some() {
-                    println!("[stderr] {line}");
+                    println!("[{plugin_id}] {line}");
                 }
                 continue;
             }
@@ -121,7 +121,8 @@ pub async fn run(host: &Host, mut events: EventReceiver, opts: SmokeOptions) -> 
                     .find(|o| o.kind.is_allow() == opts.allow_permissions)
                     .map(|o| PermissionDecision::Selected(o.id.clone()))
                     .unwrap_or(PermissionDecision::Cancelled);
-                println!("[permission #{} for {:?}] answering {pick:?}", req.request_id, req.tool_call.title);
+                let why = req.reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default();
+                println!("[permission #{} for {:?}{why}] answering {pick:?}", req.request_id, req.tool_call.title);
                 session.resolve_permission(req.request_id, pick)?;
             }
             SessionEvent::Plan(p) => println!("[plan] {} entries", p.len()),

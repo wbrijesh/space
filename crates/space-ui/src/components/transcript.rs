@@ -482,6 +482,7 @@ Invalid manifests are reported, not fatal.";
                 PermissionOption { id: "allow".into(), name: "Allow".into(), kind: PermissionKind::AllowOnce },
                 PermissionOption { id: "reject".into(), name: "Reject".into(), kind: PermissionKind::RejectOnce },
             ],
+            reason: None,
         }
     }
 

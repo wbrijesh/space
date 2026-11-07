@@ -17,7 +17,7 @@ fn stub_root() -> tempfile::TempDir {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("space-plugin.toml"),
-        format!("id = 'stub'\nname = 'Stub'\nversion = '0.1.0'\nkind = 'agent'\n[run]\ncommand = '{STUB}'\n"),
+        format!("id = 'stub'\nname = 'Stub'\nversion = '0.1.0'\nprovides = ['agent']\n[run]\ncommand = '{STUB}'\n"),
     )
     .unwrap();
     tmp
@@ -27,6 +27,7 @@ fn host(root: &Path) -> (Host, EventReceiver) {
     let options = HostOptions {
         project_dir: root.to_path_buf(),
         discovery: DiscoveryOptions { bundled_roots: vec![root.to_path_buf()], user_root: None, project_root: None },
+        secrets: space_core::Secrets::new("dev.brijesh.space.test"),
     };
     Host::new(tokio::runtime::Handle::current(), options)
 }
@@ -97,7 +98,7 @@ async fn full_turn_streams_and_ends() {
         [
             "user:hello",
             "thought:Thinking about the request.",
-            "tool:execute:done:stub",
+            "tool:execute:done:stub\nargv: /bin/sh -c echo stub",
             "agent:Hello from the stub agent."
         ]
     );
@@ -204,7 +205,7 @@ async fn unbuilt_plugin_fails_clearly() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("space-plugin.toml"),
-        "id='nobuild'\nname='N'\nversion='1'\nkind='agent'\n[run]\ncommand='node'\nargs=['dist/main.js']\n",
+        "id='nobuild'\nname='N'\nversion='1'\nprovides=['agent']\n[run]\ncommand='node'\nargs=['dist/main.js']\n",
     )
     .unwrap();
     let (host, _events) = host(tmp.path());
@@ -246,44 +247,4 @@ async fn configure_switches_model_and_thinking() {
         .await
         .unwrap_err();
     assert!(format!("{err:#}").contains("configure"), "{err:#}");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn set_mode_round_trips() {
-    let root = stub_root();
-    let (host, mut events) = host(root.path());
-    let agent = host.start_agent("stub").await.unwrap();
-    let session = agent.new_session(root.path()).await.unwrap();
-    let mut state = SessionState::new(session.id());
-    let mut seen = Vec::new();
-
-    // session/new advertised the modes; Write is current.
-    let modes = session.modes().cloned().expect("stub advertises modes");
-    assert_eq!(modes.current, "write");
-    assert!(modes.has("read") && modes.has("write"));
-    until(&mut events, &mut state, &mut seen, |e| {
-        matches!(e, HostEvent::Session { event: SessionEvent::Modes(_), .. })
-    })
-    .await;
-    assert_eq!(state.modes.as_ref().map(|m| m.current.as_str()), Some("write"));
-
-    session.set_mode("read").await.unwrap();
-    until(&mut events, &mut state, &mut seen, |e| {
-        matches!(e, HostEvent::Session { event: SessionEvent::ModeChanged { .. }, .. })
-    })
-    .await;
-    assert_eq!(state.modes.as_ref().map(|m| m.current.as_str()), Some("read"));
-
-    // The next prompt runs in read mode (the stub logs it).
-    assert_eq!(session.prompt("hello").await.unwrap(), "end_turn");
-    assert!(agent.logs().iter().any(|l| l.contains("prompt \"hello\" (mode read)")), "{:?}", agent.logs());
-
-    let err = session.set_mode("plan").await.unwrap_err();
-    assert!(format!("{err:#}").contains("set_mode"), "{err:#}");
-    session.set_mode("write").await.unwrap();
-    until(&mut events, &mut state, &mut seen, |e| {
-        matches!(e, HostEvent::Session { event: SessionEvent::ModeChanged { mode_id }, .. } if mode_id == "write")
-    })
-    .await;
-    assert_eq!(state.modes.unwrap().current, "write");
 }

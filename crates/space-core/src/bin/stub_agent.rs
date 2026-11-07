@@ -12,9 +12,12 @@
 //! (thinking, running a tool, waiting for permission). The app's dev scenarios use this.
 //!
 //! Sessions report two fake models (`stub-model`, `stub-fast`) and thinking levels through
-//! `_space/status`, and accept `_space/session/configure`. They offer the same session modes as
-//! pi-agent (`write`, the default, and `read`) and accept `session/set_mode`; the mode only
-//! shows in the stub's log.
+//! `_space/status`, and accept `_space/session/configure`.
+//!
+//! Like a real agent, the built-in turn asks the host's tool pipeline before its tool runs
+//! (`_space/tools/preExecute`; a denial fails the tool with the reason) and has the command
+//! confined (`_space/sandbox/confine`; the argv it would spawn ends the tool's output). Hidden
+//! context sections from the prompt's `_meta` are logged.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,7 +25,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use space_core::stub_script::{SCRIPT_ENV, Step, StubScript};
-use space_protocol::{ConfigureSession, ModelInfo, SpaceStatus};
+use space_protocol::ext::CONTEXT_META_KEY;
+use space_protocol::{Confine, ConfigureSession, ModelInfo, PreExecute, SpaceStatus, Verdict};
 use space_protocol::acp::{self, Agent, ByteStreams, Client, Responder};
 use space_protocol::acp_schema::*;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -42,31 +46,16 @@ struct StubSession {
     model: String,
     thinking: String,
     context_tokens: u64,
-    mode: String,
 }
 
 const MODELS: [(&str, &str); 2] = [("stub-model", "Stub Model"), ("stub-fast", "Stub Fast")];
 const LEVELS: [&str; 4] = ["low", "medium", "high", "max"];
-/// Session modes, as pi-agent offers them.
-const MODES: [(&str, &str, &str); 2] = [
-    ("write", "Write", "The agent can edit files and run any command."),
-    ("read", "Read-only", "The agent investigates without changing anything."),
-];
-
-fn mode_state(current: &str) -> SessionModeState {
-    SessionModeState::new(
-        current.to_string(),
-        MODES.iter().map(|(id, name, desc)| SessionMode::new(*id, *name).description(desc.to_string())).collect(),
-    )
-}
-
 impl State {
     fn status(&self, session_id: &str) -> SpaceStatus {
         let s = self.sessions.lock().unwrap().get(session_id).cloned().unwrap_or(StubSession {
             model: MODELS[0].0.into(),
             thinking: "low".into(),
             context_tokens: 0,
-            mode: MODES[0].0.into(),
         });
         SpaceStatus {
             session_id: session_id.to_string(),
@@ -127,10 +116,9 @@ async fn main() -> acp::Result<()> {
                             model: MODELS[0].0.into(),
                             thinking: "low".into(),
                             context_tokens: 0,
-                            mode: MODES[0].0.into(),
                         },
                     );
-                    responder.respond(NewSessionResponse::new(id.clone()).modes(mode_state(MODES[0].0)))?;
+                    responder.respond(NewSessionResponse::new(id.clone()))?;
                     cx.send_notification(state.status(&id))
                 }
             },
@@ -172,25 +160,6 @@ async fn main() -> acp::Result<()> {
             },
             acp::on_receive_request!(),
         )
-        .on_receive_request(
-            {
-                let state = state.clone();
-                async move |req: SetSessionModeRequest,
-                            responder: Responder<SetSessionModeResponse, acp::V1>,
-                            _cx: Conn| {
-                    eprintln!("space-stub-agent: set_mode {} {}", req.session_id.0, req.mode_id.0);
-                    let mut sessions = state.sessions.lock().unwrap();
-                    match sessions.get_mut(&*req.session_id.0) {
-                        Some(s) if MODES.iter().any(|(id, ..)| *id == &*req.mode_id.0) => {
-                            s.mode = req.mode_id.0.to_string();
-                            responder.respond(SetSessionModeResponse::default())
-                        }
-                        _ => responder.respond_with_error(acp::Error::invalid_params()),
-                    }
-                }
-            },
-            acp::on_receive_request!(),
-        )
         .on_receive_notification(
             {
                 let state = state.clone();
@@ -222,8 +191,10 @@ async fn run_turn(
             _ => None,
         })
         .collect();
-    let mode = state.sessions.lock().unwrap().get(&*sid.0).map(|s| s.mode.clone()).unwrap_or_default();
-    eprintln!("space-stub-agent: prompt {text:?} (mode {mode})");
+    eprintln!("space-stub-agent: prompt {text:?}");
+    if let Some(context) = req.meta.as_ref().and_then(|m| m.get(CONTEXT_META_KEY)) {
+        eprintln!("space-stub-agent: context {context}");
+    }
     if let Some(turn) = state.script.turn(&text) {
         let steps = turn.steps.clone();
         return run_script(cx, state, sid, steps, responder).await;
@@ -250,8 +221,51 @@ async fn run_turn(
             .raw_input(serde_json::json!({"command": "echo stub"})),
     ))?;
 
-    let mut allowed = true;
-    if text.contains("permission") {
+    // The host's tool pipeline decides first, then the command is confined.
+    let guard = cx
+        .send_request(PreExecute {
+            session_id: sid.0.to_string(),
+            tool_call_id: tool_id.into(),
+            tool: "bash".into(),
+            kind: "execute".into(),
+            args: serde_json::json!({"command": "echo stub"}),
+            cwd: None,
+        })
+        .block_task()
+        .await;
+    let blocked = match guard {
+        Ok(r) if r.decision == Verdict::Allow => None,
+        Ok(r) => Some(r.reason.unwrap_or_else(|| "denied".into())),
+        Err(e) => Some(format!("the tool pipeline failed: {e}")),
+    };
+    let confined = match &blocked {
+        Some(_) => None,
+        None => {
+            let argv = vec!["/bin/sh".to_string(), "-c".to_string(), "echo stub".to_string()];
+            let confine = Confine { session_id: sid.0.to_string(), argv, cwd: "/".into() };
+            Some(cx.send_request(confine).block_task().await.map(|r| r.argv.join(" ")))
+        }
+    };
+    let blocked = blocked.or_else(|| match &confined {
+        Some(Err(e)) => Some(format!("couldn't confine the command: {e}")),
+        _ => None,
+    });
+    if let Some(reason) = blocked {
+        eprintln!("space-stub-agent: tool blocked: {reason}");
+        send(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            tool_id,
+            ToolCallUpdateFields::new()
+                .status(ToolCallStatus::Failed)
+                .content(vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(format!("blocked: {reason}"))))]),
+        )))?;
+    }
+    let argv = match confined {
+        Some(Ok(argv)) => argv,
+        _ => String::new(),
+    };
+
+    let mut allowed = !argv.is_empty();
+    if allowed && text.contains("permission") {
         let options = vec![
             PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce),
             PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce),
@@ -272,13 +286,14 @@ async fn run_turn(
             tool_id,
             ToolCallUpdateFields::new().status(ToolCallStatus::InProgress),
         )))?;
+        let output = format!("stub\nargv: {argv}");
         send(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
             tool_id,
             ToolCallUpdateFields::new()
                 .status(ToolCallStatus::Completed)
-                .content(vec![ToolCallContent::from(ContentBlock::Text(TextContent::new("stub")))]),
+                .content(vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(output)))]),
         )))?;
-    } else {
+    } else if !argv.is_empty() {
         send(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
             tool_id,
             ToolCallUpdateFields::new()

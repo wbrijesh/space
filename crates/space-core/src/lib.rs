@@ -15,14 +15,16 @@ mod convert;
 pub mod discovery;
 mod host;
 pub mod process;
+pub mod secrets;
 pub mod session;
 pub mod smoke;
 pub mod stub_script;
 
 pub use discovery::{DiscoveredPlugin, DiscoveryOptions, DiscoveryReport, PluginSource};
-pub use host::{AgentHandle, EventReceiver, Host, HostEvent, HostOptions, PluginStatus, Session};
+pub use host::{AgentHandle, EventReceiver, Host, HostEvent, HostOptions, PluginStatus, Session, SettingState};
+pub use secrets::Secrets;
 pub use session::{
-    ModeInfo, PermissionDecision, PermissionKind, PermissionOption, PermissionRequest, SessionEvent, SessionId,
-    PlanEntry, SessionModes, SessionState, ToolCallInfo, ToolCallPatch, ToolStatus, TranscriptItem,
+    PermissionDecision, PermissionKind, PermissionOption, PermissionRequest, PlanEntry, SessionEvent, SessionId,
+    SessionState, ToolCallInfo, ToolCallPatch, ToolStatus, TranscriptItem,
 };
 pub use space_protocol as protocol;

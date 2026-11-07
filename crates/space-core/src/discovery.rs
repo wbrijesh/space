@@ -143,7 +143,7 @@ mod tests {
         fs::create_dir_all(&d).unwrap();
         fs::write(
             d.join(MANIFEST_FILE),
-            format!("id='{id}'\nname='{name}'\nversion='1'\nkind='agent'\n[run]\ncommand='node'\n"),
+            format!("id='{id}'\nname='{name}'\nversion='1'\nprovides=['agent']\n[run]\ncommand='node'\n"),
         )
         .unwrap();
     }

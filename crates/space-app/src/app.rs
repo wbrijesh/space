@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use gpui::component::input::{InputEvent, TextareaState};
 use gpui::*;
-use space_core::protocol::{ConfigureSession, ModelInfo, PluginKind};
+use space_core::protocol::{ConfigureSession, ModelInfo};
 use space_core::{
     AgentHandle, EventReceiver, Host, HostEvent, PermissionDecision, PluginStatus, Session, SessionEvent, SessionId,
     SessionState, TranscriptItem,
@@ -27,7 +27,7 @@ use space_core::{
 
 pub use space_ui::actions::{
     CloseSettings, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, Quit, ScrollToBottom, ToggleLogs,
-    ToggleReadOnly, ToggleSidebar,
+    ToggleSidebar,
 };
 use space_ui::assets::SpaceAssets;
 use space_ui::components::composer;
@@ -69,8 +69,6 @@ pub struct SeedThread {
     pub prompt: Option<String>,
     pub cwd: Option<PathBuf>,
     pub draft: Option<String>,
-    /// Start in read-only mode.
-    pub read_only: bool,
     /// Dev scenarios: hold the transcript this far above the bottom, as if scrolled up.
     pub scrolled_up: Option<f32>,
 }
@@ -99,7 +97,6 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-j", ToggleLogs, None),
             KeyBinding::new("cmd-l", FocusComposer, None),
             KeyBinding::new("cmd-,", OpenSettings, None),
-            KeyBinding::new("cmd-shift-r", ToggleReadOnly, None),
             // ⌘↓ scrolls the transcript to the bottom, also from the composer (where the
             // textarea would move the caret to the end) unless its text spans several lines.
             // Not context-free: a `None` binding counts as the deepest match and would beat
@@ -137,7 +134,6 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
                     MenuItem::separator(),
                     MenuItem::action("Scroll to Bottom", ScrollToBottom),
                     MenuItem::action("Focus Composer", FocusComposer),
-                    MenuItem::action("Toggle Read-only Mode", ToggleReadOnly),
                 ],
                 disabled: false,
             },
@@ -193,10 +189,6 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
     });
 }
 
-/// ACP session mode ids of the Write / Read-only toggle.
-pub const WRITE_MODE: &str = "write";
-pub const READ_MODE: &str = "read";
-
 /// One conversation with the agent (an ACP session once it has been created).
 pub struct Thread {
     pub key: u64,
@@ -214,11 +206,6 @@ pub struct Thread {
     pub attachments: Vec<PathBuf>,
     /// Message sent before the session existed; sent once it does.
     pub queued: Option<(String, Vec<PathBuf>)>,
-    /// Read-only mode chosen for this thread (default: Write). Applied to every session the
-    /// thread gets (`session/set_mode`), so it survives agent restarts.
-    pub read_only: bool,
-    /// `session/set_mode` requests in flight; their echoes don't overwrite `read_only`.
-    mode_requests: usize,
     /// Expanded thought/tool items (transcript indices).
     pub expanded: HashSet<usize>,
     thought_started: HashMap<usize, Instant>,
@@ -239,8 +226,6 @@ impl Thread {
             draft: String::new(),
             attachments: Vec::new(),
             queued: None,
-            read_only: false,
-            mode_requests: 0,
             expanded: HashSet::new(),
             thought_started: HashMap::new(),
             thought_secs: HashMap::new(),
@@ -249,10 +234,6 @@ impl Thread {
 
     pub fn is_empty(&self) -> bool {
         self.state.items.is_empty() && self.queued.is_none()
-    }
-
-    pub fn mode_id(&self) -> &'static str {
-        if self.read_only { READ_MODE } else { WRITE_MODE }
     }
 
     pub fn title(&self) -> String {
@@ -268,13 +249,6 @@ impl Thread {
 
     fn apply(&mut self, event: &SessionEvent) {
         self.state.apply(event);
-        // The agent switched modes on its own: follow it (our own switches are already shown).
-        if let SessionEvent::ModeChanged { mode_id } = event
-            && self.mode_requests == 0
-            && (mode_id == READ_MODE || mode_id == WRITE_MODE)
-        {
-            self.read_only = mode_id == READ_MODE;
-        }
         let now = Instant::now();
         let last = self.state.items.len().checked_sub(1);
         match (last, self.state.items.last()) {
@@ -323,9 +297,6 @@ pub struct SpaceApp {
     /// Models and thinking levels from the latest `_space/status` that listed them.
     pub(crate) agent_models: Option<Vec<ModelInfo>>,
     pub(crate) agent_levels: Option<Vec<String>>,
-    /// The agent's sessions offer Write / Read-only (from the latest `session/new`), so threads
-    /// without a session yet show the toggle too.
-    pub(crate) agent_read_only: bool,
     pub(crate) permission: NotificationPermission,
     _subscriptions: Vec<Subscription>,
 }
@@ -402,7 +373,7 @@ impl SpaceApp {
         .detach();
 
         let plugins = host.plugins();
-        let agents: Vec<_> = plugins.iter().filter(|p| p.manifest.kind == PluginKind::Agent).collect();
+        let agents: Vec<_> = plugins.iter().filter(|p| p.manifest.is_agent()).collect();
         let wanted = options.agent.clone().unwrap_or_else(|| DEFAULT_AGENT.to_string());
         let agent_plugin = agents.iter().find(|p| p.id() == wanted).or(agents.first()).copied();
         let banner = match (&agent_plugin, &options.agent) {
@@ -438,11 +409,11 @@ impl SpaceApp {
             show_settings: false,
             agent_models: None,
             agent_levels: None,
-            agent_read_only: false,
             permission: NotificationPermission::Checking,
             _subscriptions: vec![sub, activation],
         };
         this.seed_threads(options.seed, options.select, window, cx);
+        this.start_services(cx);
         this.ensure_agent(cx);
         this.refresh_permission(cx);
         if options.open_settings {
@@ -497,13 +468,14 @@ impl SpaceApp {
                 self.agent_status = status;
             }
             HostEvent::PluginLog { plugin_id, line } => {
-                if Some(&plugin_id) == self.agent_id.as_ref() {
-                    if self.logs.len() == MAX_LOG_LINES {
-                        self.logs.pop_front();
-                    }
-                    self.logs.push_back(line);
+                // Service plugins' lines are tagged with their id; the agent's are not.
+                let line = if Some(&plugin_id) == self.agent_id.as_ref() { line } else { format!("[{plugin_id}] {line}") };
+                if self.logs.len() == MAX_LOG_LINES {
+                    self.logs.pop_front();
                 }
+                self.logs.push_back(line);
             }
+            HostEvent::Catalog { .. } | HostEvent::PluginSettings { .. } => {}
             HostEvent::Session { session_id, event } => {
                 let Some(&key) = self.session_threads.get(&session_id) else {
                     // Arrived before `new_session` returned; applied once the thread knows its id.
@@ -524,9 +496,6 @@ impl SpaceApp {
             if let Some(levels) = &status.thinking_levels {
                 self.agent_levels = Some(levels.clone());
             }
-        }
-        if let SessionEvent::Modes(modes) = event {
-            self.agent_read_only = supports_read_only(Some(modes));
         }
         // On the Settings page nothing is being watched.
         let selected = self.selected == Some(key) && !self.show_settings;
@@ -635,15 +604,6 @@ impl SpaceApp {
             if let Some(request) = defaults {
                 apply_defaults(&session, request).await;
             }
-            // The thread's mode, as chosen now (it may have changed while the session started).
-            let mode = this.update(cx, |this, _| this.thread(key).map(Thread::mode_id)).ok().flatten();
-            if let Some(mode) = mode
-                && let Some(modes) = session.modes().filter(|m| supports_read_only(Some(m)))
-                && modes.current != mode
-                && let Err(e) = session.set_mode(mode).await
-            {
-                tracing::warn!("couldn't switch the new session to {mode}: {e:#}");
-            }
             let _ = this.update(cx, |this, cx| {
                 if let Some(t) = this.thread_mut(key) {
                     t.creating = false;
@@ -706,7 +666,6 @@ impl SpaceApp {
             if let Some(t) = self.thread_mut(key) {
                 t.queued = s.prompt.map(|p| (p, Vec::new()));
                 t.draft = s.draft.unwrap_or_default();
-                t.read_only = s.read_only;
             }
             keys.push(key);
             scrolled_up.push(s.scrolled_up);
@@ -880,10 +839,8 @@ impl SpaceApp {
         let fresh = Thread::new(key, dir);
         let thread = self.thread_mut(key).expect("thread exists");
         let draft = std::mem::take(&mut thread.draft);
-        let read_only = thread.read_only;
         *thread = fresh;
         thread.draft = draft;
-        thread.read_only = read_only;
         self.create_session(key, cx);
         self.focus_composer(window, cx);
     }
@@ -954,64 +911,6 @@ impl SpaceApp {
         .detach();
     }
 
-    /// The selected thread offers the Write / Read-only toggle.
-    pub(crate) fn mode_toggle_available(&self, thread: &Thread) -> bool {
-        match thread.state.modes.as_ref() {
-            Some(modes) => supports_read_only(Some(modes)),
-            // Its events aren't folded yet, or no session yet: what the agent offers.
-            None => thread.session.as_ref().map_or(self.agent_read_only, |s| supports_read_only(s.modes())),
-        }
-    }
-
-    /// ⇧⌘R: flip the selected thread between Write and Read-only.
-    pub(crate) fn toggle_read_only(&mut self, cx: &mut Context<Self>) {
-        if self.show_settings {
-            return;
-        }
-        if let Some(t) = self.current()
-            && self.mode_toggle_available(t)
-        {
-            let read_only = !t.read_only;
-            self.set_read_only(read_only, cx);
-        }
-    }
-
-    /// Switch the selected thread to Write or Read-only. Without a live session the choice is
-    /// kept and applied when the thread gets one; mid-turn the agent applies it from the next
-    /// prompt.
-    pub(crate) fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
-        let Some(key) = self.selected else { return };
-        let Some(thread) = self.thread_mut(key) else { return };
-        if thread.read_only == read_only {
-            return;
-        }
-        thread.read_only = read_only;
-        cx.notify();
-        let Some(session) = thread.live_session().cloned() else { return };
-        if !supports_read_only(session.modes()) {
-            return;
-        }
-        thread.mode_requests += 1;
-        let mode = thread.mode_id();
-        cx.spawn(async move |this, cx| {
-            let result = session.set_mode(mode).await;
-            let _ = this.update(cx, |this, cx| {
-                if let Some(t) = this.thread_mut(key) {
-                    t.mode_requests -= 1;
-                    // Failed: show what the agent is actually in.
-                    if result.is_err() && t.mode_id() == mode {
-                        t.read_only = t.state.modes.as_ref().is_some_and(|m| m.current == READ_MODE);
-                    }
-                }
-                if let Err(e) = result {
-                    this.banner = Some(format!("{e:#}"));
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
     pub(crate) fn toggle_expanded(&mut self, ix: usize, cx: &mut Context<Self>) {
         if let Some(key) = self.selected
             && let Some(t) = self.thread_mut(key)
@@ -1020,6 +919,12 @@ impl SpaceApp {
             t.expanded.insert(ix);
         }
         cx.notify();
+    }
+
+    /// Start the service plugins (permissions and the like); failures show in the logs.
+    fn start_services(&mut self, cx: &mut Context<Self>) {
+        let host = self.host.clone();
+        cx.spawn(async move |_, _| host.start_services().await).detach();
     }
 
     pub(crate) fn restart_agent(&mut self, cx: &mut Context<Self>) {
@@ -1128,11 +1033,6 @@ impl SpaceApp {
         self.settings.update(|s| s.notifications.sound = on);
         cx.notify();
     }
-}
-
-/// The agent offers both modes of the Write / Read-only toggle.
-fn supports_read_only(modes: Option<&space_core::SessionModes>) -> bool {
-    modes.is_some_and(|m| m.has(WRITE_MODE) && m.has(READ_MODE))
 }
 
 /// Switch a just-created session to `request`. When that fails (say the model is no longer

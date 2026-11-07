@@ -1,7 +1,7 @@
 id = "pi-agent"
 name = "Pi Agent"
 version = "0.1.0"
-kind = "agent"
+provides = ["agent"]
 description = "Coding agent on the pi SDK, using the Claude CLI subscription."
 
 [run]

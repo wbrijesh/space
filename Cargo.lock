@@ -6264,6 +6264,7 @@ dependencies = [
  "futures",
  "serde",
  "serde_json",
+ "space-plugin",
  "space-protocol",
  "tempfile",
  "thiserror 2.0.21",
@@ -6271,6 +6272,27 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "space-permissions"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "space-plugin",
+ "tokio",
+]
+
+[[package]]
+name = "space-plugin"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "serde",
+ "serde_json",
+ "space-protocol",
+ "tokio",
 ]
 
 [[package]]
