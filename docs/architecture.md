@@ -1,130 +1,137 @@
 # Space architecture (v0)
 
 Space is a native macOS development environment built around **projects**, **bots** and **knowledge**.
-v0 delivers the foundation: a Rust/GPUI **harness** that hosts out-of-process **plugins**, and a first
-**agent plugin** built on the pi SDK.
+v0 delivers the foundation: a Rust/GPUI **harness** that hosts out-of-process **plugins**, a first
+**agent plugin** built on the pi SDK, and a **permissions plugin** that guards every tool call.
 
 ```
-┌──────────────────────────── space (Rust) ────────────────────────────┐
-│  space-app       GPUI UI: threads · transcript · composer · approvals│
-│  space-core      plugin registry · process supervisor · sessions     │
-│  space-protocol  manifest types · ACP re-exports · _space extensions │
-└──────┬──────────────────────────────────────────────────────────────┘
-       │ ACP: JSON-RPC 2.0, newline-delimited, over the plugin's stdio
-┌──────▼─────────────────────────┐
-│ plugins/pi-agent (Node, TS)    │
-│ pi SDK session + claude-cli    │
-└────────────────────────────────┘
+┌──────────────────────────── space (Rust) ─────────────────────────────┐
+│  space-app       GPUI UI: threads · transcript · composer · settings  │
+│  space-core      registry · supervisor · sessions · tool pipeline     │
+│  space-protocol  manifest · ACP re-exports · _space/* · service proto │
+│  space-plugin    SDK for service plugins in Rust                      │
+└──────┬──────────────────────────────────────────┬────────────────────┘
+       │ ACP (JSON-RPC over stdio)                │ service protocol (JSON-RPC over stdio)
+┌──────▼───────────────────────┐   ┌──────────────▼──────────────────────────┐
+│ plugins/pi-agent (Node, TS)  │   │ plugins/permissions (Rust)               │
+│ pi SDK + claude-cli          │   │ modes · macOS sandbox · decision model   │
+└──────────────────────────────┘   └──────────────────────────────────────────┘
 ```
+
+Everything a plugin adds goes through the host: agents ask the host before every tool call
+(`_space/tools/preExecute`) and before spawning a command (`_space/sandbox/confine`); the host runs the
+hook chain and routes seams to whichever plugin provides them. Agents and guards never talk directly.
 
 ## Decisions
 
 | Topic | Decision | Why |
 |---|---|---|
-| Plugin boundary | Out-of-process, one child process per plugin | Any language, crash isolation, sandboxable later |
-| Wire protocol | [Agent Client Protocol](https://agentclientprotocol.com) (ACP) over stdio | Open standard with Rust + TS SDKs; Claude Code, Codex, Gemini already speak it |
-| Space-specific calls | ACP extension methods/notifications prefixed `_space/` | Extends ACP without forking it |
-| Core placement | `space-core` is a library used in-process by `space-app` | One binary for v0; everything crosses a protocol, so a daemon split later is packaging |
-| Plugin runtime | Node (>= 24) | pi supports Node; dependencies pinned per plugin |
-| Model access | pi + `@pi-plugins/claude-cli`, model `claude-cli/claude-opus-5-5` | Uses the user's signed-in `claude` CLI subscription; no API key |
+| Plugin boundary | Out-of-process, one child process per plugin | Any language, crash isolation |
+| Agent protocol | [Agent Client Protocol](https://agentclientprotocol.com) (ACP) over stdio | Open standard with Rust + TS SDKs |
+| Service protocol | Plain JSON-RPC 2.0 over stdio, same framing ([`space_protocol::service`]) | Guards, catalogs and settings aren't agents |
+| Space-specific calls | ACP extension methods prefixed `_space/` | Extends ACP without forking it |
+| Composition | Plugins declare **capabilities** (`provides`) and **hooks**; the host routes by capability | Swap a provider without touching consumers (learned from DeepSeek Harness's seams) |
+| Tool pipeline | Owned by the host, run for every agent | Every agent gets the same guards for free |
+| Failing guards | Fail closed: the call is **held** until the guard can decide | A broken guard never lets a call through or turns into a prompt |
+| Core placement | `space-core` is a library used in-process by `space-app` | One binary; everything crosses a protocol |
+| Model access | pi + `@pi-plugins/claude-cli` | Uses the user's `claude` CLI subscription; no API key |
 
 ## Plugin manifest
 
 Every plugin is a directory containing `space-plugin.toml`:
 
 ```toml
-id = "pi-agent"                 # unique, kebab-case
-name = "Pi Agent"
+id = "permissions"              # unique, kebab-case
+name = "Permissions"
 version = "0.1.0"
-kind = "agent"                  # agent | tool | source | knowledge (v0 implements agent)
-description = "Coding agent on the pi SDK, using the Claude CLI subscription."
+description = "…"
+provides = ["sandbox", "context", "settings", "catalog:permission-modes"]   # or ["agent"]
+hooks = [{ event = "tools/pre-execute", order = 10 }]                      # lower order runs first
+required = true                 # a guard Space can't run tools without (can't be turned off)
 
 [run]
-command = "node"                # resolved on PATH
-args = ["dist/main.js"]         # relative paths resolve against the plugin directory
-cwd = "plugin"                  # "plugin" (plugin dir) or "project" (session working dir); default "plugin"
+command = "${target}/space-permissions"   # ${target}: the cargo profile dir Space runs from
+args = []                       # relative paths resolve against the plugin directory
+cwd = "plugin"                  # "plugin" or "project"
 
 [run.env]                       # optional extra environment
-# FOO = "bar"
 ```
 
-Discovery order (later wins on duplicate `id`):
-1. `<repo>/plugins/*` (bundled, development)
-2. `~/.space/plugins/*`
-3. `<project>/.space/plugins/*`
+Capabilities: `agent` (an ACP agent; provides nothing else), `sandbox` (`sandbox/confine`), `context`
+(hidden prompt sections), `settings` (fields on the Settings page), `catalog:<name>` (a list the UI renders,
+e.g. `catalog:permission-modes` for the composer's mode menu). Hook events: `tools/pre-execute`.
 
-## Protocol (v0 subset)
+Discovery order (later wins on duplicate `id`): `<repo>/plugins/*`, `~/.space/plugins/*`,
+`<project>/.space/plugins/*`. Writing one: [plugins.md](plugins.md).
 
-Framing: one JSON-RPC 2.0 message per line (LF) on the plugin's stdin/stdout. stderr is free-form logs,
-captured by the harness. The harness is the ACP **client**; agent plugins are ACP **agents**.
+## Agent protocol (ACP subset)
 
-Required ACP methods for an `agent` plugin:
+The harness is the ACP **client**; agent plugins are ACP **agents**.
 
 | Direction | Method | Notes |
 |---|---|---|
-| client → agent | `initialize` | Negotiate protocol version and capabilities |
-| client → agent | `session/new` | `cwd` = project directory; returns `sessionId` and, optionally, `modes` (below) |
-| client → agent | `session/prompt` | Text content blocks; resolves with `stopReason` when the turn settles |
+| client → agent | `initialize` | Protocol version and capabilities |
+| client → agent | `session/new` | `cwd` = the thread's folder |
+| client → agent | `session/prompt` | Text and `resource_link` blocks; `_meta["space/context"]` carries hidden context sections |
 | client → agent | `session/cancel` (notification) | Abort the running turn |
-| client → agent | `session/set_mode` | Optional: `{ sessionId, modeId }`, one of the modes from `session/new`. Applies from the next prompt |
-| agent → client | `session/update` (notification) | `agent_message_chunk`, `agent_thought_chunk`, `tool_call`, `tool_call_update`, `plan`, `current_mode_update` |
-| agent → client | `session/request_permission` | Optional in v0; harness shows an approval card |
+| agent → client | `session/update` (notification) | message/thought chunks, `tool_call`, `tool_call_update`, `plan` |
+| agent → client | `session/request_permission` | The agent's own approval card |
 
-**Session modes** (ACP `SessionModeState`). An agent that supports read-only work returns
-`modes: { currentModeId: "write", availableModes: [{ id: "write", name: "Write" }, { id: "read", name: "Read-only",
-description }] }` from `session/new`. The composer shows a Write/Read toggle only when both ids are offered; each
-thread starts in Write. The app remembers a thread's choice and sends `session/set_mode` whenever the thread
-gets a session (first prompt, folder change, agent restart) and the choice differs from `currentModeId`. An
-agent may report its own changes with a `current_mode_update`. How a mode works is up to the agent; pi-agent's
-read mode removes its edit/write tools and adds a system-prompt section for the run, never text in the
-user's message (see `plugins/pi-agent/README.md`). In Rust: `NewSessionResponse::modes`,
-`SetSessionModeRequest`, `SessionUpdate::CurrentModeUpdate`; in TS: `acp.methods.agent.session.setMode`.
-
-Space extensions (v0):
+Space extensions:
 
 | Direction | Method | Payload |
 |---|---|---|
-| agent → client | `_space/status` (notification) | `SpaceStatus` (below): what the session runs on, what it could run on, context usage |
-| client → agent | `_space/session/configure` (request) | `{ sessionId, provider?, model?, thinkingLevel? }` → the session's full `SpaceStatus` after the change |
+| agent → client | `_space/status` (notification) | `SpaceStatus`: model, thinking level, what's available, context usage |
+| client → agent | `_space/session/configure` | `{ sessionId, provider?, model?, thinkingLevel? }` → the full `SpaceStatus` |
+| agent → client | `_space/tools/preExecute` | `{ sessionId, toolCallId, tool, kind, args, cwd? }` → `{ decision: allow \| deny, reason? }`, after the host's pipeline (may take as long as the call is held) |
+| agent → client | `_space/sandbox/confine` | `{ sessionId, argv, cwd }` → `{ argv }` to spawn instead (unchanged without a `sandbox` provider) |
 
 `SpaceStatus` (every field but `sessionId` optional; the client merges partial updates):
 
 ```jsonc
-{
-  "sessionId": "…",
-  "provider": "claude-cli",
-  "model": "claude-opus-5-5",
-  "thinkingLevel": "medium",
-  "availableModels": [{ "provider": "claude-cli", "id": "claude-opus-5-5", "name": "Claude Opus 5.5" }, …],
-  "thinkingLevels": ["low", "medium", "high", "xhigh", "max"],   // levels the current model supports
-  "contextTokens": 18234,                                          // estimated tokens in context
-  "contextWindow": 1000000
-}
+{ "sessionId": "…", "provider": "claude-cli", "model": "claude-opus-5-5", "thinkingLevel": "medium",
+  "availableModels": [{ "provider": "claude-cli", "id": "claude-opus-5-5", "name": "Claude Opus 5.5" }],
+  "thinkingLevels": ["low", "medium", "high", "xhigh", "max"], "contextTokens": 18234, "contextWindow": 1000000 }
 ```
 
-Agents send it after `session/new` and whenever it changes (pi-agent: after every turn). The app shows the
-model and thinking level in the composer and switches them with `_space/session/configure`; omitted
-fields are left unchanged, `provider` defaults to the current one, and an unsupported thinking level may
-be clamped by the agent. Invalid requests fail with a JSON-RPC error (`-32602`). Prompts may carry
-`resource_link` blocks (`file://…`) for files the user attached in the composer.
+## Service protocol
 
-Tools run inside the agent (pi's built-in tools: read, bash, edit, write, …) in v0. The ACP `fs/*` and
-`terminal/*` client capabilities are **not** advertised by the harness yet.
+Service plugins speak [`space_protocol::service`]; the Rust SDK is `crates/space-plugin`.
 
-## Repository layout
+| Method | Direction | When |
+|---|---|---|
+| `plugin/initialize` | host → plugin | first, with every setting's value (and any unreadable secrets) |
+| `settings/schema` | host → plugin | `provides settings`: the fields |
+| `settings/validate` | host → plugin | before a new value is stored: `ok`, `invalid` (not stored) or `unverifiable` (stored only if the user saves anyway) |
+| `settings/changed` | host → plugin | the user changed a setting |
+| `catalog/get`, `catalog/changed` | both | a catalog's entries; the plugin says when they changed |
+| `context/get` | host → plugin | hidden sections for the next prompt |
+| `sandbox/confine` | host → plugin | the argv to spawn |
+| `hooks/tools.preExecute` | host → plugin | before every tool call: `allow`, `deny`, `ask`, `next` or `unavailable` |
+| `hooks/ready` | plugin → host | the plugin's answers may have changed: held calls run the chain again |
+| `plugin/retry` | host → plugin | the user pressed a blocker's "Retry now" |
 
-```
-space/
-├─ Cargo.toml                 # Rust workspace
-├─ .cargo/config.toml         # DEVELOPER_DIR → Xcode (Metal shaders for GPUI)
-├─ crates/
-│  ├─ space-protocol/         # manifest types, ACP re-exports, _space extension types
-│  ├─ space-core/             # discovery, supervisor, ACP client connections, session state
-│  └─ space-app/              # GPUI binary `Space`
-├─ plugins/
-│  └─ pi-agent/               # TypeScript ACP agent on the pi SDK
-└─ docs/
-```
+Catalog entries can carry a **blocker** (`ready: false`): text, links (`open-settings:<plugin>`,
+`open-url:<url>`, `retry:<plugin>`, `use-mode:<entry>`) and the last/next attempt times. The composer
+shows it as a pill above the input (times tick live) and won't send while the thread's mode has one.
+
+## The tool pipeline
+
+`_space/tools/preExecute` runs the `tools/pre-execute` chain (lowest `order` first) with the call, the
+thread's permission mode, project root and history (the user's messages and earlier calls, from the
+host's own records; never tool output).
+
+- `deny` wins: the call fails with the reason (shown as **Blocked** on the tool row).
+- `ask` is remembered; after the last listener the user gets an approval card with the reasons.
+- `allow` / `next` pass the call on; with no listeners the call is allowed.
+- `unavailable`, an error, a timeout, or a listener that isn't running **holds** the call (fail closed).
+  The agent's request stays open; the tool row shows **Paused** with the reason, the sidebar row a pause
+  icon, and a notification goes out if you aren't watching. The whole chain runs again (with fresh
+  facts, so a mode change applies) when a listener sends `hooks/ready`, a service (re)starts, the
+  thread's mode changes, the user presses Retry now, or every 10 s (`HostOptions::held_recheck`).
+  Stopping the turn ends the wait. A listener that crashed 3 times in 5 minutes is reported as "keeps
+  crashing".
+- `required` plugins can't be turned off.
 
 ## Harness implementation notes (v0)
 
@@ -181,5 +188,26 @@ space/
   logged). The macOS permission status comes from `getNotificationSettingsWithCompletionHandler`,
   whose callback runs off the main thread and answers through a oneshot channel; it's refreshed when
   the page opens and whenever the window becomes active.
-- **Testing.** `space-core` ships a `space-stub-agent` binary, a scripted ACP agent with keywords
-  `permission`, `slow` and `crash`. The integration tests in `crates/space-core/tests/stub_agent.rs` run against it.
+- **Plugin settings.** Secrets live in the macOS Keychain (`Secrets`, service `dev.brijesh.space`; tests
+  use their own services), text values in the settings file. A save goes through `settings/validate`
+  first; the field shows "Checking…", then the outcome, and "Save anyway" when the plugin couldn't check.
+- **Testing.** `space-core` ships `space-stub-agent` (a scripted ACP agent) and `space-stub-guard` (a
+  scripted service plugin: decisions, holds, crashes, catalogs, validation). `crates/space-core/tests/`
+  run the host and pipeline against them; `plugins/permissions/tests/guardrail.rs` runs the real
+  permissions plugin against a scripted local stand-in for OpenAI.
+
+## Repository layout
+
+```
+space/
+├─ crates/
+│  ├─ space-protocol/   # manifest, ACP re-exports, _space extensions, service protocol
+│  ├─ space-plugin/     # SDK for Rust service plugins
+│  ├─ space-core/       # discovery, supervisor, ACP + service connections, pipeline, sessions
+│  ├─ space-ui/         # components, tokens, gallery
+│  └─ space-app/        # GPUI binary `Space`
+├─ plugins/
+│  ├─ pi-agent/         # TypeScript ACP agent on the pi SDK
+│  └─ permissions/      # Rust service plugin: modes, sandbox, decision model
+└─ docs/
+```

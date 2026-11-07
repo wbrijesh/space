@@ -83,7 +83,8 @@ pane shows each example with its name. The top bar has:
   Pin phase with a slider.
 * **Canvas:** window background or a raised surface.
 
-`SPACE_GALLERY_PAGE=<component name | tokens>` opens a page directly.
+`SPACE_GALLERY_PAGE=<component name | tokens>` opens a page directly; `SPACE_GALLERY_ONLY=<text>|<text>` keeps only
+the examples whose name contains one of them (handy for screenshots further down a long page).
 
 ## 5. Scenarios — the real app in a held state
 
@@ -104,13 +105,14 @@ until you cancel it. Nothing in the UI is faked. `Space --scenario list` prints 
 | `long-composer` | finished thread with a 12-line draft |
 | `long-transcript` | thread longer than the window, scrolled to the end (bottom fade) |
 | `scrolled-up` | long thread held scrolled up (scroll-to-bottom button) while the reply keeps streaming below |
-| `read-mode` | a thread in Read-only mode with a finished investigation (toggle under the composer) |
+| `guardrail` | the real permissions plugin without a key: a Read Only thread with a blocked edit, a Workspace Write thread paused |
+| `guardrail-offline` | the real permissions plugin with a key but OpenAI unreachable: a paused call, the retrying pill with live times |
 | `settings` | the Settings page, with the stub's models and a saved default model and thinking level |
 
 **Adding a scenario:** in `crates/space-app/src/scenarios.rs`, append a `Scenario` to `all()`.
 Give it a name, a description and its threads. Each thread has a `prompt` and the `steps` the
 stub streams back (`thought`, `say`, `tool(...)`, `Step::Permission`, `context(...)`,
-`Step::Hold`, `Step::Fail`). Optionally set a `subdir`, a composer `draft` or `read_only`. Prompts must be
+`Step::Hold`, `Step::Fail`). Optionally set a `subdir`, a composer `draft` or a permission `mode` (with `permissions: true`). Prompts must be
 unique within a scenario (the stub matches on prompt text); a unit test checks this. The stub
 binary must be built (`cargo build --workspace` does it).
 

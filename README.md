@@ -42,7 +42,7 @@ plugins/pi-agent        TypeScript ACP agent on the pi SDK (Claude CLI subscript
 | `just smoke-stub` | the same headless run against the stub agent (free) |
 
 Without just, run `cargo run -p space-app -- [PROJECT_DIR]` (no bundle: no system notifications, sound only) or
-`cargo run -p space-app -- --smoke "PROMPT" [--plugin ID] [--allow] [--mode read] [PROJECT_DIR]`.
+`cargo run -p space-app -- --smoke "PROMPT" [--plugin ID] [--allow] [--permission-mode ID] [PROJECT_DIR]`.
 
 Environment:
 
@@ -92,11 +92,15 @@ plugin list; the agent's status sits in the sidebar footer.
   Below the card: the project folder (switch it while the thread is empty, otherwise pick a folder
   to start a new thread there), the model and thinking effort (both switch the session through
   `_space/session/configure`; new threads start with the defaults from Settings), and a context ring
-  (hover for token counts). Next to the folder, a **Write / Read-only** toggle (pencil / eye, ⇧⌘R): in
-  Read-only the agent investigates (reads files, runs inspecting commands) but doesn't change anything. It
-  is per thread, every new thread starts in Write, and a switch during a turn applies from the next message.
-  It's an ACP session mode (`session/set_mode`); the instruction goes to the agent's system prompt, never
-  into your message, so the transcript doesn't show it. The toggle is hidden for agents without these modes.
+  (hover for token counts). Next to the folder, the **permission mode** (shield menu, ⇧⌘R cycles): Read Only
+  (commands in the macOS sandbox, no edits), Workspace Write (the default) or Full access (asks to confirm
+  once per thread). The modes come from the permissions plugin ([plugins/permissions](plugins/permissions/README.md)):
+  in Workspace Write and Full access every tool call is first checked by a decision model (OpenAI; add the
+  key in Settings, where it's checked before it's saved). Until the key works, a yellow pill above the input
+  says why, with links (Open Settings, Retry now, Use Read Only) and when it last tried and tries next, and
+  sending is blocked. If the check stops working mid-turn, the tool call waits (**Paused**, never run
+  unchecked), the thread shows a pause icon in the sidebar, and it goes on by itself once the check works
+  again, the key changes, or you switch the thread to Read Only.
 - **Transcript**: your messages as bubbles, replies as markdown, thinking collapsed as
   "Thought for Ns", tool calls as compact rows that expand to their output, permission cards
   (Allow/Reject). It follows new output while you're at the bottom; scroll up to read and it stays
