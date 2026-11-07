@@ -2,6 +2,8 @@ id = "pi-agent"
 name = "Pi Agent"
 version = "0.1.0"
 provides = ["agent"]
+# Bash commands are confined by the sandbox provider (`_space/sandbox/confine`).
+requires = ["sandbox"]
 description = "Coding agent on the pi SDK, using the Claude CLI subscription."
 
 [run]

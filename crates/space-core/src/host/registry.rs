@@ -1,6 +1,8 @@
-//! The plugin registry: discovered plugins, which are turned off, and who provides what.
+//! The plugin registry: discovered plugins, which are turned off, who provides what, and who
+//! needs what (`requires`).
 
 use std::collections::HashSet;
+use std::sync::Weak;
 
 use space_protocol::service::CatalogEntry;
 
@@ -38,7 +40,13 @@ impl Host {
         let required: HashSet<String> =
             self.plugins().into_iter().filter(|p| p.manifest.required).map(|p| p.id().to_string()).collect();
         let ids: HashSet<String> = ids.into_iter().filter(|id| !required.contains(id)).collect();
-        *self.inner.disabled.lock().unwrap() = ids.clone();
+        let was = std::mem::replace(&mut *self.inner.disabled.lock().unwrap(), ids.clone());
+        // Turned back on: it may start at once, without the restart backoff.
+        let mut started = self.inner.started_at.lock().unwrap();
+        for id in was.difference(&ids) {
+            started.remove(id);
+        }
+        drop(started);
         for id in ids {
             self.inner.stop_service(&id);
         }
@@ -75,5 +83,54 @@ impl HostInner {
     /// The enabled services providing `capability`, in discovery order.
     pub(super) fn providers(&self, capability: &str) -> Vec<DiscoveredPlugin> {
         self.enabled_services().into_iter().filter(|p| p.manifest.provides(capability)).collect()
+    }
+
+    pub(super) fn plugin(&self, plugin_id: &str) -> Option<DiscoveredPlugin> {
+        self.plugins.lock().unwrap().iter().find(|p| p.id() == plugin_id).cloned()
+    }
+
+    /// Enabled plugins, agents included, in discovery order.
+    fn enabled_plugins(&self) -> Vec<DiscoveredPlugin> {
+        let disabled = self.disabled.lock().unwrap().clone();
+        self.plugins.lock().unwrap().iter().filter(|p| !disabled.contains(p.id())).cloned().collect()
+    }
+
+    /// Enabled plugins that need something `plugin` provides.
+    pub(super) fn dependents(&self, plugin: &DiscoveredPlugin) -> Vec<DiscoveredPlugin> {
+        let needs = |p: &DiscoveredPlugin| p.manifest.requires.iter().any(|c| plugin.manifest.provides(c));
+        self.enabled_plugins().into_iter().filter(needs).collect()
+    }
+
+    /// Whether the plugin's process is up.
+    pub(super) fn is_running(&self, plugin: &DiscoveredPlugin) -> bool {
+        if plugin.manifest.is_agent() {
+            self.agents.lock().unwrap().get(plugin.id()).and_then(Weak::upgrade).is_some_and(|a| a.is_running())
+        } else {
+            self.services.lock().unwrap().get(plugin.id()).is_some_and(|s| s.alive())
+        }
+    }
+
+    /// Why `plugin` can't run at all: something it requires that no enabled plugin provides,
+    /// or requirements that lead back to itself.
+    pub(super) fn unmet_requirement(&self, plugin: &DiscoveredPlugin) -> Option<String> {
+        if let Some(cap) = plugin.manifest.requires.iter().find(|c| self.providers(c).is_empty()) {
+            return Some(format!("Needs a {cap} provider."));
+        }
+        let mut path = vec![plugin.manifest.name.clone()];
+        self.leads_back(plugin, plugin.id(), &mut path, &mut HashSet::new())
+            .then(|| format!("Its requirements go in a circle: {}.", path.join(" → ")))
+    }
+
+    /// Whether `start` is reachable from `plugin` through requirements (`path`: the names on
+    /// the way).
+    fn leads_back(&self, plugin: &DiscoveredPlugin, start: &str, path: &mut Vec<String>, seen: &mut HashSet<String>) -> bool {
+        for provider in plugin.manifest.requires.iter().flat_map(|c| self.providers(c)) {
+            path.push(provider.manifest.name.clone());
+            if provider.id() == start || (seen.insert(provider.id().to_string()) && self.leads_back(&provider, start, path, seen)) {
+                return true;
+            }
+            path.pop();
+        }
+        false
     }
 }

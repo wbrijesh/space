@@ -38,6 +38,9 @@ Hook `tools/pre-execute`: answer `hooks/tools.preExecute` for every tool call of
 `required = true` marks a guard Space mustn't run tools without: it can't be turned off, and while it
 isn't running, tool calls wait for it.
 
+`requires = ["sandbox"]` (capabilities, not plugin ids): your plugin starts after a provider of each, and
+stops while none runs. Without a provider it isn't started, and Settings says why.
+
 ## 2. In Rust, with `space-plugin`
 
 ```rust

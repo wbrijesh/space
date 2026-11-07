@@ -17,6 +17,9 @@
 //!   runs again when a listener sends `hooks/ready`, a service (re)starts, the session's mode
 //!   changes, or every [`HostOptions::held_recheck`]; stopping the turn ends the wait.
 //! * `required` service plugins can't be turned off.
+//! * A plugin starts after a provider of everything it `requires` runs (none: it isn't
+//!   started, and says why); when that provider stops or crashes, it stops first, and it
+//!   starts again once the provider runs again.
 //! * `_space/sandbox/confine` goes to the `sandbox` provider (none: the argv is unchanged; a
 //!   failing provider: an error, so the agent doesn't spawn).
 //! * Before each prompt, every `context` provider adds hidden sections (`_meta`).
@@ -33,7 +36,7 @@ mod services;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use space_protocol::PROTOCOL_VERSION;
@@ -47,6 +50,7 @@ use crate::secrets::Secrets;
 use crate::session::{SessionEvent, SessionId};
 
 pub use agents::{AgentHandle, Session};
+use agents::AgentInner;
 use pipeline::SessionMeta;
 use services::Service;
 
@@ -168,6 +172,8 @@ struct HostInner {
     crashes: Mutex<HashMap<String, VecDeque<Instant>>>,
     /// The last status reported for each plugin.
     statuses: Mutex<HashMap<String, PluginStatus>>,
+    /// Started agents by plugin id (the app owns them).
+    agents: Mutex<HashMap<String, Weak<AgentInner>>>,
 }
 
 impl Host {
@@ -189,6 +195,7 @@ impl Host {
                 sessions: Mutex::new(HashMap::new()),
                 crashes: Mutex::new(HashMap::new()),
                 statuses: Mutex::new(HashMap::new()),
+                agents: Mutex::new(HashMap::new()),
             }),
         };
         host.discover();
@@ -197,6 +204,18 @@ impl Host {
 
     pub fn project_dir(&self) -> &Path {
         &self.inner.options.project_dir
+    }
+
+    /// Stop every plugin, each before what it requires (Space is quitting): agents first,
+    /// then services, whose dependents stop before them.
+    pub fn shutdown(&self) {
+        let agents: Vec<_> = self.inner.agents.lock().unwrap().values().filter_map(Weak::upgrade).collect();
+        for agent in agents {
+            agent.stop();
+        }
+        for plugin in self.inner.enabled_services() {
+            self.inner.stop_service(plugin.id());
+        }
     }
 }
 

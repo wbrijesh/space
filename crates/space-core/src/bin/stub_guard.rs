@@ -15,7 +15,7 @@
 //! * `readyFile` — answer `unavailable` until this file exists; once it appears, send
 //!   `hooks/ready` (checked every 50 ms).
 //! * `holdModes` — answer `unavailable` in these permission modes.
-//! * `crashUntil` — exit at once on every call until this file exists.
+//! * `crashUntil` — exit at once on every tool call or `sandbox/confine` until this file exists.
 //! * `reason` — `{mode}`, `{tool}` and `{history}` (the number of earlier items) are filled in.
 //! * `sandbox` — `sandbox/confine` puts these words in front of the argv.
 //! * `context` — one hidden context section with this text.
@@ -141,6 +141,11 @@ impl Plugin for Guard {
     }
 
     async fn confine(&self, request: ConfineRequest) -> Result<Confined, RpcError> {
+        if let Some(path) = &self.config.crash_until
+            && !std::path::Path::new(path).exists()
+        {
+            std::process::exit(7);
+        }
         let mut argv = self.config.sandbox.clone().unwrap_or_default();
         argv.extend(request.argv);
         Ok(Confined { argv })

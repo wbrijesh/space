@@ -48,6 +48,7 @@ description = "…"
 provides = ["sandbox", "context", "settings", "catalog:permission-modes"]   # or ["agent"]
 hooks = [{ event = "tools/pre-execute", order = 10 }]                      # lower order runs first
 required = true                 # a guard Space can't run tools without (can't be turned off)
+requires = []                   # capabilities another plugin must provide (pi-agent: ["sandbox"])
 
 [run]
 command = "${target}/space-permissions"   # ${target}: the cargo profile dir Space runs from
@@ -60,6 +61,13 @@ cwd = "plugin"                  # "plugin" or "project"
 Capabilities: `agent` (an ACP agent; provides nothing else), `sandbox` (`sandbox/confine`), `context`
 (hidden prompt sections), `settings` (fields on the Settings page), `catalog:<name>` (a list the UI renders,
 e.g. `catalog:permission-modes` for the composer's mode menu). Hook events: `tools/pre-execute`.
+
+`requires` names capabilities (`sandbox`, `context`, `catalog:<name>`), not plugin ids, so any provider
+satisfies it. A plugin starts once a provider of each runs. With no provider, or with requirements that
+lead back to itself, it isn't started and its status says why ("Needs a sandbox provider."). When a
+provider stops, is turned off or crashes, the plugins that need it stop first ("Waiting for …"); a crashed
+provider is started again after the restart backoff, and they start again once it runs (the app restarts
+its agent). When Space quits, agents stop first, then services, each after its dependents.
 
 Discovery order (later wins on duplicate `id`): `<repo>/plugins/*`, `~/.space/plugins/*`,
 `<project>/.space/plugins/*`. Writing one: [plugins.md](plugins.md).

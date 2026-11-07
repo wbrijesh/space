@@ -455,3 +455,112 @@ async fn a_call_during_startup_waits_for_the_service() {
     until(&mut events, &mut state, turn_ended).await;
     assert_eq!(tool(&state).blocked.as_deref(), Some("checked"));
 }
+
+/// Wait for plugin `id` to report a status matching `pred`; the statuses seen on the way, in order.
+async fn status_of(
+    events: &mut EventReceiver,
+    seen: &mut Vec<(String, PluginStatus)>,
+    id: &str,
+    pred: impl Fn(&PluginStatus) -> bool,
+) -> PluginStatus {
+    let mut state = SessionState::default();
+    let e = until(events, &mut state, |e| {
+        if let HostEvent::PluginStatus { plugin_id, status } = e {
+            seen.push((plugin_id.clone(), status.clone()));
+            return plugin_id == id && pred(status);
+        }
+        false
+    })
+    .await;
+    let HostEvent::PluginStatus { status, .. } = e else { unreachable!() };
+    status
+}
+
+fn not_started(s: &PluginStatus) -> bool {
+    matches!(s, PluginStatus::NotStarted(_))
+}
+
+const SANDBOX: &str = "provides=['sandbox']";
+const NEEDS_SANDBOX: &str = "provides=['context']\nrequires=['sandbox']";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_plugin_starts_after_what_it_requires() {
+    let root = root(&[("dep", NEEDS_SANDBOX, "{}"), ("sb", SANDBOX, "{}")]);
+    let (host, mut events) = host(root.path());
+    // Only the dependent is asked for: its provider starts first.
+    host.restart_service("dep").await.unwrap();
+    let mut seen = Vec::new();
+    status_of(&mut events, &mut seen, "dep", |s| *s == PluginStatus::Running).await;
+    let at = |id: &str, status: PluginStatus| seen.iter().position(|(i, s)| i == id && *s == status).unwrap();
+    assert!(at("sb", PluginStatus::Running) < at("dep", PluginStatus::Starting), "{seen:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unmet_requirements_and_cycles_are_not_started() {
+    let cycle_a = "provides=['catalog:a']\nrequires=['catalog:b']";
+    let cycle_b = "provides=['catalog:b']\nrequires=['catalog:a']";
+    let root = root(&[("dep", NEEDS_SANDBOX, "{}"), ("a", cycle_a, "{}"), ("b", cycle_b, "{}")]);
+    // The agent needs a sandbox too.
+    let stub = root.path().join("stub/space-plugin.toml");
+    let text = std::fs::read_to_string(&stub).unwrap().replace("provides=['agent']\n", "provides=['agent']\nrequires=['sandbox']\n");
+    std::fs::write(&stub, text).unwrap();
+    let (host, mut events) = host(root.path());
+    host.start_services().await;
+    // Every start has been tried by now.
+    let mut seen = Vec::new();
+    while let Ok(e) = events.try_recv() {
+        if let HostEvent::PluginStatus { plugin_id, status } = e {
+            seen.push((plugin_id, status));
+        }
+    }
+    let last = |id: &str| seen.iter().rev().find(|(i, _)| i == id).map(|(_, s)| s.clone());
+    assert_eq!(last("dep"), Some(PluginStatus::NotStarted("Needs a sandbox provider.".into())));
+    let circle = PluginStatus::NotStarted("Its requirements go in a circle: Guard a → Guard b → Guard a.".into());
+    assert_eq!(last("a"), Some(circle));
+    let err = host.start_agent("stub").await.err().expect("not started");
+    assert_eq!(err.to_string(), "Needs a sandbox provider.");
+    status_of(&mut events, &mut seen, "stub", not_started).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn when_a_provider_crashes_its_dependents_stop_and_come_back() {
+    // `sb` crashes on its first confine (from the agent's tool call); the host stops `dep` and
+    // the agent, which both require a sandbox, starts `sb` again, and `dep` with it.
+    let tmp = tempfile::tempdir().unwrap();
+    let config = format!(r#"{{"crashUntil":"{}"}}"#, tmp.path().join("never").display());
+    let root = root(&[("dep", NEEDS_SANDBOX, "{}"), ("sb", SANDBOX, &config)]);
+    let stub = root.path().join("stub/space-plugin.toml");
+    let text = std::fs::read_to_string(&stub).unwrap().replace("provides=['agent']\n", "provides=['agent']\nrequires=['sandbox']\n");
+    std::fs::write(&stub, text).unwrap();
+    let (host, mut events) = host(root.path());
+    host.start_services().await;
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.new_session(root.path()).await.unwrap();
+    let turn = tokio::spawn(async move { session.prompt("hello").await });
+    let mut seen = Vec::new();
+    let s = status_of(&mut events, &mut seen, "dep", not_started).await;
+    assert_eq!(s, PluginStatus::NotStarted("Waiting for Guard sb.".into()));
+    status_of(&mut events, &mut seen, "stub", not_started).await;
+    let _ = turn.await;
+    assert!(!agent.is_running());
+    // Restarted after the backoff, and `dep` with it.
+    status_of(&mut events, &mut seen, "sb", |s| *s == PluginStatus::Running).await;
+    status_of(&mut events, &mut seen, "dep", |s| *s == PluginStatus::Running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn turning_a_provider_off_stops_its_dependents_first() {
+    let root = root(&[("dep", NEEDS_SANDBOX, "{}"), ("sb", SANDBOX, "{}")]);
+    let (host, mut events) = host(root.path());
+    host.start_services().await;
+    let mut seen = Vec::new();
+    status_of(&mut events, &mut seen, "dep", |s| *s == PluginStatus::Running).await;
+    host.set_disabled(["sb".to_string()]);
+    let s = status_of(&mut events, &mut seen, "dep", not_started).await;
+    assert_eq!(s, PluginStatus::NotStarted("Waiting for Guard sb.".into()));
+    host.set_disabled([]);
+    host.start_services().await;
+    status_of(&mut events, &mut seen, "dep", |s| *s == PluginStatus::Running).await;
+    host.shutdown();
+    status_of(&mut events, &mut seen, "sb", |s| *s == PluginStatus::Stopped).await;
+}

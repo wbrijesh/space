@@ -1,7 +1,7 @@
 //! Service plugins: starting and restarting them, their settings and catalogs, and the seams
 //! the host calls (`context`, `sandbox`).
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -171,7 +171,9 @@ impl Host {
 }
 
 impl HostInner {
+    /// Stop a service, after the plugins that need it.
     pub(super) fn stop_service(&self, plugin_id: &str) {
+        self.stop_dependents(plugin_id);
         let Some(service) = self.services.lock().unwrap().remove(plugin_id) else { return };
         service._process.kill();
         let mut catalogs = self.catalogs.lock().unwrap();
@@ -182,7 +184,77 @@ impl HostInner {
         }
     }
 
-    /// The running service `plugin_id`, started (or restarted) first if needed.
+    /// Stop the running plugins that need what `plugin_id` provides (their dependents first).
+    /// They start again once it runs again.
+    pub(super) fn stop_dependents(&self, plugin_id: &str) {
+        let Some(plugin) = self.plugin(plugin_id) else { return };
+        for dep in self.dependents(&plugin).into_iter().filter(|d| self.is_running(d)) {
+            tracing::info!("stopping `{}`: `{plugin_id}` stopped", dep.id());
+            self.emit_status(dep.id(), PluginStatus::NotStarted(format!("Waiting for {}.", plugin.manifest.name)));
+            // Stopped, not crashed: it may start again at once.
+            self.started_at.lock().unwrap().remove(dep.id());
+            if dep.manifest.is_agent() {
+                if let Some(agent) = self.agents.lock().unwrap().get(dep.id()).and_then(Weak::upgrade) {
+                    agent.stop();
+                }
+            } else {
+                self.stop_service(dep.id());
+            }
+        }
+    }
+
+    /// Start what `plugin` requires (a provider of each), or say why it can't run.
+    pub(super) async fn start_requirements(self: &Arc<Self>, plugin: &DiscoveredPlugin) -> Result<(), String> {
+        if let Some(why) = self.unmet_requirement(plugin) {
+            return Err(why);
+        }
+        for cap in &plugin.manifest.requires {
+            let mut failure = String::new();
+            for provider in self.providers(cap) {
+                match Box::pin(self.service(provider.id())).await {
+                    Ok(_) => {
+                        failure.clear();
+                        break;
+                    }
+                    Err(e) => failure = format!("{} isn't running: {e}", provider.manifest.name),
+                }
+            }
+            if !failure.is_empty() {
+                return Err(format!("Waiting for its {cap} provider ({failure})."));
+            }
+        }
+        Ok(())
+    }
+
+    /// Start the services waiting for `plugin`, which runs now (the app restarts its agent).
+    fn start_dependents(self: &Arc<Self>, plugin: &DiscoveredPlugin) {
+        for dep in self.dependents(plugin) {
+            if !dep.manifest.is_agent() && !self.is_running(&dep) {
+                let host = self.clone();
+                self.rt.spawn(async move { host.service(dep.id()).await });
+            }
+        }
+    }
+
+    /// A service crashed: stop what needs it, and start it again after the backoff so they
+    /// can come back (unless it keeps crashing; then Restart or Retry does).
+    fn provider_crashed(self: &Arc<Self>, plugin_id: &str) {
+        let Some(plugin) = self.plugin(plugin_id) else { return };
+        if !self.dependents(&plugin).iter().any(|d| self.is_running(d)) {
+            return;
+        }
+        self.stop_dependents(plugin_id);
+        if !self.keeps_crashing(plugin_id) {
+            let (host, id) = (self.clone(), plugin_id.to_string());
+            self.rt.spawn(async move {
+                tokio::time::sleep(RESTART_BACKOFF).await;
+                let _ = host.service(&id).await;
+            });
+        }
+    }
+
+    /// The running service `plugin_id`, started (or restarted) first if needed, after what
+    /// it requires.
     pub(super) async fn service(self: &Arc<Self>, plugin_id: &str) -> Result<Arc<Service>, String> {
         if let Some(s) = self.services.lock().unwrap().get(plugin_id).filter(|s| s.alive()) {
             return Ok(s.clone());
@@ -204,6 +276,10 @@ impl HostInner {
             .find(|p| p.id() == plugin_id && !p.manifest.is_agent())
             .cloned()
             .ok_or_else(|| format!("no service plugin `{plugin_id}`"))?;
+        if let Err(why) = self.start_requirements(&plugin).await {
+            self.emit_status(plugin_id, PluginStatus::NotStarted(why.clone()));
+            return Err(why);
+        }
         {
             let mut started = self.started_at.lock().unwrap();
             if started.get(plugin_id).is_some_and(|t| t.elapsed() < RESTART_BACKOFF) {
@@ -215,6 +291,7 @@ impl HostInner {
         match self.start_service(plugin).await {
             Ok(service) => {
                 self.emit_status(plugin_id, PluginStatus::Running);
+                self.start_dependents(&service.plugin);
                 Ok(service)
             }
             Err(e) => {
@@ -243,10 +320,14 @@ impl HostInner {
                     exit_dead.store(true, Ordering::SeqCst);
                     if let Some(host) = exit_weak.upgrade() {
                         let status = exit_status(kind, &tail);
-                        if matches!(status, PluginStatus::Crashed(_)) {
+                        let crashed = matches!(status, PluginStatus::Crashed(_));
+                        if crashed {
                             host.crashed(&exit_id);
                         }
                         host.emit_exit(&exit_id, status);
+                        if crashed {
+                            host.provider_crashed(&exit_id);
+                        }
                     }
                 },
             )?

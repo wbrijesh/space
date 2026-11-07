@@ -76,6 +76,10 @@ pub struct Manifest {
     /// Events a service plugin listens to.
     #[serde(default)]
     pub hooks: Vec<HookSpec>,
+    /// Capabilities the plugin needs another plugin to provide (`sandbox`, `context`,
+    /// `catalog:<name>`). It starts once a provider of each runs, and stops when one stops.
+    #[serde(default)]
+    pub requires: Vec<String>,
     /// A guard Space can't run tools without: it can't be turned off, and while it isn't
     /// running, tool calls wait for it (fail closed).
     #[serde(default)]
@@ -147,6 +151,16 @@ impl Manifest {
                 || cap.strip_prefix(CATALOG_PREFIX).is_some_and(is_kebab_case);
             if !known {
                 return Err(format!("unknown capability {cap:?} in `provides`"));
+            }
+        }
+        for cap in &self.requires {
+            let known = matches!(cap.as_str(), CAP_SANDBOX | CAP_CONTEXT)
+                || cap.strip_prefix(CATALOG_PREFIX).is_some_and(is_kebab_case);
+            if !known {
+                return Err(format!("`requires` can't name {cap:?} (only `sandbox`, `context` and `catalog:<name>`)"));
+            }
+            if self.provides(cap) {
+                return Err(format!("`requires` names {cap:?}, which the plugin provides itself"));
             }
         }
         if self.is_agent() && (self.provides.len() > 1 || !self.hooks.is_empty() || self.required) {
@@ -309,5 +323,19 @@ FOO = "bar"
         let err = Manifest::parse("id='a'\nname='A'\nversion='1'\nprovides=[]\n[run]\ncommand='x'\n", Path::new("m.toml"))
             .unwrap_err();
         assert!(err.to_string().contains("at least one"), "{err}");
+    }
+
+    #[test]
+    fn requires() {
+        let parse = |extra: &str| {
+            Manifest::parse(&format!("id='a'\nname='A'\nversion='1'\n{extra}\n[run]\ncommand='x'\n"), Path::new("m.toml"))
+        };
+        let m = parse("provides=['agent']\nrequires=['sandbox', 'catalog:permission-modes']").unwrap();
+        assert_eq!(m.requires, ["sandbox", "catalog:permission-modes"]);
+        assert!(parse("provides=['context']").unwrap().requires.is_empty());
+        let err = parse("provides=['context']\nrequires=['agent']").unwrap_err();
+        assert!(err.to_string().contains("can't name \"agent\""), "{err}");
+        let err = parse("provides=['sandbox']\nrequires=['sandbox']").unwrap_err();
+        assert!(err.to_string().contains("provides itself"), "{err}");
     }
 }

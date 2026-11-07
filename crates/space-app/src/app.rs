@@ -302,6 +302,12 @@ impl SpaceApp {
         })
         .detach();
 
+        // Quitting: stop the plugins, each before what it requires.
+        let quit = cx.on_app_quit(|this, _| {
+            this.host.shutdown();
+            async {}
+        });
+
         // Back from System Settings (or anywhere): the notification permission may have changed.
         let activation = cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
@@ -372,7 +378,7 @@ impl SpaceApp {
             setting_inputs: HashMap::new(),
             field_checks: HashMap::new(),
             pending_confirm: None,
-            _subscriptions: vec![sub, activation],
+            _subscriptions: vec![sub, activation, quit],
         };
         this.seed_threads(options.seed, options.select, window, cx);
         this.start_services(cx);
@@ -405,6 +411,15 @@ impl SpaceApp {
         self.agent.as_ref().is_some_and(AgentHandle::is_running)
     }
 
+    /// The agent requires something `plugin_id` provides.
+    fn agent_requires(&self, plugin_id: &str) -> bool {
+        let (Some(agent), Some(plugin)) = (self.agent_id.as_deref().and_then(|id| self.host.plugin(id)), self.host.plugin(plugin_id))
+        else {
+            return false;
+        };
+        agent.manifest.requires.iter().any(|c| plugin.manifest.provides(c))
+    }
+
     /// Project directories seen so far (for the folder menu), project dir first.
     pub(crate) fn recent_dirs(&self) -> Vec<PathBuf> {
         let mut dirs = vec![self.project_dir.clone()];
@@ -422,6 +437,13 @@ impl SpaceApp {
         match event {
             HostEvent::PluginStatus { plugin_id, status } => {
                 if Some(&plugin_id) != self.agent_id.as_ref() {
+                    // The agent was waiting for this plugin (`requires`): start it now.
+                    if status == PluginStatus::Running
+                        && matches!(self.agent_status, PluginStatus::NotStarted(_))
+                        && self.agent_requires(&plugin_id)
+                    {
+                        self.ensure_agent(cx);
+                    }
                     self.plugin_status.insert(plugin_id, status);
                     return;
                 }

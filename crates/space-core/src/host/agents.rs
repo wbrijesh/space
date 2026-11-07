@@ -15,7 +15,7 @@ use tokio::sync::oneshot;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use super::pipeline::{SessionMeta, pre_execute};
-use super::{Host, HostEvent, HostInner, PluginStatus, check_protocol, exit_status, start_failure};
+use super::{Host, HostEvent, HostInner, PluginStatus, Refused, check_protocol, exit_status, start_failure};
 use crate::convert;
 use crate::discovery::DiscoveredPlugin;
 use crate::process::{self, PluginProcess};
@@ -122,6 +122,7 @@ impl Shared {
 }
 
 async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<AgentHandle> {
+    host.start_requirements(&plugin).await.map_err(Refused)?;
     let plugin_id = plugin.id().to_string();
     let shared = Arc::new(Shared {
         host: host.clone(),
@@ -254,7 +255,19 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
     }
     let agent_name = init.agent_info.as_ref().map(|i| i.title.clone().unwrap_or_else(|| i.name.clone()));
 
-    Ok(AgentHandle { inner: Arc::new(AgentInner { plugin_id, conn, process, shared, agent_name }) })
+    let inner = Arc::new(AgentInner { plugin_id: plugin_id.clone(), conn, process, shared, agent_name });
+    host.agents.lock().unwrap().insert(plugin_id, Arc::downgrade(&inner));
+    Ok(AgentHandle { inner })
+}
+
+impl AgentInner {
+    pub(super) fn is_running(&self) -> bool {
+        !self.shared.dead.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn stop(&self) {
+        self.process.kill();
+    }
 }
 
 fn acp_error(what: &str, e: acp::Error, process: &PluginProcess) -> anyhow::Error {
@@ -272,7 +285,7 @@ pub struct AgentHandle {
     inner: Arc<AgentInner>,
 }
 
-struct AgentInner {
+pub(super) struct AgentInner {
     plugin_id: String,
     conn: Conn,
     process: PluginProcess,
@@ -291,7 +304,7 @@ impl AgentHandle {
     }
 
     pub fn is_running(&self) -> bool {
-        !self.inner.shared.dead.load(Ordering::SeqCst)
+        self.inner.is_running()
     }
 
     /// Recent stderr lines.
@@ -301,7 +314,7 @@ impl AgentHandle {
 
     /// Kill the plugin process.
     pub fn stop(&self) {
-        self.inner.process.kill();
+        self.inner.stop();
     }
 
     /// `session/new` with `cwd`.
