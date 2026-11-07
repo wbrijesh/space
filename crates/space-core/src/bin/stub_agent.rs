@@ -8,6 +8,10 @@
 //! * `crash` — exit with code 3 mid-turn.
 //! * `recall` — answer how many earlier prompts of the session it remembers.
 //!
+//! `_space/complete` answers `"Title by <model>."` (quoted, as models sometimes do), with the
+//! requested model or else the session's; a prompt with `titlefail` fails and one with
+//! `titlehang` never answers.
+//!
 //! Given a data folder (`_meta["space/dataDir"]`), a session keeps its prompts there and can be
 //! loaded again (`session/load`, which first replays a chunk, as agents replay history).
 //!
@@ -30,7 +34,7 @@ use std::time::Duration;
 
 use space_core::stub_script::{SCRIPT_ENV, Step, StubScript};
 use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY};
-use space_protocol::{Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, SpaceStatus, Verdict};
+use space_protocol::{Complete, CompleteResult, Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, SpaceStatus, Verdict};
 use space_protocol::acp::{self, Agent, ByteStreams, Client, Responder};
 use space_protocol::acp_schema::*;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -184,6 +188,29 @@ async fn main() -> acp::Result<()> {
                         }
                     }
                     responder.respond(state.status(&req.session_id))
+                }
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = state.clone();
+                async move |req: Complete, responder: Responder<CompleteResult, acp::V1>, cx: Conn| {
+                    eprintln!("space-stub-agent: complete {req:?}");
+                    let session_model = state.sessions.lock().unwrap().get(&req.session_id).map(|s| s.model.clone());
+                    let Some(model) = req.model.or(session_model) else {
+                        return responder.respond_with_error(acp::Error::invalid_params());
+                    };
+                    if req.prompt.contains("titlefail") {
+                        return responder.respond_with_error(acp::Error::new(-32603, "no title today"));
+                    }
+                    let hang = req.prompt.contains("titlehang");
+                    cx.spawn(async move {
+                        if hang {
+                            tokio::time::sleep(Duration::from_secs(3600)).await;
+                        }
+                        responder.respond(CompleteResult { text: format!("\"Title by {model}.\"\n") })
+                    })
                 }
             },
             acp::on_receive_request!(),

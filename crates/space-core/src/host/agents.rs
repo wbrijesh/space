@@ -10,7 +10,7 @@ use space_protocol::acp::{self, Agent, ByteStreams, Client};
 use space_protocol::acp_schema as schema;
 use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY};
 use space_protocol::service::HistoryItem;
-use space_protocol::{Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SpaceStatus};
+use space_protocol::{Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SpaceStatus};
 use tokio::sync::oneshot;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
@@ -275,6 +275,11 @@ impl AgentInner {
     pub(super) fn stop(&self) {
         self.process.kill();
     }
+
+    /// `_space/complete`: one short completion by the agent's model.
+    pub(super) async fn complete(&self, request: Complete) -> Result<CompleteResult> {
+        self.conn.send_request(request).block_task().await.map_err(|e| acp_error("_space/complete", e, &self.process))
+    }
 }
 
 /// `_meta` with the session's data folder, if any.
@@ -395,7 +400,8 @@ impl AgentHandle {
     }
 
     fn session(&self, id: SessionId, cwd: PathBuf) -> Session {
-        self.inner.shared.host.sessions.lock().unwrap().insert(id.clone(), SessionMeta::new(cwd));
+        let meta = SessionMeta::new(cwd, self.inner.plugin_id.clone());
+        self.inner.shared.host.sessions.lock().unwrap().insert(id.clone(), meta);
         let inner = SessionInner { id, agent: self.clone(), running: AtomicBool::new(false) };
         Session { inner: Arc::new(inner) }
     }
@@ -449,6 +455,12 @@ impl Session {
             meta.mode = Some(mode);
             meta.signals.wake.notify_waiters();
         }
+    }
+
+    /// Give the tool pipeline's guards what the thread already shows (call after loading a saved
+    /// session again), so their first judgements have the same context as later ones.
+    pub fn seed_history(&self, items: &[crate::session::TranscriptItem]) {
+        self.inner.agent.inner.shared.host.seed_history(&self.inner.id, items);
     }
 
     /// The session's permission mode (the catalog's default unless set).

@@ -128,6 +128,8 @@ pub fn describe(permission: &str) -> String {
         ("provides", space_protocol::CAP_SANDBOX) => "Wraps every command the agent runs",
         ("provides", space_protocol::CAP_CONTEXT) => "Adds hidden context to every message you send",
         ("provides", space_protocol::CAP_SETTINGS) => "Has its own settings",
+        ("provides", space_protocol::CAP_SESSION_STORE) => "Keeps your threads",
+        ("provides", space_protocol::CAP_SESSION_TITLE) => "Names your threads",
         ("provides", c) if c.strip_prefix(CATALOG_PREFIX) == Some(CATALOG_PERMISSION_MODES) => "Offers the permission modes",
         ("provides", c) if c.starts_with(CATALOG_PREFIX) => return format!("Publishes the “{}” list", &c[CATALOG_PREFIX.len()..]),
         ("hook", HOOK_TOOLS_PRE_EXECUTE) => "Checks every tool call before it runs, and can block it",

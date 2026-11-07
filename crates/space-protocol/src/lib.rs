@@ -26,10 +26,10 @@ pub use agent_client_protocol as acp;
 pub use agent_client_protocol::v1::schema as acp_schema;
 
 pub use ext::{
-    Confine, ConfineResult, ConfigureSession, ContextSection, ModelInfo, PreExecute, PreExecuteResult, SpaceStatus,
+    Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, ContextSection, ModelInfo, PreExecute, PreExecuteResult, SpaceStatus,
     Verdict,
 };
 pub use manifest::{
-    CAP_AGENT, CAP_CONTEXT, CAP_SANDBOX, CAP_SESSION_STORE, CAP_SETTINGS, CATALOG_PERMISSION_MODES, CATALOG_PREFIX, EVENTS,
+    CAP_AGENT, CAP_CONTEXT, CAP_SANDBOX, CAP_SESSION_STORE, CAP_SESSION_TITLE, CAP_SETTINGS, CATALOG_PERMISSION_MODES, CATALOG_PREFIX, EVENTS,
     HOOK_TOOLS_PRE_EXECUTE, HookSpec, MANIFEST_FILE, Manifest, ManifestError, RunConfig, RunCwd, USE_READ_TRANSCRIPT,
 };

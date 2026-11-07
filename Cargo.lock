@@ -6450,6 +6450,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "space-titles"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "space-core",
+ "space-plugin",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "space-ui"
 version = "0.1.0"
 dependencies = [

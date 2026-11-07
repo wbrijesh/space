@@ -34,6 +34,8 @@ pub type FieldHandler = Rc<dyn Fn(String, String, &mut Window, &mut App)>;
 pub type PluginToggleHandler = Rc<dyn Fn(String, bool, &mut Window, &mut App)>;
 /// `(plugin id, key, on)`.
 pub type FieldToggleHandler = Rc<dyn Fn(String, String, bool, &mut Window, &mut App)>;
+/// `(plugin id, key, value)`; `None` clears the setting.
+pub type FieldChoiceHandler = Rc<dyn Fn(String, String, Option<String>, &mut Window, &mut App)>;
 
 /// One plugin setting field.
 #[derive(Clone)]
@@ -46,12 +48,23 @@ pub struct FieldView {
     pub secret: bool,
     /// A switch, and whether it's on (then `input`, `check` and `status` aren't shown).
     pub switch: Option<bool>,
+    /// A model picker (then `input`, `check` and `status` aren't shown either).
+    pub model: Option<ModelChoice>,
     pub set: bool,
     pub input: Entity<InputState>,
     /// The last save: being checked, or what the plugin said.
     pub check: FieldCheck,
     /// How the saved value is doing, from the plugin (e.g. "Working", or why not): `(text, ok)`.
     pub status: Option<(SharedString, bool)>,
+}
+
+/// A model setting: "Same as agent" or one of the agent's models.
+#[derive(Clone, Default)]
+pub struct ModelChoice {
+    /// `<provider>/<model id>`; `None`: the thread's own model.
+    pub chosen: Option<String>,
+    /// What the agent offers (empty: not known yet).
+    pub models: Vec<ModelInfo>,
 }
 
 /// A save's progress: plugins check a value before it's stored.
@@ -143,6 +156,8 @@ pub struct SettingsHandlers {
     pub on_clear_field: FieldHandler,
     /// A switch setting was flipped.
     pub on_toggle_field: FieldToggleHandler,
+    /// A model setting was picked.
+    pub on_choose_field: FieldChoiceHandler,
     pub on_plugin_enabled: PluginToggleHandler,
     /// `(plugin id, approved)`.
     pub on_plugin_approval: PluginToggleHandler,
@@ -160,6 +175,7 @@ impl Default for SettingsHandlers {
             on_save_anyway: Rc::new(|_, _, _, _| {}),
             on_clear_field: Rc::new(|_, _, _, _| {}),
             on_toggle_field: Rc::new(|_, _, _, _, _| {}),
+            on_choose_field: Rc::new(|_, _, _, _, _| {}),
             on_plugin_enabled: Rc::new(|_, _, _, _| {}),
             on_plugin_approval: Rc::new(|_, _, _, _| {}),
         }
@@ -354,6 +370,9 @@ pub fn field_row(f: &FieldView, h: &SettingsHandlers, window: &Window) -> Div {
         let id = SharedString::from(format!("switch-{}-{}", f.plugin_id, f.key));
         return row(f.label.clone(), f.description.clone(), Some(toggle(id, on, on_change, window).into_any_element()));
     }
+    if let Some(choice) = &f.model {
+        return model_field_row(f, choice, h, window);
+    }
     let stored = match (f.secret, f.set) {
         (true, true) => "Saved in your Keychain.",
         (true, false) => "Not set. Stored in your Keychain once saved.",
@@ -413,6 +432,33 @@ pub fn field_row(f: &FieldView, h: &SettingsHandlers, window: &Window) -> Div {
         .flex_col()
         .child(row(f.label.clone(), description, Some(control.into_any_element())))
         .children(note.map(|n| div().pl_4().pb_3().child(n)))
+}
+
+const SAME_AS_AGENT: &str = "Same as agent";
+
+/// A model setting: "Same as agent", then the agent's models.
+fn model_field_row(f: &FieldView, choice: &ModelChoice, h: &SettingsHandlers, window: &Window) -> Div {
+    let key = |m: &ModelInfo| format!("{}/{}", m.provider, m.id);
+    let chosen = choice.chosen.as_ref().map(|c| choice.models.iter().position(|m| &key(m) == c));
+    let label: SharedString = match (&choice.chosen, chosen) {
+        (Some(_), Some(Some(ix))) => model_name(&choice.models[ix]).into(),
+        (Some(c), _) => format::model_label(c.split_once('/').map_or(c.as_str(), |(_, id)| id), None).into(),
+        (None, _) => SAME_AS_AGENT.into(),
+    };
+    let selected = match chosen {
+        None => Some(0),
+        Some(ix) => ix.map(|i| i + 1),
+    };
+    let options = std::iter::once(SAME_AS_AGENT.into()).chain(choice.models.iter().map(|m| model_name(m).into())).collect();
+    let on_select: Option<IndexHandler> = (!choice.models.is_empty()).then(|| {
+        let (values, f2, pid, k) = (choice.models.iter().map(key).collect::<Vec<_>>(), h.on_choose_field.clone(), f.plugin_id.clone(), f.key.clone());
+        // Index 0 is "Same as agent".
+        Rc::new(move |ix: usize, w: &mut Window, cx: &mut App| f2(pid.clone(), k.clone(), ix.checked_sub(1).map(|i| values[i].clone()), w, cx))
+            as IndexHandler
+    });
+    // Ids are static strings; one model setting per page is all Space has.
+    let control = select("settings-plugin-model", label, options, selected, on_select, window);
+    row(f.label.clone(), f.description.clone(), Some(control))
 }
 
 /// A plugin: name, status and what it does; a switch for service plugins. One that waits for
@@ -712,6 +758,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                     .into(),
                 secret: true,
                 switch: None,
+                model: None,
                 set,
                 input,
                 check: check(),
@@ -786,6 +833,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                         description: description.into(),
                         secret: false,
                         switch: Some(on),
+                        model: None,
                         set: !on,
                         input: input.clone(),
                         check: FieldCheck::Idle,
@@ -798,6 +846,28 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                     let h = SettingsHandlers::default();
                     section("Alerts", None, fields.iter().map(|f| field_row(f, &h, window).into_any_element()).collect())
                         .into_any_element()
+                })
+                .width(size::CONTENT_MAX_W),
+                Example::new("model picker (titles)", |window, cx| {
+                    let input = window.use_keyed_state("titles-unused", cx, InputState::new);
+                    let Catalog::Ready { models, .. } = ready() else { unreachable!() };
+                    let field = |chosen: Option<&str>| FieldView {
+                        plugin_id: "titles".into(),
+                        key: "model".into(),
+                        label: "Title model".into(),
+                        description: "Names new threads after their first message.".into(),
+                        secret: false,
+                        switch: None,
+                        model: Some(ModelChoice { chosen: chosen.map(Into::into), models: models.clone() }),
+                        set: chosen.is_some(),
+                        input: input.clone(),
+                        check: FieldCheck::Idle,
+                        status: None,
+                    };
+                    let h = SettingsHandlers::default();
+                    let haiku = models.iter().find(|m| m.id.contains("haiku")).map(|m| format!("{}/{}", m.provider, m.id));
+                    let rows = [field(None), field(haiku.as_deref())].iter().map(|f| field_row(f, &h, window).into_any_element()).collect();
+                    section("Titles", None, rows).into_any_element()
                 })
                 .width(size::CONTENT_MAX_W),
                 key_section("key not set", false, || FieldCheck::Idle, None),

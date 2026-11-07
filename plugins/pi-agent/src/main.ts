@@ -9,6 +9,7 @@ import * as acp from "@agentclientprotocol/sdk";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { type AgentConfig, ensureClaudeOnPath, isolatePiConfig, loadConfig, log } from "./env.js";
 import {
+	COMPLETE_METHOD,
 	CONFIGURE_METHOD,
 	CONFINE_METHOD,
 	type ConfineResult,
@@ -21,7 +22,7 @@ import {
 } from "./generated/protocol.js";
 import { contextFromMeta, type HostLink } from "./host.js";
 import { createPiSession, type PiSession } from "./pi.js";
-import { configureSession, parseConfigureParams, sessionStatus } from "./status.js";
+import { completeOnce, configureSession, parseCompleteParams, parseConfigureParams, sessionStatus } from "./status.js";
 import { promptText, textToolContent, toolKind, toolResultText, toolTitle } from "./translate.js";
 
 const VERSION: string = (() => {
@@ -235,6 +236,18 @@ const app = acp
 		const status = sessionStatus(params.sessionId, state.pi.session);
 		log(`configure ${params.sessionId}: model=${status.provider}/${status.model} thinking=${status.thinkingLevel}`);
 		return status;
+	})
+	// A short answer from the session's model (or another), outside the conversation: Space's
+	// title plugin names threads with it.
+	.onRequest(COMPLETE_METHOD, parseCompleteParams, async ({ params }) => {
+		const state = sessions.get(params.sessionId);
+		if (!state) throw acp.RequestError.sessionNotFound(params.sessionId);
+		try {
+			return { text: await completeOnce(state.pi.session, params) };
+		} catch (error) {
+			log(`complete ${params.sessionId} failed:`, error);
+			throw turnError(error instanceof Error ? error.message : String(error));
+		}
 	})
 	.onNotification(acp.methods.agent.session.cancel, async ({ params }) => {
 		const state = sessions.get(params.sessionId);

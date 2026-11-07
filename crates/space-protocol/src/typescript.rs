@@ -26,6 +26,7 @@ fn generate() -> String {
         ("CONFIGURE_METHOD", format!("{CONFIGURE_METHOD:?}")),
         ("PRE_EXECUTE_METHOD", format!("{PRE_EXECUTE_METHOD:?}")),
         ("CONFINE_METHOD", format!("{CONFINE_METHOD:?}")),
+        ("COMPLETE_METHOD", format!("{COMPLETE_METHOD:?}")),
         ("CONTEXT_META_KEY", format!("{CONTEXT_META_KEY:?}")),
         ("DATA_DIR_META_KEY", format!("{DATA_DIR_META_KEY:?}")),
     ];
@@ -41,6 +42,8 @@ fn generate() -> String {
         item::<Verdict>(&cfg),
         item::<Confine>(&cfg),
         item::<ConfineResult>(&cfg),
+        item::<Complete>(&cfg),
+        item::<CompleteResult>(&cfg),
         item::<ContextSection>(&cfg),
         item::<serde_json::Value>(&cfg),
     ] {

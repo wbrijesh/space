@@ -14,7 +14,7 @@ use space_protocol::{
 
 use super::HostInner;
 use super::agents::Shared;
-use crate::session::{PermissionDecision, PermissionKind, PermissionOption, SessionEvent, ToolCallPatch};
+use crate::session::{PermissionDecision, PermissionKind, PermissionOption, SessionEvent, ToolCallPatch, TranscriptItem};
 
 /// How long one hook listener may take before the call is held. Generous: a listener may
 /// retry a slow network call within it.
@@ -29,6 +29,8 @@ const ASK_REJECT: &str = "reject";
 /// Per-session facts for hook listeners.
 pub(super) struct SessionMeta {
     cwd: PathBuf,
+    /// The agent plugin the session runs on.
+    pub(super) agent: String,
     /// The permission mode chosen for the session (`None`: the catalog's default).
     pub(super) mode: Option<String>,
     history: VecDeque<HistoryItem>,
@@ -45,8 +47,8 @@ pub(super) struct HoldSignals {
 }
 
 impl SessionMeta {
-    pub(super) fn new(cwd: PathBuf) -> Self {
-        Self { cwd, mode: None, history: VecDeque::new(), signals: HoldSignals::default() }
+    pub(super) fn new(cwd: PathBuf, agent: String) -> Self {
+        Self { cwd, agent, mode: None, history: VecDeque::new(), signals: HoldSignals::default() }
     }
 }
 
@@ -86,6 +88,33 @@ impl HostInner {
                 meta.history.pop_front();
             }
             meta.history.push_back(item);
+        }
+    }
+
+    /// Start a session's history with what the thread already shows (a saved thread whose
+    /// session was loaded again): its messages and tool calls, oldest first.
+    pub(super) fn seed_history(&self, session_id: &str, items: &[TranscriptItem]) {
+        let earlier: Vec<HistoryItem> = items
+            .iter()
+            .filter_map(|item| match item {
+                TranscriptItem::User { text, .. } => Some(HistoryItem::User { text: text.clone() }),
+                // The saved call keeps its title (`bash: ls`), not its arguments.
+                TranscriptItem::Tool(call) => Some(HistoryItem::Tool {
+                    id: call.id.clone(),
+                    tool: call.title.split(':').next().unwrap_or_default().trim().to_string(),
+                    kind: call.kind.clone(),
+                    args: serde_json::json!({ "title": call.title }),
+                    allowed: call.blocked.is_none(),
+                }),
+                _ => None,
+            })
+            .collect();
+        if let Some(meta) = self.sessions.lock().unwrap().get_mut(session_id) {
+            let mut history: VecDeque<_> = earlier.into_iter().chain(meta.history.drain(..)).collect();
+            while history.len() > MAX_HISTORY {
+                history.pop_front();
+            }
+            meta.history = history;
         }
     }
 }

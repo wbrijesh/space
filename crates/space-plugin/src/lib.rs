@@ -118,6 +118,12 @@ pub trait Plugin: Send + Sync + 'static {
         async { Err(RpcError::method_not_found(STORE_DATA_DIR)) }
     }
 
+    /// `provides = ["session-title"]`: a title for the thread that starts with this message.
+    fn title(&self, request: TitleRequest) -> impl Future<Output = Result<Title, RpcError>> + Send {
+        let _ = request;
+        async { Err(RpcError::method_not_found(TITLE_GENERATE)) }
+    }
+
     /// Hook `tools/pre-execute`: a verdict on the pending tool call.
     fn pre_execute(&self, call: HookCall) -> impl Future<Output = Result<HookDecision, RpcError>> + Send {
         let _ = call;
@@ -201,6 +207,7 @@ async fn handle<P: Plugin>(plugin: &P, host: &OnceLock<Host>, method: &str, para
         STORE_WRITE => rpc::result(plugin.store_write(rpc::params(params)?).await?),
         STORE_DELETE => rpc::result(plugin.store_delete(rpc::params(params)?).await?),
         STORE_DATA_DIR => rpc::result(plugin.store_data_dir(rpc::params(params)?).await?),
+        TITLE_GENERATE => rpc::result(plugin.title(rpc::params(params)?).await?),
         EVENTS_OBSERVE => {
             plugin.observe(rpc::params(params)?).await;
             rpc::result(())

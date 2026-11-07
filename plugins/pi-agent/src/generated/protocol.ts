@@ -6,6 +6,7 @@ export const STATUS_METHOD = "_space/status";
 export const CONFIGURE_METHOD = "_space/session/configure";
 export const PRE_EXECUTE_METHOD = "_space/tools/preExecute";
 export const CONFINE_METHOD = "_space/sandbox/confine";
+export const COMPLETE_METHOD = "_space/complete";
 export const CONTEXT_META_KEY = "space/context";
 export const DATA_DIR_META_KEY = "space/dataDir";
 
@@ -93,6 +94,19 @@ export type Verdict = "allow" | "deny";
 export type Confine = { sessionId: string, argv: Array<string>, cwd: string, };
 
 export type ConfineResult = { argv: Array<string>, };
+
+/**
+ * `_space/complete` (client → agent request): one short, tool-free completion of `prompt` by
+ * the model of session `session_id`, or by `provider`/`model` when given (`provider` defaults
+ * to the session's). It doesn't touch the session's conversation. The host forwards plugins'
+ * `agent/complete` calls here, with the same params.
+ */
+export type Complete = { sessionId: string, prompt: string, provider?: string, model?: string, };
+
+/**
+ * The answer to [`Complete`]: the model's reply as plain text.
+ */
+export type CompleteResult = { text: string, };
 
 /**
  * Hidden text a plugin adds to a prompt (the agent puts it in its system prompt, never in

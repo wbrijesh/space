@@ -301,15 +301,19 @@ impl SpaceApp {
         cx.notify();
     }
 
-    /// Flip a plugin's switch setting (saved at once).
-    pub(crate) fn set_plugin_switch(&mut self, plugin_id: String, key: String, on: bool, cx: &mut Context<Self>) {
-        let (host, value) = (self.host.clone(), on.to_string());
+    /// Set a switch or model setting of a plugin (`None` clears it), saved once the plugin has it.
+    pub(crate) fn set_plugin_value(&mut self, plugin_id: String, key: String, value: Option<String>, cx: &mut Context<Self>) {
+        let host = self.host.clone();
         cx.spawn(async move |this, cx| {
-            let result = host.set_setting(&plugin_id, &key, Some(value.clone()), false).await;
+            let result = host.set_setting(&plugin_id, &key, value.clone(), false).await;
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(()) => this.settings.update(|s| {
-                        s.plugins.settings.entry(plugin_id).or_default().insert(key, value);
+                        let values = s.plugins.settings.entry(plugin_id).or_default();
+                        match value {
+                            Some(v) => values.insert(key, v),
+                            None => values.remove(&key),
+                        };
                     }),
                     Err(e) => this.banner = Some(format!("Couldn't save the setting: {e}")),
                 }

@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use space_core::{
-    Approval, DiscoveryOptions, EventReceiver, Host, HostEvent, HostOptions, PluginStatus, Secrets, SessionEvent,
+    Approval, DiscoveryOptions, EventReceiver, Host, HostEvent, HostOptions, PluginStatus, Secrets, SessionEvent, ToolCallInfo,
+    ToolStatus, TranscriptItem,
 };
 
 const STUB: &str = env!("CARGO_BIN_EXE_space-stub-agent");
@@ -97,6 +98,40 @@ async fn only_read_transcript_sees_what_the_user_wrote() {
     let HostEvent::Session { event: SessionEvent::PermissionRequested(request), .. } = e else { unreachable!() };
     // Both see that there was a message; only the reader sees its text.
     assert_eq!(request.reason.as_deref(), Some("[1:hello] [1:]"));
+    agent.stop();
+    let _ = turn.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_loaded_session_starts_with_what_the_thread_shows() {
+    let root = tempfile::tempdir().unwrap();
+    let stub = root.path().join("stub");
+    std::fs::create_dir_all(&stub).unwrap();
+    std::fs::write(stub.join("space-plugin.toml"), format!("id='stub'\nname='Stub'\nversion='1'\nprovides=['agent']\n[run]\ncommand='{STUB}'\n"))
+        .unwrap();
+    let ask = r#"{"decision":"ask","reason":"[{history}:{said}]"}"#;
+    guard(root.path(), "reader", "provides=['context']\nuses=['read:transcript']\nhooks=[{event='tools/pre-execute', order=1}]", ask);
+    let (host, mut events) = host(root.path(), None, None);
+    host.start_services().await;
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.new_session(root.path()).await.unwrap();
+    // What a reopened thread shows: a message and a tool call from before the restart.
+    let call = ToolCallInfo {
+        id: "t0".into(),
+        title: "bash: ls".into(),
+        kind: "execute".into(),
+        status: ToolStatus::Completed,
+        output: String::new(),
+        locations: vec![],
+        blocked: None,
+        held: None,
+    };
+    let shown = [TranscriptItem::User { text: "earlier".into(), attachments: vec![] }, TranscriptItem::Agent("ok".into()), TranscriptItem::Tool(call)];
+    session.seed_history(&shown);
+    let turn = tokio::spawn(async move { session.prompt("hello").await });
+    let e = next(&mut events, |e| matches!(e, HostEvent::Session { event: SessionEvent::PermissionRequested(_), .. })).await;
+    let HostEvent::Session { event: SessionEvent::PermissionRequested(request), .. } = e else { unreachable!() };
+    assert_eq!(request.reason.as_deref(), Some("[3:earlier|hello]"));
     agent.stop();
     let _ = turn.await;
 }

@@ -24,6 +24,7 @@ process.env.SPACE_PI_MODEL = "faux/m";
 const { isolatePiConfig, loadConfig } = await import(join(pluginDir, "dist/env.js"));
 const { createPiSession } = await import(join(pluginDir, "dist/pi.js"));
 const { contextFromMeta, sectionName, shellQuote } = await import(join(pluginDir, "dist/host.js"));
+const { completeOnce } = await import(join(pluginDir, "dist/status.js"));
 
 const failures: string[] = [];
 function check(ok: boolean, what: string): void {
@@ -124,6 +125,18 @@ await kept.runtime.dispose();
 const loaded = await createPiSession(work, config, { sessionId: "s2", host, dataDir, load: true, registerProviders: providers });
 check(before >= 2 && loaded.session.messages.length === before, `a loaded session has its messages (${loaded.session.messages.length}/${before})`);
 check(JSON.stringify(loaded.session.messages).includes("remember this"), "the loaded session has the earlier prompt");
+
+// `_space/complete`: a short answer from the session's model, outside its conversation.
+const asked: unknown[] = [];
+faux.setResponses([(context: unknown) => (asked.push(context), fauxAssistantMessage("\"A Title\""))]);
+const keptMessages = loaded.session.messages.length;
+const answer = await completeOnce(loaded.session, { sessionId: "s2", prompt: "name this thread" });
+check(answer === "\"A Title\"", `complete answers with the model's text (${answer})`);
+check(JSON.stringify(asked).includes("name this thread") && !JSON.stringify(asked).includes("remember this"), "complete sends only its prompt");
+check(loaded.session.messages.length === keptMessages, "complete leaves the conversation alone");
+let unknown = "";
+await completeOnce(loaded.session, { sessionId: "s2", prompt: "x", model: "nope" }).catch((e: Error) => (unknown = e.message));
+check(unknown.includes("faux/nope"), `an unknown model is refused (${unknown})`);
 await loaded.runtime.dispose();
 
 for (const d of [agentDir, work, outside]) rmSync(d, { recursive: true, force: true });

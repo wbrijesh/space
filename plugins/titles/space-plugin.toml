@@ -1,0 +1,11 @@
+id = "titles"
+name = "Titles"
+version = "0.1.0"
+description = "Names each thread after its first message, using the thread's model unless you pick one."
+provides = ["session-title", "settings"]
+# It reads your first message and asks the agent's model for a title.
+uses = ["read:transcript", "agent/complete"]
+
+[run]
+# Built with the workspace (`cargo build --workspace`); ${target} is the profile dir Space runs from.
+command = "${target}/space-titles"

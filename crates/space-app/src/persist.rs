@@ -62,6 +62,7 @@ impl SpaceApp {
             session_id: session_id.or_else(|| thread.resume.as_ref().map(|r| r.1.clone())),
             created_ms: thread.created_ms,
             updated_ms: now_ms(),
+            titled: thread.name.is_some(),
         }
     }
 
@@ -84,9 +85,10 @@ impl SpaceApp {
                 thread.saving = false;
                 match result {
                     Ok(()) => {
+                        // More arrived meanwhile (a turn ended, or it got its title): save that too.
+                        let again = matches!(thread.unsaved.last(), Some(SessionEvent::TurnEnded { .. })) || thread.title() != meta.title;
                         thread.meta = Some(meta);
-                        // More arrived meanwhile (a turn ended): save those too.
-                        if matches!(thread.unsaved.last(), Some(SessionEvent::TurnEnded { .. })) {
+                        if again {
                             this.save_thread(key, cx);
                         }
                     }
@@ -140,6 +142,7 @@ impl SpaceApp {
                     thread.created_ms = meta.created_ms;
                     thread.mode.clone_from(&meta.mode);
                     thread.resume = meta.agent.clone().zip(meta.session_id.clone());
+                    thread.name = meta.titled.then(|| meta.title.clone());
                     thread.unloaded = true;
                     thread.meta = Some(meta);
                     this.threads.insert(ix, thread);

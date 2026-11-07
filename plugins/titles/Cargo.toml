@@ -1,0 +1,19 @@
+[package]
+name = "space-titles"
+description = "Space titles plugin: names a thread after its first message, with the thread's agent model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "space-titles"
+path = "src/main.rs"
+
+[dependencies]
+space-plugin.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+space-core.workspace = true
+tempfile.workspace = true
+tokio.workspace = true

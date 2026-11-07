@@ -20,6 +20,9 @@ pub const CAP_SETTINGS: &str = "settings";
 /// Keeps threads so they survive a restart (`store/*`). One provider at a time; it gets what the
 /// user and the agent wrote, so it must also use `read:transcript`.
 pub const CAP_SESSION_STORE: &str = "session-store";
+/// Names threads after their first message (`title/generate`). One provider at a time; it gets
+/// what the user wrote, so it must also use `read:transcript`.
+pub const CAP_SESSION_TITLE: &str = "session-title";
 /// Prefix of catalog capabilities: `catalog:<name>` publishes the named list (`catalog/get`).
 pub const CATALOG_PREFIX: &str = "catalog:";
 /// The catalog of permission modes the composer's mode menu shows.
@@ -92,7 +95,7 @@ pub struct Manifest {
     #[serde(default)]
     pub description: String,
     /// Capabilities: `agent` (an ACP agent), or any of `sandbox`, `context`, `settings`,
-    /// `session-store` and `catalog:<name>` (a service plugin, spoken to over plain JSON-RPC).
+    /// `session-store`, `session-title` and `catalog:<name>` (a service plugin, spoken to over plain JSON-RPC).
     pub provides: Vec<String>,
     /// Events a service plugin listens to.
     #[serde(default)]
@@ -178,7 +181,7 @@ impl Manifest {
             return Err("`provides` must name at least one capability".into());
         }
         for cap in &self.provides {
-            let known = matches!(cap.as_str(), CAP_AGENT | CAP_SANDBOX | CAP_CONTEXT | CAP_SETTINGS | CAP_SESSION_STORE)
+            let known = matches!(cap.as_str(), CAP_AGENT | CAP_SANDBOX | CAP_CONTEXT | CAP_SETTINGS | CAP_SESSION_STORE | CAP_SESSION_TITLE)
                 || cap.strip_prefix(CATALOG_PREFIX).is_some_and(is_kebab_case);
             if !known {
                 return Err(format!("unknown capability {cap:?} in `provides`"));
@@ -199,8 +202,10 @@ impl Manifest {
         {
             return Err("an `agent` plugin provides nothing else and has no hooks, `observes`, `uses` or `required`".into());
         }
-        if self.provides(CAP_SESSION_STORE) && !self.uses(USE_READ_TRANSCRIPT) {
-            return Err(format!("a `{CAP_SESSION_STORE}` provider keeps the transcript, so it must list `{USE_READ_TRANSCRIPT}` in `uses`"));
+        for cap in [CAP_SESSION_STORE, CAP_SESSION_TITLE] {
+            if self.provides(cap) && !self.uses(USE_READ_TRANSCRIPT) {
+                return Err(format!("a `{cap}` provider reads the transcript, so it must list `{USE_READ_TRANSCRIPT}` in `uses`"));
+            }
         }
         for hook in &self.hooks {
             if hook.event != HOOK_TOOLS_PRE_EXECUTE {
@@ -456,6 +461,8 @@ FOO = "bar"
             Manifest::parse(&format!("id='a'\nname='A'\nversion='1'\n{extra}\n[run]\ncommand='x'\n"), Path::new("m.toml"))
         };
         assert!(parse("provides=['session-store']\nuses=['read:transcript']").unwrap().provides(CAP_SESSION_STORE));
+        assert!(parse("provides=['session-title']").is_err());
+        assert!(parse("provides=['session-title']\nuses=['read:transcript', 'agent/complete']").unwrap().provides(CAP_SESSION_TITLE));
         assert!(parse("provides=['session-store']").unwrap_err().to_string().contains("read:transcript"));
     }
 }

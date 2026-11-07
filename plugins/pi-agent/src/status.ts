@@ -2,10 +2,18 @@
 
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS, type ThinkingLevelName } from "./env.js";
-import type { ConfigureSession, ModelInfo, SpaceStatus } from "./generated/protocol.js";
+import type { Complete, ConfigureSession, ModelInfo, SpaceStatus } from "./generated/protocol.js";
 
 function str(v: unknown): string | undefined {
 	return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
+export function parseCompleteParams(raw: unknown): Complete {
+	const p = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+	const sessionId = str(p.sessionId);
+	const prompt = str(p.prompt);
+	if (!sessionId || !prompt) throw new Error("sessionId and prompt are required");
+	return { sessionId, prompt, provider: str(p.provider), model: str(p.model) };
 }
 
 export function parseConfigureParams(raw: unknown): ConfigureSession {
@@ -86,4 +94,27 @@ export async function configureSession(session: AgentSession, params: ConfigureS
 		// pi clamps to what the current model supports.
 		session.setThinkingLevel(level);
 	}
+}
+
+/** Longest reply `_space/complete` asks for: it's for short answers (a thread's title). */
+const COMPLETE_MAX_TOKENS = 256;
+
+/**
+ * `_space/complete`: one short, tool-free completion of `params.prompt` by the session's model,
+ * or the requested one (its provider defaulting to the session's). The session's conversation
+ * isn't touched. Throws a readable Error.
+ */
+export async function completeOnce(session: AgentSession, params: Complete): Promise<string> {
+	const current = session.model;
+	const provider = params.provider ?? current?.provider;
+	const id = params.model ?? current?.id;
+	const model = provider && id ? session.modelRuntime.getModel(provider, id) : undefined;
+	if (!model) throw new Error(`Unknown model ${provider ?? "?"}/${id ?? "?"}`);
+	const reply = await session.modelRuntime.completeSimple(
+		model,
+		{ messages: [{ role: "user", content: params.prompt, timestamp: Date.now() }] },
+		{ maxTokens: COMPLETE_MAX_TOKENS },
+	);
+	if (reply.stopReason === "error" || reply.stopReason === "aborted") throw new Error(reply.errorMessage || "The model request failed");
+	return reply.content.flatMap((c) => (c.type === "text" ? [c.text] : [])).join("");
 }

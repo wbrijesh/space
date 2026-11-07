@@ -20,6 +20,7 @@
 //! | `plugin/retry` (notification) | host → plugin | the user pressed a blocker's "Retry now" |
 //! | `events/observe` | host → plugin | `observes` the event ([`Observed`]) |
 //! | `store/list`, `store/load`, `store/write`, `store/delete`, `store/data-dir` | host → plugin | `provides` `session-store` |
+//! | `title/generate` | host → plugin | `provides` `session-title`, after a thread's first message |
 //!
 //! A plugin may call the host's services ([`HOST_SERVICES`]) that its manifest lists in `uses`;
 //! any other call is answered [`NOT_PERMITTED`]. Notifications a plugin sends about something
@@ -35,7 +36,7 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use crate::ext::ContextSection;
+pub use crate::ext::{Complete, CompleteResult, ContextSection};
 
 pub use crate::PROTOCOL_VERSION;
 
@@ -58,10 +59,14 @@ pub const STORE_LOAD: &str = "store/load";
 pub const STORE_WRITE: &str = "store/write";
 pub const STORE_DELETE: &str = "store/delete";
 pub const STORE_DATA_DIR: &str = "store/data-dir";
+/// The `session-title` seam: a thread's title from its first message ([`TitleRequest`]).
+pub const TITLE_GENERATE: &str = "title/generate";
 
 /// Host services: plugin → host calls, each allowed only when the manifest lists it in `uses`.
 pub const HOST_NOTIFY: &str = "host/notify";
 pub const HOST_OPEN_URL: &str = "host/open-url";
+/// [`Complete`] → [`CompleteResult`]: one short completion by the model of a session's agent
+/// (the host forwards it as `_space/complete`).
 pub const AGENT_COMPLETE: &str = "agent/complete";
 pub const SESSIONS_READ: &str = "sessions/read";
 pub const HOST_SERVICES: &[&str] = &[HOST_NOTIFY, HOST_OPEN_URL, AGENT_COMPLETE, SESSIONS_READ];
@@ -127,6 +132,9 @@ pub enum SettingKind {
     Secret,
     /// On or off (`true` / `false`), stored in the settings file.
     Switch,
+    /// One of the agent's models (`<provider>/<model id>`), or unset ("Same as agent"); stored
+    /// in the settings file.
+    Model,
 }
 
 /// `settings/schema` result.
@@ -538,6 +546,24 @@ pub struct ThreadMeta {
     /// Unix milliseconds.
     pub created_ms: u64,
     pub updated_ms: u64,
+    /// `title` was generated (`session-title`), not taken from the first message.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub titled: bool,
+}
+
+/// `title/generate` params: the thread's first message.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TitleRequest {
+    pub session_id: String,
+    pub first_message: String,
+    pub project_root: String,
+}
+
+/// `title/generate` result.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Title {
+    pub title: String,
 }
 
 /// `store/load`, `store/delete` and `store/data-dir` params.

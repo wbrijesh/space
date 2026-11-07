@@ -12,7 +12,7 @@ use space_ui::components::composer::{
     Composer, ComposerBlocker, ComposerControls, ComposerHandlers, Handler, ModeChoice,
 };
 use space_ui::components::settings::{
-    Catalog, FieldView, PluginApproval, PluginRow, PluginSettingsView, SettingsHandlers, SettingsPage,
+    Catalog, FieldView, ModelChoice, PluginApproval, PluginRow, PluginSettingsView, SettingsHandlers, SettingsPage,
 };
 use space_ui::components::follow_scroll::FollowScrollArea;
 use space_ui::components::shell::{
@@ -279,7 +279,13 @@ fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>)
         on_toggle_field: {
             let this = cx.entity().downgrade();
             Rc::new(move |plugin, key, on, _, cx| {
-                let _ = this.update(cx, |this, cx| this.set_plugin_switch(plugin, key, on, cx));
+                let _ = this.update(cx, |this, cx| this.set_plugin_value(plugin, key, Some(on.to_string()), cx));
+            })
+        },
+        on_choose_field: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |plugin, key, value, _, cx| {
+                let _ = this.update(cx, |this, cx| this.set_plugin_value(plugin, key, value, cx));
             })
         },
         on_plugin_enabled: {
@@ -334,6 +340,8 @@ fn plugin_settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
                 let secret = st.field.kind == SettingKind::Secret;
                 let switch = (st.field.kind == SettingKind::Switch)
                     .then(|| st.value.as_deref().or(st.field.default.as_deref()) == Some("true"));
+                let model = (st.field.kind == SettingKind::Model)
+                    .then(|| ModelChoice { chosen: st.value.clone(), models: app.agent_models.clone().unwrap_or_default() });
                 let placeholder = st.field.placeholder.clone().unwrap_or_default();
                 let placeholder =
                     if st.set && secret { "Enter a new key to replace it".to_string() } else { placeholder };
@@ -354,6 +362,7 @@ fn plugin_settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
                     description: st.field.description.clone().into(),
                     secret,
                     switch,
+                    model,
                     set: st.set,
                     input,
                     check,

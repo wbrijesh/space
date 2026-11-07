@@ -34,11 +34,13 @@
 //!   and `host/open-url` calls are reported as events for the app to carry out.
 //! * Saved threads go to the `session-store` provider ([`store`]); without one, threads live in
 //!   memory only.
+//! * After a thread's first message the `session-title` provider may name it ([`titles`]); it
+//!   asks the thread's agent model through `agent/complete` (`_space/complete`).
 //!
 //! Files: [`registry`] (who is discovered, turned off, provides what), [`services`] (service
 //! processes, settings, catalogs, seams, host services), [`pipeline`] (the hook chain and held
 //! calls), [`observers`] (observed events), [`agents`] (ACP connections and sessions), [`store`]
-//! (saved threads).
+//! (saved threads), [`titles`] (thread titles and `agent/complete`).
 
 mod agents;
 mod observers;
@@ -46,6 +48,7 @@ mod pipeline;
 mod registry;
 mod services;
 mod store;
+mod titles;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -64,6 +67,7 @@ use crate::secrets::Secrets;
 use crate::session::{SessionEvent, SessionId};
 
 pub use agents::{AgentHandle, Session};
+pub use titles::TITLE_TIMEOUT;
 use agents::AgentInner;
 use pipeline::SessionMeta;
 use services::Service;

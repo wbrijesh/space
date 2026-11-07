@@ -15,6 +15,8 @@ pub const CONFIGURE_METHOD: &str = "_space/session/configure";
 pub const PRE_EXECUTE_METHOD: &str = "_space/tools/preExecute";
 /// Method name of the [`Confine`] request (agent → client).
 pub const CONFINE_METHOD: &str = "_space/sandbox/confine";
+/// Method name of the [`Complete`] request (client → agent).
+pub const COMPLETE_METHOD: &str = "_space/complete";
 /// `_meta` key of a `session/prompt` carrying the prompt's hidden [`ContextSection`]s.
 pub const CONTEXT_META_KEY: &str = "space/context";
 /// `_meta` key of ACP `session/new` and `session/load` carrying a folder the agent may keep the
@@ -188,6 +190,31 @@ pub struct ConfineResult {
     pub argv: Vec<String>,
 }
 
+/// `_space/complete` (client → agent request): one short, tool-free completion of `prompt` by
+/// the model of session `session_id`, or by `provider`/`model` when given (`provider` defaults
+/// to the session's). It doesn't touch the session's conversation. The host forwards plugins'
+/// `agent/complete` calls here, with the same params.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
+#[request(method = "_space/complete", response = CompleteResult)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+#[serde(rename_all = "camelCase")]
+pub struct Complete {
+    pub session_id: String,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+/// The answer to [`Complete`]: the model's reply as plain text.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcResponse)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct CompleteResult {
+    pub text: String,
+}
+
 /// Hidden text a plugin adds to a prompt (the agent puts it in its system prompt, never in
 /// the user's message or the transcript).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -244,6 +271,9 @@ mod tests {
         assert_eq!(serde_json::to_value(&res).unwrap(), serde_json::json!({"decision": "deny", "reason": "no"}));
         let c = Confine { session_id: "s".into(), argv: vec!["ls".into()], cwd: "/".into() };
         assert_eq!(c.method(), CONFINE_METHOD);
+        let c = Complete { session_id: "s".into(), prompt: "p".into(), model: Some("m".into()), ..Default::default() };
+        assert_eq!(c.method(), COMPLETE_METHOD);
+        assert_eq!(serde_json::to_value(&c).unwrap(), serde_json::json!({"sessionId": "s", "prompt": "p", "model": "m"}));
     }
 
     #[test]

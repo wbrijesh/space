@@ -30,6 +30,9 @@ pub struct Thread {
     /// A saved thread whose events haven't been read yet (they are when it's opened).
     pub unloaded: bool,
     pub loading: bool,
+    /// The title the `session-title` plugin gave it; until then (or without one) the first line
+    /// of the first message.
+    pub name: Option<String>,
     /// The agent session to load to continue a saved conversation: (agent plugin, session id).
     pub resume: Option<(String, String)>,
     pub cwd: PathBuf,
@@ -70,6 +73,7 @@ impl Thread {
             saving: false,
             unloaded: false,
             loading: false,
+            name: None,
             resume: None,
             branch: format::git_branch(&cwd),
             cwd,
@@ -95,7 +99,9 @@ impl Thread {
     }
 
     pub fn title(&self) -> String {
-        format::thread_title(&self.state)
+        self.name
+            .clone()
+            .or_else(|| format::thread_title(&self.state))
             .or_else(|| self.meta.as_ref().map(|m| m.title.clone()))
             .or_else(|| self.queued.as_ref().map(|(t, _)| format::truncate_chars(&format::one_line(t), 120)))
             .unwrap_or_else(|| "New thread".into())
@@ -272,7 +278,15 @@ impl SpaceApp {
                     return;
                 }
             };
-            let _ = this.update(cx, |this, cx| this.attach_session(key, session.clone(), cx));
+            let _ = this.update(cx, |this, cx| {
+                // Guards judge a loaded session's calls with what the thread already shows.
+                if resume.is_some()
+                    && let Some(t) = this.thread(key)
+                {
+                    session.seed_history(&t.state.items);
+                }
+                this.attach_session(key, session.clone(), cx);
+            });
             if let Some(request) = defaults {
                 apply_defaults(&session, request).await;
             }
@@ -396,10 +410,33 @@ impl SpaceApp {
     }
 
     pub(crate) fn prompt(&mut self, key: u64, text: String, attachments: Vec<PathBuf>, cx: &mut Context<Self>) {
-        let Some(session) = self.thread(key).and_then(|t| t.session.clone()) else { return };
+        let Some(thread) = self.thread(key) else { return };
+        let Some(session) = thread.session.clone() else { return };
+        let first = thread.name.is_none() && !thread.state.items.iter().any(|i| matches!(i, TranscriptItem::User { .. }));
+        if first && !text.trim().is_empty() {
+            self.request_title(key, session.id().to_string(), text.clone(), cx);
+        }
         cx.spawn(async move |_, _| {
             // Failures are reported as session events (Error + TurnEnded).
             let _ = session.prompt_with(text, attachments).await;
+        })
+        .detach();
+    }
+
+    /// Ask the `session-title` plugin to name the thread after its first message; it keeps the
+    /// first-line title until a title arrives, and if none does.
+    fn request_title(&mut self, key: u64, session_id: String, first_message: String, cx: &mut Context<Self>) {
+        let host = self.host.clone();
+        cx.spawn(async move |this, cx| {
+            let Some(title) = host.generate_title(&session_id, &first_message, space_core::TITLE_TIMEOUT).await else { return };
+            let _ = this.update(cx, |this, cx| {
+                let Some(thread) = this.thread_mut(key) else { return };
+                thread.name = Some(title);
+                if this.saving_threads() {
+                    this.save_thread(key, cx);
+                }
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -418,5 +455,25 @@ async fn apply_defaults(session: &Session, request: ConfigureSession) {
                 tracing::info!("new thread keeps the agent's thinking level: {e:#}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use space_core::SessionEvent;
+
+    use super::Thread;
+
+    #[test]
+    fn a_generated_title_replaces_the_first_line() {
+        let mut thread = Thread::new(1, PathBuf::from("/nonexistent"));
+        assert_eq!(thread.title(), "New thread");
+        thread.apply(&SessionEvent::UserMessage { text: "please fix the login page\nit redirects".into(), attachments: vec![] });
+        // Until a title arrives (or if none does): the first line.
+        assert_eq!(thread.title(), "please fix the login page");
+        thread.name = Some("Fix login redirect".into());
+        assert_eq!(thread.title(), "Fix login redirect");
     }
 }
