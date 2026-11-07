@@ -21,19 +21,17 @@ pub fn mode_name(id: &str) -> &'static str {
     }
 }
 
-/// What a blocker offers in each state: a way to fix it, "Retry now" where a retry can help,
-/// and Read Only (which needs no key) as the way out.
+/// What a blocker offers in each state: a way to fix it, and "Retry now" where a retry can help.
 fn actions(health: &Health) -> Vec<BlockerAction> {
     let settings = |label: &str| BlockerAction::new(label, "open-settings:permissions");
     let retry = BlockerAction::new("Retry now", "retry:permissions");
-    let read_only = BlockerAction::new("Use Read Only", format!("use-mode:{READ_ONLY}"));
     match health.state {
         State::Healthy | State::Checking => Vec::new(),
-        State::NotSet => vec![settings("Open Settings"), read_only],
-        State::KeyRejected => vec![settings("Update key"), retry, read_only],
-        State::NoAccess => vec![settings("Open Settings"), retry, read_only],
-        State::NoCredit => vec![BlockerAction::new("Open billing", format!("open-url:{BILLING_URL}")), retry, read_only],
-        State::Unreachable | State::Incompatible => vec![retry, read_only],
+        State::NotSet => vec![settings("Open Settings")],
+        State::KeyRejected => vec![settings("Update key"), retry],
+        State::NoAccess => vec![settings("Open Settings"), retry],
+        State::NoCredit => vec![BlockerAction::new("Open billing", format!("open-url:{BILLING_URL}")), retry],
+        State::Unreachable | State::Incompatible => vec![retry],
     }
 }
 
@@ -143,7 +141,7 @@ mod tests {
         assert!(without[0].ready && !without[1].ready && !without[2].ready);
         let b = without[1].blocker.as_ref().unwrap();
         assert_eq!(b.actions[0].action, "open-settings:permissions");
-        assert!(b.text.starts_with("Workspace Write checks every action with OpenAI"), "{}", b.text);
+        assert!(b.text == "Workspace Write needs an OpenAI API key.", "{}", b.text);
         assert!(without[1].default && without[2].confirm.is_some());
 
         let mut h = Health::new(true, false, now);
@@ -152,7 +150,7 @@ mod tests {
         let b = entries[2].blocker.as_ref().unwrap();
         assert!(b.text.contains("out of credit"));
         let actions: Vec<&str> = b.actions.iter().map(|a| a.action.as_str()).collect();
-        assert_eq!(actions, [format!("open-url:{BILLING_URL}").as_str(), "retry:permissions", "use-mode:read-only"]);
+        assert_eq!(actions, [format!("open-url:{BILLING_URL}").as_str(), "retry:permissions"]);
         assert_eq!((b.last_attempt_ms, b.next_attempt_ms), (Some(1_000_000), Some(1_300_000)));
 
         h.success(now);

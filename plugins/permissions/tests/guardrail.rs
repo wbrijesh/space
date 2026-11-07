@@ -212,8 +212,8 @@ async fn key_rejected_mid_thread_holds_until_retry_or_a_new_key() {
     let ww = workspace_write(&catalog);
     assert!(!ww.ready);
     let b = ww.blocker.unwrap();
-    assert!(b.text.contains("Add an OpenAI API key"), "{}", b.text);
-    assert_eq!(b.actions.iter().map(|a| a.action.as_str()).collect::<Vec<_>>(), ["open-settings:permissions", "use-mode:read-only"]);
+    assert!(b.text.contains("needs an OpenAI API key"), "{}", b.text);
+    assert_eq!(b.actions.iter().map(|a| a.action.as_str()).collect::<Vec<_>>(), ["open-settings:permissions"]);
 
     // A rejected key is never stored.
     mock.set(Api::Rejected);

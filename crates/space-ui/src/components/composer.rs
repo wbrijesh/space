@@ -321,9 +321,8 @@ impl RenderOnce for Composer {
     }
 }
 
-/// Why sending is blocked, above the card: a centered pill in the warning tint, so it reads as
-/// "do this first", not as a caption. One line with its link when that's all there is; with
-/// retry times, a second line carries them and the links.
+/// Why sending is blocked, above the card: a warning box shaped like the transcript's error card,
+/// with its links on the right and, while retrying, the retry times under the text.
 pub fn blocker_row(blocker: ComposerBlocker, on_action: StringHandler) -> Div {
     let links = blocker.actions.into_iter().enumerate().map(|(i, (label, action))| {
         let f = on_action.clone();
@@ -341,35 +340,33 @@ pub fn blocker_row(blocker: ComposerBlocker, on_action: StringHandler) -> Div {
             .when(main, |d| d.child(Icon::new(IconName::ChevronRight).size(size::ICON_SM)))
             .on_click(move |_, w, cx| f(action.to_string(), w, cx))
     });
-    let headline = div()
+    let body = div()
+        .flex_1()
+        .min_w_0()
         .flex()
-        .items_center()
-        .gap_2()
-        .child(Icon::new(Lucide::ShieldAlert).size(size::ICON).text_color(color::yellow()))
-        .child(blocker.text);
-    let pill = div()
-        .px_3()
-        .py_1p5()
+        .flex_col()
+        .gap_0p5()
+        .child(blocker.text)
+        .children(blocker.times.map(|t| div().text_color(color::text_2()).child(t)));
+    // The error card's shape (transcript::error_card) in the warning tint, as wide as the thread.
+    // Extra space under it on top of the stack's gap, so it stands apart from the composer.
+    div()
+        .w_full()
+        .flex()
+        .items_start()
+        .gap_2p5()
+        .p_3()
+        .mb(px(space::MD))
+        .rounded(radius::XL)
         .bg(color::yellow_bg())
         .border_1()
         .border_color(color::yellow_border())
         .text_size(text::SM)
+        .line_height(relative(text::LEADING))
         .text_color(color::text())
-        .map(|d| match blocker.times {
-            None => d.rounded_full().flex().items_center().gap_3().child(headline).children(links),
-            Some(times) => d.rounded(radius::XXL).flex().flex_col().gap_1().child(headline).child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_x_3()
-                    .pl(size::ICON + px(8.))
-                    .child(div().text_color(color::text_2()).child(times))
-                    .children(links),
-            ),
-        });
-    // Extra space under it on top of the stack's gap, so it stands apart from the card.
-    div().flex().justify_center().px(px(space::MD)).mb(px(space::MD)).child(pill)
+        .child(Icon::new(Lucide::ShieldAlert).size(size::ICON_MD).text_color(color::yellow()).mt(px(1.)))
+        .child(body)
+        .child(div().flex().flex_none().items_center().gap_3().children(links))
 }
 
 /// The Lucide icon for a catalog icon name.
@@ -661,8 +658,8 @@ pub mod fixtures {
     /// The blockers the permissions plugin shows, by state (as the app formats them).
     pub fn not_set_up() -> ComposerBlocker {
         ComposerBlocker {
-            text: "Workspace Write checks every action with OpenAI first. Add an OpenAI API key to use it.".into(),
-            actions: vec![action("Open Settings", "open-settings:permissions"), action("Use Read Only", "use-mode:read-only")],
+            text: "Workspace Write needs an OpenAI API key.".into(),
+            actions: vec![action("Open Settings", "open-settings:permissions")],
             times: None,
         }
     }
@@ -673,7 +670,7 @@ pub mod fixtures {
 
     pub fn failing(text: &str, fix: Option<(&str, &str)>) -> ComposerBlocker {
         let mut actions: Vec<_> = fix.into_iter().map(|(l, a)| action(l, a)).collect();
-        actions.extend([action("Retry now", "retry:permissions"), action("Use Read Only", "use-mode:read-only")]);
+        actions.push(action("Retry now", "retry:permissions"));
         ComposerBlocker { text: text.to_string().into(), actions, times: Some(TIMES.into()) }
     }
 

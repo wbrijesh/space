@@ -175,7 +175,7 @@ impl Health {
             State::NotSet if self.unreadable => {
                 format!("{mode} needs your OpenAI API key, but Space couldn't read it from the Keychain.")
             }
-            State::NotSet => format!("{mode} checks every action with OpenAI first. Add an OpenAI API key to use it."),
+            State::NotSet => format!("{mode} needs an OpenAI API key."),
             State::Checking => "Checking your OpenAI API key…".to_string(),
             State::Unreachable => format!("Can't reach OpenAI{}, so actions are paused.", detail()),
             State::KeyRejected => "OpenAI rejected your API key, so actions are paused.".to_string(),
@@ -276,7 +276,7 @@ mod tests {
         let mut h = Health::new(false, false, at(0));
         assert_eq!(h.state, State::NotSet);
         assert!(!h.probe_due(at(0)));
-        assert!(h.problem("Workspace Write").unwrap().contains("Add an OpenAI API key"));
+        assert!(h.problem("Workspace Write").unwrap().contains("needs an OpenAI API key"));
         h.key_changed(true, false, at(5));
         assert!(h.probe_due(at(5)));
         h.validated(at(6));
