@@ -3,8 +3,9 @@
 //
 // Run: pnpm smoke   (or: node scripts/smoke.ts after `pnpm build`)
 // Set SMOKE_SKIP_CANCEL=1 to skip the cancellation check, SMOKE_NO_PROMPTS=1 to run only the
-// checks that make no model requests (handshake, _space/status, _space/session/configure,
-// session/set_mode).
+// checks that make no model requests (handshake, _space/status, _space/session/configure).
+// As the client it answers the tool pipeline like a host without guard plugins: every
+// `_space/tools/preExecute` is allowed and `_space/sandbox/confine` returns the argv unchanged.
 
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
@@ -39,6 +40,7 @@ child.stderr.on("data", (chunk: Buffer) => {
 const updates: acp.SessionNotification[] = [];
 let onUpdate: ((n: acp.SessionNotification) => void) | undefined;
 let status: Status | undefined;
+const preExecutes: string[] = [];
 
 const client = acp
 	.client({ name: "space-smoke" })
@@ -67,7 +69,13 @@ const client = acp
 	.onNotification("_space/status", (p: unknown) => p as Status, ({ params }) => {
 		status = params;
 		console.log(`  <_space/status ${JSON.stringify(params)}>`);
-	});
+	})
+	.onRequest("_space/tools/preExecute", (p: unknown) => p as { tool: string; toolCallId: string }, ({ params }) => {
+		preExecutes.push(params.tool);
+		console.log(`  <_space/tools/preExecute ${params.tool} ${params.toolCallId}>`);
+		return { decision: "allow" };
+	})
+	.onRequest("_space/sandbox/confine", (p: unknown) => p as { argv: string[] }, ({ params }) => ({ argv: params.argv }));
 
 const stream = acp.ndJsonStream(
 	Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
@@ -92,9 +100,8 @@ await client.connectWith(stream, async (ctx) => {
 	check(init.protocolVersion === acp.PROTOCOL_VERSION, "protocol version negotiated");
 
 	const { sessionId, modes } = await ctx.request(acp.methods.agent.session.new, { cwd: repoRoot, mcpServers: [] });
-	console.log(`session/new -> ${sessionId} modes=${JSON.stringify(modes)}`);
-	const modeIds = modes?.availableModes.map((m) => m.id) ?? [];
-	check(modes?.currentModeId === "write" && modeIds.includes("read") && modeIds.includes("write"), "session/new advertises write (current) and read modes");
+	console.log(`session/new -> ${sessionId}`);
+	check(!modes, "session/new offers no ACP modes (permission modes are the host's)");
 	await new Promise((r) => setTimeout(r, 200));
 	check(
 		status?.sessionId === sessionId && status.provider === "claude-cli" && status.model === "claude-opus-5-5",
@@ -118,11 +125,6 @@ await client.connectWith(stream, async (ctx) => {
 	);
 	check(rejected, "configure rejects an unknown model");
 
-	// session/set_mode (no model request; the active tools per mode are checked by scripts/mode-test.ts).
-	const setMode = (modeId: string) => ctx.request(acp.methods.agent.session.setMode, { sessionId, modeId });
-	check(await setMode("read").then(() => true, () => false), "set_mode read accepted");
-	check(await setMode("write").then(() => true, () => false), "set_mode write accepted");
-	check(await setMode("nope").then(() => false, () => true), "set_mode rejects an unknown mode");
 
 	if (process.env.SMOKE_NO_PROMPTS === "1") return;
 
@@ -149,6 +151,7 @@ await client.connectWith(stream, async (ctx) => {
 	check(call?.sessionUpdate === "tool_call" && call.kind === "execute", "tool_call (kind=execute) received");
 	check(done?.sessionUpdate === "tool_call_update" && done.status === "completed", "tool_call_update (completed) received");
 	check(tool.stopReason === "end_turn", "tool turn ended with end_turn");
+	check(preExecutes.includes("bash"), "the bash call was put to _space/tools/preExecute first");
 
 	// 3. Cancellation.
 	if (process.env.SMOKE_SKIP_CANCEL !== "1") {

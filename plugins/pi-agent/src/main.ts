@@ -8,7 +8,7 @@ import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { type AgentConfig, ensureClaudeOnPath, isolatePiConfig, loadConfig, log } from "./env.js";
-import { isModeId, modeState } from "./mode.js";
+import { CONFINE, contextFromMeta, type HostLink, PRE_EXECUTE, type PreExecuteResult } from "./host.js";
 import { createPiSession, type PiSession } from "./pi.js";
 import { configureSession, parseConfigureParams, SPACE_CONFIGURE, SPACE_STATUS, sessionStatus } from "./status.js";
 import { promptText, textToolContent, toolKind, toolResultText, toolTitle } from "./translate.js";
@@ -40,6 +40,12 @@ try {
 isolatePiConfig(config);
 const claudePath = ensureClaudeOnPath();
 log(`v${VERSION} starting; model=${config.provider}/${config.modelId} thinking=${config.thinkingLevel} claude=${claudePath ?? "missing"}`);
+
+/** The host's pipeline over this ACP connection (requests to the client). */
+const host: HostLink = {
+	preExecute: (params) => connection.client.request<PreExecuteResult>(PRE_EXECUTE, params),
+	confine: (params) => connection.client.request<{ argv: string[] }>(CONFINE, params),
+};
 
 /** Readable message for a failed pi turn, mapped to a JSON-RPC error. */
 function turnError(message: string): acp.RequestError {
@@ -74,7 +80,7 @@ const app = acp
 		const sessionId = randomUUID();
 		let pi: PiSession;
 		try {
-			pi = await createPiSession(params.cwd, config);
+			pi = await createPiSession(params.cwd, config, { sessionId, host });
 		} catch (error) {
 			log("session/new failed:", error);
 			throw turnError(`Failed to start pi session: ${error instanceof Error ? error.message : String(error)}`);
@@ -87,7 +93,7 @@ const app = acp
 				.notify(SPACE_STATUS, sessionStatus(sessionId, pi.session))
 				.catch((error: unknown) => log("failed to send _space/status:", error));
 		});
-		return { sessionId, modes: modeState(pi.mode.mode) };
+		return { sessionId };
 	})
 	.onRequest(acp.methods.agent.session.prompt, async ({ params, client }) => {
 		const state = sessions.get(params.sessionId);
@@ -142,6 +148,8 @@ const app = acp
 			}
 		});
 
+		// Hidden context from the host's plugins, for this run's system prompt.
+		state.pi.host.context = contextFromMeta(params._meta);
 		const text = promptText(params.prompt);
 		let failure: unknown;
 		try {
@@ -151,8 +159,6 @@ const app = acp
 		} finally {
 			unsubscribe();
 			state.turn = undefined;
-			// A mode switched mid-turn takes effect now, for the next prompt.
-			state.pi.mode.applyTools();
 		}
 		await outbox;
 		// Context usage changed; the model may have too (e.g. a retry fallback).
@@ -190,17 +196,6 @@ const app = acp
 		const status = sessionStatus(params.sessionId, state.pi.session);
 		log(`configure ${params.sessionId}: model=${status.provider}/${status.model} thinking=${status.thinkingLevel}`);
 		return status;
-	})
-	.onRequest(acp.methods.agent.session.setMode, async ({ params }) => {
-		const state = sessions.get(params.sessionId);
-		if (!state) throw acp.RequestError.sessionNotFound(params.sessionId);
-		if (!isModeId(params.modeId)) throw acp.RequestError.invalidParams(undefined, `Unknown mode "${params.modeId}"`);
-		const { mode } = state.pi;
-		mode.mode = params.modeId;
-		// Tools change between runs only; a running turn keeps its mode (applied when it ends).
-		if (!state.turn) mode.applyTools();
-		log(`set_mode ${params.sessionId}: ${mode.mode}${state.turn ? " (from the next prompt)" : ""}`);
-		return {};
 	})
 	.onNotification(acp.methods.agent.session.cancel, async ({ params }) => {
 		const state = sessions.get(params.sessionId);
