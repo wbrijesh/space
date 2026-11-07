@@ -3,11 +3,21 @@
 //! Missing fields take their defaults, so older or partial files load. A file that can't be
 //! read or parsed loads as defaults with a warning and is left alone until the user changes a
 //! setting. Every change is saved at once, atomically (temp file + rename).
+//!
+//! Also the app's actions that change settings (the Settings page, plugin settings, turning
+//! plugins on and off).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use gpui::{Context, Window};
 use serde::{Deserialize, Serialize};
+use space_core::protocol::ModelInfo;
+use space_core::{PluginStatus, SettingError};
+use space_ui::components::settings::FieldCheck;
+
+use crate::app::SpaceApp;
+use crate::notify;
 
 /// Env var overriding the settings file path.
 pub const SETTINGS_ENV: &str = "SPACE_SETTINGS";
@@ -118,6 +128,198 @@ fn write(path: &Path, settings: &Settings) -> anyhow::Result<()> {
     std::fs::write(&tmp, json)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
+}
+
+// ----- the app's settings actions ------------------------------------------------------
+
+impl SpaceApp {
+    /// Start the service plugins (permissions and the like) with the saved plugin settings;
+    /// failures show in the Plugins section and the logs.
+    pub(crate) fn start_services(&mut self, cx: &mut Context<Self>) {
+        let plugins = &self.settings.settings.plugins;
+        self.host.set_disabled(plugins.disabled.iter().cloned());
+        for (id, values) in &plugins.settings {
+            self.host.set_text_settings(id, values.clone());
+        }
+        let host = self.host.clone();
+        cx.spawn(async move |_, _| host.start_services().await).detach();
+    }
+
+    pub(crate) fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.show_settings {
+            self.close_settings(window, cx);
+        } else {
+            self.open_settings(window, cx);
+        }
+    }
+
+    pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_settings = true;
+        // Off the composer (it's hidden), so Esc reaches the page.
+        window.focus(&self.focus, cx);
+        self.refresh_permission(cx);
+        cx.notify();
+    }
+
+    /// Back to the current thread.
+    pub(crate) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_settings = false;
+        match self.selected {
+            Some(key) => self.select_inner(key, false, window, cx),
+            None => cx.notify(),
+        }
+    }
+
+    /// Ask macOS whether notifications are allowed (answers on another thread).
+    pub(crate) fn refresh_permission(&mut self, cx: &mut Context<Self>) {
+        let answer = notify::permission();
+        cx.spawn(async move |this, cx| {
+            if let Ok(permission) = answer.await {
+                let _ = this.update(cx, |this, cx| {
+                    if this.permission != permission {
+                        this.permission = permission;
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn allow_notifications(&mut self, cx: &mut Context<Self>) {
+        let answered = notify::request_permission();
+        cx.spawn(async move |this, cx| {
+            let _ = answered.await;
+            let _ = this.update(cx, |this, cx| this.refresh_permission(cx));
+        })
+        .detach();
+    }
+
+    pub(crate) fn set_default_model(&mut self, model: Option<ModelInfo>, cx: &mut Context<Self>) {
+        self.settings.update(|s| s.new_threads.model = model.map(|m| ModelRef { provider: m.provider, id: m.id }));
+        cx.notify();
+    }
+
+    pub(crate) fn set_default_thinking(&mut self, level: Option<String>, cx: &mut Context<Self>) {
+        self.settings.update(|s| s.new_threads.thinking_level = level);
+        cx.notify();
+    }
+
+    pub(crate) fn set_notify_on_finish(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.settings.update(|s| s.notifications.on_finish = on);
+        cx.notify();
+    }
+
+    pub(crate) fn set_sound(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.settings.update(|s| s.notifications.sound = on);
+        cx.notify();
+    }
+
+    pub(crate) fn set_default_mode(&mut self, mode: Option<String>, cx: &mut Context<Self>) {
+        self.settings.update(|s| s.new_threads.permission_mode = mode);
+        self.sync_session_modes();
+        cx.notify();
+    }
+
+    /// Save a plugin setting from its Settings field. The plugin checks a new value first:
+    /// the field shows "Checking…", then the outcome (a rejected value isn't stored; one that
+    /// couldn't be checked can be saved anyway).
+    pub(crate) fn save_plugin_setting(
+        &mut self,
+        plugin_id: String,
+        key: String,
+        kind: SaveKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let field = (plugin_id.clone(), key.clone());
+        let input = self.setting_inputs.get(&field).map(|(i, _)| i.clone());
+        let value = match kind {
+            SaveKind::Clear => None,
+            SaveKind::Checked | SaveKind::Anyway => {
+                let v = input.as_ref().map(|i| i.read(cx).value().trim().to_string()).unwrap_or_default();
+                if v.is_empty() {
+                    return;
+                }
+                Some(v)
+            }
+        };
+        let secret = self
+            .plugin_settings
+            .get(&plugin_id)
+            .and_then(|fields| fields.iter().find(|f| f.field.key == key))
+            .is_some_and(|f| f.field.kind == space_core::protocol::service::SettingKind::Secret);
+        self.field_checks.insert(field.clone(), if value.is_some() { FieldCheck::Checking } else { FieldCheck::Idle });
+        let host = self.host.clone();
+        let force = kind == SaveKind::Anyway;
+        cx.spawn_in(window, async move |this, cx| {
+            let result = host.set_setting(&plugin_id, &key, value.clone(), force).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let check = match result {
+                    Ok(()) => {
+                        // Text values live in the settings file (secrets only in the Keychain).
+                        if !secret {
+                            let (id, k, v) = (plugin_id.clone(), key.clone(), value.clone());
+                            this.settings.update(|s| {
+                                let map = s.plugins.settings.entry(id).or_default();
+                                match v {
+                                    Some(v) => map.insert(k, v),
+                                    None => map.remove(&k),
+                                };
+                            });
+                        }
+                        if let Some(input) = &input {
+                            input.update(cx, |s, cx| s.set_value("", window, cx));
+                        }
+                        if value.is_some() { FieldCheck::Saved } else { FieldCheck::Idle }
+                    }
+                    Err(SettingError::Invalid(m)) => FieldCheck::Invalid(m.into()),
+                    Err(SettingError::Unverifiable(m)) => FieldCheck::Unverifiable(m.into()),
+                    Err(SettingError::Failed(e)) => {
+                        this.banner = Some(format!("Couldn't save the setting: {e}"));
+                        FieldCheck::Idle
+                    }
+                };
+                this.field_checks.insert(field, check);
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Turn a service plugin on or off (saved; takes effect at once).
+    pub(crate) fn set_plugin_enabled(&mut self, plugin_id: String, enabled: bool, cx: &mut Context<Self>) {
+        if self.host.plugin(&plugin_id).is_some_and(|p| p.manifest.required) {
+            return; // required guards stay on
+        }
+        self.settings.update(|s| {
+            s.plugins.disabled.retain(|id| *id != plugin_id);
+            if !enabled {
+                s.plugins.disabled.push(plugin_id.clone());
+            }
+        });
+        self.host.set_disabled(self.settings.settings.plugins.disabled.iter().cloned());
+        if enabled {
+            let host = self.host.clone();
+            cx.spawn(async move |_, _| host.start_services().await).detach();
+        } else {
+            self.plugin_settings.remove(&plugin_id);
+            self.plugin_status.insert(plugin_id, PluginStatus::Stopped);
+        }
+        cx.notify();
+    }
+}
+
+/// What a Settings field's button does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SaveKind {
+    /// Save the field's value once the plugin has checked it.
+    Checked,
+    /// Save it although it couldn't be checked.
+    Anyway,
+    /// Remove the setting.
+    Clear,
 }
 
 #[cfg(test)]

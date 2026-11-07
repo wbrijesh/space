@@ -24,9 +24,11 @@ use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
 
 use crate::app::{
-    SaveKind, CloseSettings, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, ScrollToBottom,
-    SpaceApp, Thread, ToggleLogs, ToggleSidebar,
+    CloseSettings, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, ScrollToBottom, SpaceApp,
+    ToggleLogs, ToggleSidebar,
 };
+use crate::settings::SaveKind;
+use crate::threads::Thread;
 
 /// A click callback that runs `f` on the app.
 fn click(cx: &mut Context<SpaceApp>, f: impl Fn(&mut SpaceApp, &mut Window, &mut Context<SpaceApp>) + 'static) -> ClickHandler {

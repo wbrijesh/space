@@ -23,6 +23,7 @@ mod notify;
 #[cfg(feature = "dev")]
 mod scenarios;
 mod settings;
+mod threads;
 mod view;
 
 use std::path::PathBuf;

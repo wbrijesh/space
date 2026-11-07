@@ -13,17 +13,16 @@
 //! Settings (⌘,) replace the thread view in the main column; the sidebar stays. Esc, ⌘, again,
 //! Back, ⌘N or picking a thread leave them.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gpui::component::input::{InputEvent, InputState, TextareaState};
 use gpui::*;
 use space_core::protocol::service::CatalogEntry;
 use space_core::protocol::{CATALOG_PERMISSION_MODES, ConfigureSession, ModelInfo};
 use space_core::{
-    AgentHandle, EventReceiver, Host, HostEvent, PermissionDecision, PluginStatus, Session, SessionEvent, SessionId,
-    SessionState, SettingError, SettingState, TranscriptItem,
+    AgentHandle, EventReceiver, Host, HostEvent, PermissionDecision, PluginStatus, SessionEvent, SessionId, SettingState,
 };
 use space_ui::components::settings::FieldCheck;
 
@@ -39,7 +38,8 @@ use space_ui::format;
 #[cfg(feature = "dev")]
 use crate::devscript;
 use crate::notify::{self, NotificationPermission};
-use crate::settings::{ModelRef, SettingsStore};
+use crate::settings::SettingsStore;
+use crate::threads::Thread;
 
 const MAX_LOG_LINES: usize = 2000;
 /// Where ⌘↓ means Scroll to Bottom inside the composer: a single-line textarea. Bound after
@@ -195,94 +195,6 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
     });
 }
 
-/// One conversation with the agent (an ACP session once it has been created).
-pub struct Thread {
-    pub key: u64,
-    pub cwd: PathBuf,
-    pub branch: Option<String>,
-    pub session: Option<Session>,
-    pub state: SessionState,
-    /// `session/new` is in flight.
-    pub creating: bool,
-    /// Creating the session failed.
-    pub error: Option<String>,
-    /// Turns that finished (or need input) while the thread was not selected.
-    pub unread: usize,
-    pub draft: String,
-    pub attachments: Vec<PathBuf>,
-    /// Message sent before the session existed; sent once it does.
-    pub queued: Option<(String, Vec<PathBuf>)>,
-    /// Permission mode picked for this thread (a `permission-modes` id); `None`: the default
-    /// for new threads. Applied to every session the thread gets.
-    pub mode: Option<String>,
-    /// Modes that need confirming (Full access) and were confirmed in this thread.
-    pub confirmed: HashSet<String>,
-    /// This turn already alerted that a tool call is paused.
-    paused_alerted: bool,
-    /// Expanded thought/tool items (transcript indices).
-    pub expanded: HashSet<usize>,
-    thought_started: HashMap<usize, Instant>,
-    pub thought_secs: HashMap<usize, u64>,
-}
-
-impl Thread {
-    fn new(key: u64, cwd: PathBuf) -> Self {
-        Self {
-            key,
-            branch: format::git_branch(&cwd),
-            cwd,
-            session: None,
-            state: SessionState::default(),
-            creating: false,
-            error: None,
-            unread: 0,
-            draft: String::new(),
-            attachments: Vec::new(),
-            queued: None,
-            mode: None,
-            confirmed: HashSet::new(),
-            paused_alerted: false,
-            expanded: HashSet::new(),
-            thought_started: HashMap::new(),
-            thought_secs: HashMap::new(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.state.items.is_empty() && self.queued.is_none()
-    }
-
-    pub fn title(&self) -> String {
-        format::thread_title(&self.state)
-            .or_else(|| self.queued.as_ref().map(|(t, _)| format::truncate_chars(&format::one_line(t), 120)))
-            .unwrap_or_else(|| "New thread".into())
-    }
-
-    /// The session can take a prompt now.
-    pub fn live_session(&self) -> Option<&Session> {
-        self.session.as_ref().filter(|s| s.agent().is_running())
-    }
-
-    fn apply(&mut self, event: &SessionEvent) {
-        self.state.apply(event);
-        let now = Instant::now();
-        let last = self.state.items.len().checked_sub(1);
-        match (last, self.state.items.last()) {
-            (Some(ix), Some(TranscriptItem::Thought(_))) => {
-                self.thought_started.entry(ix).or_insert(now);
-            }
-            _ => {
-                for (ix, start) in &self.thought_started {
-                    self.thought_secs.entry(*ix).or_insert_with(|| now.duration_since(*start).as_secs());
-                }
-            }
-        }
-        if matches!(event, SessionEvent::TurnEnded { .. }) {
-            self.branch = format::git_branch(&self.cwd);
-        }
-    }
-}
-
 pub struct SpaceApp {
     pub(crate) host: Host,
     pub(crate) project_dir: PathBuf,
@@ -290,15 +202,15 @@ pub struct SpaceApp {
     pub(crate) agent: Option<AgentHandle>,
     pub(crate) agent_status: PluginStatus,
     pub(crate) agent_title: String,
-    notify: bool,
+    pub(crate) notify: bool,
     pub(crate) logs: VecDeque<String>,
     pub(crate) threads: Vec<Thread>,
-    next_key: u64,
+    pub(crate) next_key: u64,
     pub(crate) selected: Option<u64>,
     pub(crate) back: Vec<u64>,
     pub(crate) forward: Vec<u64>,
-    session_threads: HashMap<SessionId, u64>,
-    orphans: HashMap<SessionId, Vec<SessionEvent>>,
+    pub(crate) session_threads: HashMap<SessionId, u64>,
+    pub(crate) orphans: HashMap<SessionId, Vec<SessionEvent>>,
     pub(crate) input: Entity<TextareaState>,
     pub(crate) focus: FocusHandle,
     /// The selected thread's transcript; every thread opens at the bottom.
@@ -481,7 +393,7 @@ impl SpaceApp {
         self.threads.iter().find(|t| t.key == key)
     }
 
-    fn thread_mut(&mut self, key: u64) -> Option<&mut Thread> {
+    pub(crate) fn thread_mut(&mut self, key: u64) -> Option<&mut Thread> {
         self.threads.iter_mut().find(|t| t.key == key)
     }
 
@@ -546,272 +458,7 @@ impl SpaceApp {
         }
     }
 
-    fn apply_session_event(&mut self, key: u64, event: &SessionEvent, _cx: &mut Context<Self>) {
-        if let SessionEvent::Status(status) = event {
-            // What the agent offers, for the Settings page.
-            if let Some(models) = &status.available_models {
-                self.agent_models = Some(models.clone());
-            }
-            if let Some(levels) = &status.thinking_levels {
-                self.agent_levels = Some(levels.clone());
-            }
-        }
-        // On the Settings page nothing is being watched.
-        let selected = self.selected == Some(key) && !self.show_settings;
-        let Some(thread) = self.thread_mut(key) else { return };
-        thread.apply(event);
-        // A tool call waiting for the guardrail: alert once per turn (it may stay paused long).
-        let paused = match event {
-            SessionEvent::TurnStarted => {
-                thread.paused_alerted = false;
-                None
-            }
-            SessionEvent::ToolCallHeld { reason: Some(reason), .. } if !thread.paused_alerted => {
-                thread.paused_alerted = true;
-                Some(reason.clone())
-            }
-            _ => None,
-        };
-        let attention = paused.is_some()
-            || matches!(
-                event,
-                SessionEvent::TurnEnded { .. } | SessionEvent::PermissionRequested(_) | SessionEvent::Error { .. }
-            );
-        if !selected && attention && !matches!(event, SessionEvent::TurnEnded { stop_reason } if stop_reason == "error") {
-            thread.unread += 1;
-        }
-        let prefs = &self.settings.settings.notifications;
-        let alerts = notify::Alerts { notification: prefs.on_finish, sound: prefs.sound };
-        if let SessionEvent::TurnEnded { stop_reason } = event
-            && self.notify
-            && (alerts.notification || alerts.sound)
-            && stop_reason != "cancelled"
-            && let Some(thread) = self.thread(key)
-        {
-            // Headline says what happened; the second line says which thread.
-            let headline = if stop_reason == "error" { "Agent stopped with an error" } else { "Agent finished" };
-            notify::turn_finished(key, headline, &thread.title(), selected && notify::app_active(), alerts);
-        }
-        if let Some(reason) = paused
-            && self.notify
-            && (alerts.notification || alerts.sound)
-            && let Some(thread) = self.thread(key)
-        {
-            let headline = format!("Paused: {}", reason.trim_end_matches('.'));
-            notify::turn_finished(key, &headline, &thread.title(), selected && notify::app_active(), alerts);
-        }
-    }
-
-    // ----- agent and sessions -----------------------------------------------------------
-
-    fn add_thread(&mut self, cwd: PathBuf) -> u64 {
-        let key = self.next_key;
-        self.next_key += 1;
-        self.threads.push(Thread::new(key, cwd));
-        key
-    }
-
-    /// Start the agent plugin if it is not running; sessions are created once it is up.
-    pub(crate) fn ensure_agent(&mut self, cx: &mut Context<Self>) {
-        if self.agent_running() || self.agent_status == PluginStatus::Starting {
-            return;
-        }
-        let Some(id) = self.agent_id.clone() else { return };
-        self.agent_status = PluginStatus::Starting;
-        let host = self.host.clone();
-        cx.spawn(async move |this, cx| {
-            let result = host.start_agent(&id).await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(agent) => {
-                        if let Some(name) = agent.agent_name() {
-                            this.agent_title = name.to_string();
-                        }
-                        this.agent = Some(agent);
-                        this.agent_status = PluginStatus::Running;
-                        this.create_pending_sessions(cx);
-                    }
-                    Err(e) => {
-                        this.agent_status = PluginStatus::Crashed(format!("{e:#}"));
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-
-    fn create_pending_sessions(&mut self, cx: &mut Context<Self>) {
-        let keys: Vec<u64> = self
-            .threads
-            .iter()
-            .filter(|t| t.session.is_none() && !t.creating && t.error.is_none())
-            .map(|t| t.key)
-            .collect();
-        for key in keys {
-            self.create_session(key, cx);
-        }
-    }
-
-    fn create_session(&mut self, key: u64, cx: &mut Context<Self>) {
-        let Some(agent) = self.agent.clone().filter(AgentHandle::is_running) else {
-            self.ensure_agent(cx);
-            return;
-        };
-        let Some(thread) = self.thread(key) else { return };
-        let defaults = self.session_defaults(thread);
-        let Some(thread) = self.thread_mut(key) else { return };
-        thread.creating = true;
-        thread.error = None;
-        let cwd = thread.cwd.clone();
-        cx.spawn(async move |this, cx| {
-            let result = agent.new_session(cwd).await;
-            let session = match result {
-                Ok(s) => s,
-                Err(e) => {
-                    let _ = this.update(cx, |this, cx| {
-                        if let Some(t) = this.thread_mut(key) {
-                            t.creating = false;
-                            t.error = Some(format!("{e:#}"));
-                        }
-                        cx.notify();
-                    });
-                    return;
-                }
-            };
-            let _ = this.update(cx, |this, cx| this.attach_session(key, session.clone(), cx));
-            if let Some(request) = defaults {
-                apply_defaults(&session, request).await;
-            }
-            let _ = this.update(cx, |this, cx| {
-                if let Some(t) = this.thread_mut(key) {
-                    t.creating = false;
-                    if let Some((text, attachments)) = t.queued.take() {
-                        this.prompt(key, text, attachments, cx);
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-
-    /// What a new session should be switched to: for a new thread, the defaults from
-    /// Settings; for a thread whose agent exited, the model and level it was using.
-    fn session_defaults(&self, thread: &Thread) -> Option<ConfigureSession> {
-        let request = if thread.state.items.is_empty() {
-            let d = &self.settings.settings.new_threads;
-            let (provider, model) =
-                d.model.clone().map_or((None, None), |ModelRef { provider, id }| (Some(provider), Some(id)));
-            ConfigureSession { provider, model, thinking_level: d.thinking_level.clone(), ..Default::default() }
-        } else {
-            let s = &thread.state.status;
-            ConfigureSession {
-                provider: s.provider.clone(),
-                model: s.model.clone(),
-                thinking_level: s.thinking_level.clone(),
-                ..Default::default()
-            }
-        };
-        (request.model.is_some() || request.thinking_level.is_some()).then_some(request)
-    }
-
-    fn attach_session(&mut self, key: u64, session: Session, cx: &mut Context<Self>) {
-        let sid = session.id().to_string();
-        let Some(thread) = self.thread_mut(key) else { return };
-        if thread.state.id.is_empty() {
-            thread.state.id.clone_from(&sid);
-        }
-        thread.state.status.session_id.clone_from(&sid);
-        thread.state.cwd.clone_from(&thread.cwd);
-        thread.state.plugin_id = session.agent().plugin_id().to_string();
-        thread.session = Some(session);
-        self.session_threads.insert(sid.clone(), key);
-        self.sync_session_modes();
-        for event in self.orphans.remove(&sid).unwrap_or_default() {
-            self.apply_session_event(key, &event, cx);
-        }
-        cx.notify();
-    }
-
-    /// Open the launch threads (one empty thread when `seed` is empty). Prompts are queued
-    /// and sent once the agent is up.
-    fn seed_threads(&mut self, seed: Vec<SeedThread>, select: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
-        let seed = if seed.is_empty() { vec![SeedThread::default()] } else { seed };
-        let mut keys = Vec::new();
-        let mut scrolled_up = Vec::new();
-        for s in seed {
-            let key = self.add_thread(s.cwd.unwrap_or_else(|| self.project_dir.clone()));
-            if let Some(t) = self.thread_mut(key) {
-                t.queued = s.prompt.map(|p| (p, Vec::new()));
-                t.draft = s.draft.unwrap_or_default();
-                t.mode = s.mode;
-            }
-            keys.push(key);
-            scrolled_up.push(s.scrolled_up);
-        }
-        let ix = select.filter(|i| *i < keys.len()).unwrap_or(keys.len() - 1);
-        let key = keys.get(ix).copied();
-        self.selected = key;
-        if let Some(distance) = scrolled_up[ix] {
-            self.transcript_scroll.scroll_up_from_bottom(px(distance));
-        }
-        if let Some(draft) = key.and_then(|k| self.thread(k)).map(|t| t.draft.clone()).filter(|d| !d.is_empty()) {
-            self.input.update(cx, |s, cx| s.set_value(draft, window, cx));
-        }
-    }
-
     // ----- user actions -----------------------------------------------------------------
-
-    pub(crate) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(key) = self.selected else { return };
-        let text = self.input.read(cx).value().trim().to_string();
-        let Some(thread) = self.thread_mut(key) else { return };
-        if text.is_empty() && thread.attachments.is_empty() {
-            return;
-        }
-        if thread.state.running || thread.queued.is_some() {
-            return;
-        }
-        // The thread's mode isn't set up yet (the composer says so, with a link).
-        if let Some(t) = self.thread(key)
-            && self.blocker(t).is_some()
-        {
-            return;
-        }
-        let Some(thread) = self.thread_mut(key) else { return };
-        let attachments = std::mem::take(&mut thread.attachments);
-        thread.draft.clear();
-        self.input.update(cx, |s, cx| s.clean(window, cx));
-
-        let thread = self.thread_mut(key).expect("thread exists");
-        if thread.live_session().is_some() {
-            self.prompt(key, text, attachments, cx);
-        } else {
-            // No session yet (agent starting) or its agent exited: send once there is one.
-            if thread.session.take().is_some() {
-                thread.state.items.push(TranscriptItem::TurnEnd("new-session".into()));
-            }
-            thread.queued = Some((text, attachments));
-            thread.error = None;
-            if !thread.creating {
-                self.create_session(key, cx);
-            }
-        }
-        self.transcript_scroll.jump_to_bottom();
-        cx.notify();
-    }
-
-    fn prompt(&mut self, key: u64, text: String, attachments: Vec<PathBuf>, cx: &mut Context<Self>) {
-        let Some(session) = self.thread(key).and_then(|t| t.session.clone()) else { return };
-        cx.spawn(async move |_, _| {
-            // Failures are reported as session events (Error + TurnEnded).
-            let _ = session.prompt_with(text, attachments).await;
-        })
-        .detach();
-    }
 
     pub(crate) fn cancel(&mut self, cx: &mut Context<Self>) {
         if let Some(session) = self.current().and_then(|t| t.session.clone())
@@ -835,7 +482,7 @@ impl SpaceApp {
         self.select_inner(key, true, window, cx);
     }
 
-    fn select_inner(&mut self, key: u64, record: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn select_inner(&mut self, key: u64, record: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.thread(key).is_none() {
             return;
         }
@@ -1013,18 +660,6 @@ impl SpaceApp {
         cx.notify();
     }
 
-    /// Start the service plugins (permissions and the like) with the saved plugin settings;
-    /// failures show in the Plugins section and the logs.
-    fn start_services(&mut self, cx: &mut Context<Self>) {
-        let plugins = &self.settings.settings.plugins;
-        self.host.set_disabled(plugins.disabled.iter().cloned());
-        for (id, values) in &plugins.settings {
-            self.host.set_text_settings(id, values.clone());
-        }
-        let host = self.host.clone();
-        cx.spawn(async move |_, _| host.start_services().await).detach();
-    }
-
     // ----- permission modes -------------------------------------------------------------
 
     /// The thread's permission mode: its own choice, else the default for new threads (if the
@@ -1049,7 +684,7 @@ impl SpaceApp {
     }
 
     /// Tell the host each live session's permission mode.
-    fn sync_session_modes(&self) {
+    pub(crate) fn sync_session_modes(&self) {
         for t in &self.threads {
             if let (Some(session), Some(mode)) = (&t.session, self.effective_mode(t)) {
                 session.set_permission_mode(mode);
@@ -1176,183 +811,6 @@ impl SpaceApp {
         cx.notify();
     }
 
-    // ----- settings ---------------------------------------------------------------------
-
-    pub(crate) fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.show_settings {
-            self.close_settings(window, cx);
-        } else {
-            self.open_settings(window, cx);
-        }
-    }
-
-    pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.show_settings = true;
-        // Off the composer (it's hidden), so Esc reaches the page.
-        window.focus(&self.focus, cx);
-        self.refresh_permission(cx);
-        cx.notify();
-    }
-
-    /// Back to the current thread.
-    pub(crate) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.show_settings = false;
-        match self.selected {
-            Some(key) => self.select_inner(key, false, window, cx),
-            None => cx.notify(),
-        }
-    }
-
-    /// Ask macOS whether notifications are allowed (answers on another thread).
-    pub(crate) fn refresh_permission(&mut self, cx: &mut Context<Self>) {
-        let answer = notify::permission();
-        cx.spawn(async move |this, cx| {
-            if let Ok(permission) = answer.await {
-                let _ = this.update(cx, |this, cx| {
-                    if this.permission != permission {
-                        this.permission = permission;
-                        cx.notify();
-                    }
-                });
-            }
-        })
-        .detach();
-    }
-
-    pub(crate) fn allow_notifications(&mut self, cx: &mut Context<Self>) {
-        let answered = notify::request_permission();
-        cx.spawn(async move |this, cx| {
-            let _ = answered.await;
-            let _ = this.update(cx, |this, cx| this.refresh_permission(cx));
-        })
-        .detach();
-    }
-
-    pub(crate) fn set_default_model(&mut self, model: Option<ModelInfo>, cx: &mut Context<Self>) {
-        self.settings.update(|s| s.new_threads.model = model.map(|m| ModelRef { provider: m.provider, id: m.id }));
-        cx.notify();
-    }
-
-    pub(crate) fn set_default_thinking(&mut self, level: Option<String>, cx: &mut Context<Self>) {
-        self.settings.update(|s| s.new_threads.thinking_level = level);
-        cx.notify();
-    }
-
-    pub(crate) fn set_notify_on_finish(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.settings.update(|s| s.notifications.on_finish = on);
-        cx.notify();
-    }
-
-    pub(crate) fn set_sound(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.settings.update(|s| s.notifications.sound = on);
-        cx.notify();
-    }
-
-    pub(crate) fn set_default_mode(&mut self, mode: Option<String>, cx: &mut Context<Self>) {
-        self.settings.update(|s| s.new_threads.permission_mode = mode);
-        self.sync_session_modes();
-        cx.notify();
-    }
-
-    /// Save a plugin setting from its Settings field. The plugin checks a new value first:
-    /// the field shows "Checking…", then the outcome (a rejected value isn't stored; one that
-    /// couldn't be checked can be saved anyway).
-    pub(crate) fn save_plugin_setting(
-        &mut self,
-        plugin_id: String,
-        key: String,
-        kind: SaveKind,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let field = (plugin_id.clone(), key.clone());
-        let input = self.setting_inputs.get(&field).map(|(i, _)| i.clone());
-        let value = match kind {
-            SaveKind::Clear => None,
-            SaveKind::Checked | SaveKind::Anyway => {
-                let v = input.as_ref().map(|i| i.read(cx).value().trim().to_string()).unwrap_or_default();
-                if v.is_empty() {
-                    return;
-                }
-                Some(v)
-            }
-        };
-        let secret = self
-            .plugin_settings
-            .get(&plugin_id)
-            .and_then(|fields| fields.iter().find(|f| f.field.key == key))
-            .is_some_and(|f| f.field.kind == space_core::protocol::service::SettingKind::Secret);
-        self.field_checks.insert(field.clone(), if value.is_some() { FieldCheck::Checking } else { FieldCheck::Idle });
-        let host = self.host.clone();
-        let force = kind == SaveKind::Anyway;
-        cx.spawn_in(window, async move |this, cx| {
-            let result = host.set_setting(&plugin_id, &key, value.clone(), force).await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                let check = match result {
-                    Ok(()) => {
-                        // Text values live in the settings file (secrets only in the Keychain).
-                        if !secret {
-                            let (id, k, v) = (plugin_id.clone(), key.clone(), value.clone());
-                            this.settings.update(|s| {
-                                let map = s.plugins.settings.entry(id).or_default();
-                                match v {
-                                    Some(v) => map.insert(k, v),
-                                    None => map.remove(&k),
-                                };
-                            });
-                        }
-                        if let Some(input) = &input {
-                            input.update(cx, |s, cx| s.set_value("", window, cx));
-                        }
-                        if value.is_some() { FieldCheck::Saved } else { FieldCheck::Idle }
-                    }
-                    Err(SettingError::Invalid(m)) => FieldCheck::Invalid(m.into()),
-                    Err(SettingError::Unverifiable(m)) => FieldCheck::Unverifiable(m.into()),
-                    Err(SettingError::Failed(e)) => {
-                        this.banner = Some(format!("Couldn't save the setting: {e}"));
-                        FieldCheck::Idle
-                    }
-                };
-                this.field_checks.insert(field, check);
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-
-    /// Turn a service plugin on or off (saved; takes effect at once).
-    pub(crate) fn set_plugin_enabled(&mut self, plugin_id: String, enabled: bool, cx: &mut Context<Self>) {
-        if self.host.plugin(&plugin_id).is_some_and(|p| p.manifest.required) {
-            return; // required guards stay on
-        }
-        self.settings.update(|s| {
-            s.plugins.disabled.retain(|id| *id != plugin_id);
-            if !enabled {
-                s.plugins.disabled.push(plugin_id.clone());
-            }
-        });
-        self.host.set_disabled(self.settings.settings.plugins.disabled.iter().cloned());
-        if enabled {
-            let host = self.host.clone();
-            cx.spawn(async move |_, _| host.start_services().await).detach();
-        } else {
-            self.plugin_settings.remove(&plugin_id);
-            self.plugin_status.insert(plugin_id, PluginStatus::Stopped);
-        }
-        cx.notify();
-    }
-}
-
-/// What a Settings field's button does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SaveKind {
-    /// Save the field's value once the plugin has checked it.
-    Checked,
-    /// Save it although it couldn't be checked.
-    Anyway,
-    /// Remove the setting.
-    Clear,
 }
 
 /// Now, in Unix milliseconds (for blockers' retry times).
@@ -1376,21 +834,6 @@ pub(crate) fn resolve_mode(entries: &[CatalogEntry], thread: Option<&str>, defau
         .or_else(|| entries.iter().find(|e| e.default).or(entries.first()).map(|e| e.id.clone()))
 }
 
-/// Switch a just-created session to `request`. When that fails (say the model is no longer
-/// offered), keep the agent's model but still try the thinking level; otherwise stay on the
-/// agent's defaults.
-async fn apply_defaults(session: &Session, request: ConfigureSession) {
-    let level = request.thinking_level.clone().filter(|_| request.model.is_some());
-    if let Err(e) = session.configure(request).await {
-        tracing::info!("new thread keeps the agent's model: {e:#}");
-        if let Some(level) = level {
-            let request = ConfigureSession { thinking_level: Some(level), ..Default::default() };
-            if let Err(e) = session.configure(request).await {
-                tracing::info!("new thread keeps the agent's thinking level: {e:#}");
-            }
-        }
-    }
-}
 
 impl Render for SpaceApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
