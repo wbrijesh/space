@@ -131,7 +131,7 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, cx: &mut Context<SpaceApp>) -> impl
         PluginStatus::Running => AgentState::Running,
         PluginStatus::Starting => AgentState::Starting,
         PluginStatus::Stopped => AgentState::Stopped,
-        PluginStatus::Crashed(msg) => AgentState::Exited(msg.clone()),
+        PluginStatus::Crashed(msg) | PluginStatus::NotStarted(msg) => AgentState::Exited(msg.clone()),
     };
     let footer = AgentFooter::new(app.agent_title.clone(), state)
         .logs_open(app.show_logs)
@@ -230,7 +230,7 @@ fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>)
     let catalog = match &app.agent_models {
         Some(models) => Catalog::Ready { models: models.clone(), levels: app.agent_levels.clone().unwrap_or_default() },
         None if app.agent_id.is_none()
-            || matches!(app.agent_status, PluginStatus::Crashed(_) | PluginStatus::Stopped) =>
+            || matches!(app.agent_status, PluginStatus::Crashed(_) | PluginStatus::NotStarted(_) | PluginStatus::Stopped) =>
         {
             Catalog::Unavailable
         }
@@ -380,6 +380,7 @@ fn plugin_rows(app: &SpaceApp) -> Vec<PluginRow> {
                 (true, Some(PluginStatus::Running)) => "Running".into(),
                 (true, Some(PluginStatus::Starting)) => "Starting…".into(),
                 (true, Some(PluginStatus::Crashed(m))) => format!("Exited: {}", format::one_line(m)),
+                (true, Some(PluginStatus::NotStarted(m))) => format!("Not started: {}", format::one_line(m)),
                 (true, _) => "Not running".into(),
             };
             PluginRow {
@@ -482,6 +483,7 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
 fn agent_problem(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
     let message = match (&app.agent_status, &thread.error) {
         (PluginStatus::Crashed(msg), _) => format!("The agent exited: {}", format::one_line(msg)),
+        (PluginStatus::NotStarted(msg), _) => format!("The agent can't run: {}", format::one_line(msg)),
         (_, Some(err)) => format!("Couldn't start a session: {}", format::one_line(err)),
         (_, None) if app.agent_id.is_none() => "No agent plugin is installed.".to_string(),
         _ => return None,

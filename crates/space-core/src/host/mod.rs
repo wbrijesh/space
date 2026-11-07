@@ -36,6 +36,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use space_protocol::PROTOCOL_VERSION;
 use space_protocol::service::{CatalogEntry, SettingField, SettingValues};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
@@ -57,6 +58,8 @@ pub enum PluginStatus {
     Running,
     /// Exited unexpectedly or failed to start.
     Crashed(String),
+    /// Space won't start it, and says why (e.g. it was built for another protocol version).
+    NotStarted(String),
 }
 
 impl PluginStatus {
@@ -66,6 +69,7 @@ impl PluginStatus {
             PluginStatus::Starting => "starting",
             PluginStatus::Running => "running",
             PluginStatus::Crashed(_) => "crashed",
+            PluginStatus::NotStarted(_) => "not started",
         }
     }
 }
@@ -162,6 +166,8 @@ struct HostInner {
     sessions: Mutex<HashMap<SessionId, SessionMeta>>,
     /// Recent crash times by service id.
     crashes: Mutex<HashMap<String, VecDeque<Instant>>>,
+    /// The last status reported for each plugin.
+    statuses: Mutex<HashMap<String, PluginStatus>>,
 }
 
 impl Host {
@@ -182,6 +188,7 @@ impl Host {
                 catalogs: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashMap::new()),
                 crashes: Mutex::new(HashMap::new()),
+                statuses: Mutex::new(HashMap::new()),
             }),
         };
         host.discover();
@@ -199,11 +206,44 @@ impl HostInner {
     }
 
     fn emit_status(&self, plugin_id: &str, status: PluginStatus) {
+        self.statuses.lock().unwrap().insert(plugin_id.to_string(), status.clone());
         self.emit(HostEvent::PluginStatus { plugin_id: plugin_id.to_string(), status });
+    }
+
+    /// A plugin process ended. Killing a plugin that failed to start or was refused doesn't
+    /// hide why.
+    fn emit_exit(&self, plugin_id: &str, status: PluginStatus) {
+        let current = self.statuses.lock().unwrap().get(plugin_id).cloned();
+        if status == PluginStatus::Stopped && matches!(current, Some(PluginStatus::Crashed(_) | PluginStatus::NotStarted(_))) {
+            return;
+        }
+        self.emit_status(plugin_id, status);
     }
 
     fn emit_session(&self, session_id: &str, event: SessionEvent) {
         self.emit(HostEvent::Session { session_id: session_id.to_string(), event });
+    }
+}
+
+/// Why Space won't run a plugin: its status becomes [`PluginStatus::NotStarted`].
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct Refused(String);
+
+/// The status for a plugin that failed to start.
+fn start_failure(e: &anyhow::Error) -> PluginStatus {
+    match e.downcast_ref::<Refused>() {
+        Some(r) => PluginStatus::NotStarted(r.0.clone()),
+        None => PluginStatus::Crashed(format!("{e:#}")),
+    }
+}
+
+/// Refuse a plugin built for another [`PROTOCOL_VERSION`]. `None`: it didn't say.
+fn check_protocol(version: Option<u32>) -> Result<(), Refused> {
+    match version {
+        Some(PROTOCOL_VERSION) => Ok(()),
+        Some(v) => Err(Refused(format!("Built for Space protocol v{v}; this Space speaks v{PROTOCOL_VERSION}."))),
+        None => Err(Refused(format!("It doesn't say which Space protocol it speaks (this Space speaks v{PROTOCOL_VERSION})."))),
     }
 }
 
@@ -215,5 +255,21 @@ fn exit_status(kind: ExitKind, tail: &[String]) -> PluginStatus {
             let last = tail.last().map(|l| format!(": {l}")).unwrap_or_default();
             PluginStatus::Crashed(format!("exited with {code}{last}"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn protocol_versions() {
+        assert!(check_protocol(Some(PROTOCOL_VERSION)).is_ok());
+        let other = check_protocol(Some(PROTOCOL_VERSION + 1)).unwrap_err();
+        assert!(other.0.contains(&format!("v{}", PROTOCOL_VERSION + 1)));
+        assert!(check_protocol(None).is_err());
+        let refused: anyhow::Error = other.into();
+        assert!(matches!(start_failure(&refused), PluginStatus::NotStarted(_)));
+        assert!(matches!(start_failure(&anyhow::anyhow!("boom")), PluginStatus::Crashed(_)));
     }
 }

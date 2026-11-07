@@ -12,7 +12,7 @@ use space_plugin::rpc::{self, Peer, RpcError};
 use space_protocol::service::{self as svc, SettingField, SettingKind, SettingValues};
 use space_protocol::{CAP_CONTEXT, CAP_SANDBOX, CAP_SETTINGS, Confine, ContextSection};
 
-use super::{Host, HostEvent, HostInner, PluginStatus, SettingError, SettingState, exit_status};
+use super::{Host, HostEvent, HostInner, PluginStatus, SettingError, SettingState, check_protocol, exit_status, start_failure};
 use crate::discovery::DiscoveredPlugin;
 use crate::process::{self, PluginProcess};
 
@@ -218,9 +218,8 @@ impl HostInner {
                 Ok(service)
             }
             Err(e) => {
-                let message = format!("{e:#}");
-                self.emit_status(plugin_id, PluginStatus::Crashed(message.clone()));
-                Err(message)
+                self.emit_status(plugin_id, start_failure(&e));
+                Err(format!("{e:#}"))
             }
         }
     }
@@ -247,7 +246,7 @@ impl HostInner {
                         if matches!(status, PluginStatus::Crashed(_)) {
                             host.crashed(&exit_id);
                         }
-                        host.emit_status(&exit_id, status);
+                        host.emit_exit(&exit_id, status);
                     }
                 },
             )?
@@ -287,11 +286,12 @@ impl HostInner {
         let mut service = Service { plugin, peer, _process: process, dead, fields };
         let (settings, unreadable) = self.setting_values(&service).await;
         let init = svc::Initialize { protocol_version: svc::PROTOCOL_VERSION, settings, unreadable };
-        let _: svc::Initialized = service
+        let initialized: svc::Initialized = service
             .peer
             .call(svc::INITIALIZE, &init, Some(SERVICE_TIMEOUT))
             .await
             .map_err(|e| fail(svc::INITIALIZE, e))?;
+        check_protocol(initialized.protocol_version)?;
         service.fields.retain(|f| !f.key.is_empty());
         let service = Arc::new(service);
         self.services.lock().unwrap().insert(plugin_id.clone(), service.clone());

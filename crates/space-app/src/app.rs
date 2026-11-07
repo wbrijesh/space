@@ -425,7 +425,7 @@ impl SpaceApp {
                     self.plugin_status.insert(plugin_id, status);
                     return;
                 }
-                if matches!(status, PluginStatus::Stopped | PluginStatus::Crashed(_)) {
+                if matches!(status, PluginStatus::Stopped | PluginStatus::Crashed(_) | PluginStatus::NotStarted(_)) {
                     self.agent = None;
                 }
                 self.agent_status = status;

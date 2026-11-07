@@ -8,14 +8,14 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context as _, Result, anyhow, bail};
 use space_protocol::acp::{self, Agent, ByteStreams, Client};
 use space_protocol::acp_schema as schema;
-use space_protocol::ext::CONTEXT_META_KEY;
+use space_protocol::ext::{CONTEXT_META_KEY, PROTOCOL_VERSION_META_KEY};
 use space_protocol::service::HistoryItem;
-use space_protocol::{Confine, ConfineResult, ConfigureSession, PreExecute, SpaceStatus};
+use space_protocol::{Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SpaceStatus};
 use tokio::sync::oneshot;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use super::pipeline::{SessionMeta, pre_execute};
-use super::{Host, HostEvent, HostInner, PluginStatus, exit_status};
+use super::{Host, HostEvent, HostInner, PluginStatus, check_protocol, exit_status, start_failure};
 use crate::convert;
 use crate::discovery::DiscoveredPlugin;
 use crate::process::{self, PluginProcess};
@@ -37,7 +37,7 @@ impl Host {
         let result = result.map_err(|e| anyhow!("agent start task failed: {e}")).and_then(|r| r);
         match &result {
             Ok(_) => inner.emit_status(&id, PluginStatus::Running),
-            Err(e) => inner.emit_status(&id, PluginStatus::Crashed(format!("{e:#}"))),
+            Err(e) => inner.emit_status(&id, start_failure(e)),
         }
         result
     }
@@ -141,7 +141,7 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
             move |line| log_host.emit(HostEvent::PluginLog { plugin_id: log_id.clone(), line }),
             move |kind, tail| {
                 exit_shared.dead.store(true, Ordering::SeqCst);
-                exit_shared.host.emit_status(&exit_shared.plugin_id, exit_status(kind, &tail));
+                exit_shared.host.emit_exit(&exit_shared.plugin_id, exit_status(kind, &tail));
             },
         )?
     };
@@ -237,13 +237,21 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
     }
     let conn = conn_rx.await.context("ACP connection closed before it started")?;
 
+    let mut meta = schema::Meta::new();
+    meta.insert(PROTOCOL_VERSION_META_KEY.into(), PROTOCOL_VERSION.into());
     let init = schema::InitializeRequest::new(acp::schema::ProtocolVersion::V1)
-        .client_info(schema::Implementation::new("space", env!("CARGO_PKG_VERSION")));
+        .client_info(schema::Implementation::new("space", env!("CARGO_PKG_VERSION")))
+        .meta(meta);
     let init = conn
         .send_request(init)
         .block_task()
         .await
         .map_err(|e| acp_error("initialize", e, &process))?;
+    // An agent that speaks the `_space/*` methods says which protocol version; a plain ACP
+    // agent doesn't, and runs without them.
+    if let Some(version) = init.meta.as_ref().and_then(|m| m.get(PROTOCOL_VERSION_META_KEY)) {
+        check_protocol(version.as_u64().map(|v| v as u32))?;
+    }
     let agent_name = init.agent_info.as_ref().map(|i| i.title.clone().unwrap_or_else(|| i.name.clone()));
 
     Ok(AgentHandle { inner: Arc::new(AgentInner { plugin_id, conn, process, shared, agent_name }) })

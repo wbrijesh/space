@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::ext::ContextSection;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub use crate::PROTOCOL_VERSION;
 
 pub const INITIALIZE: &str = "plugin/initialize";
 pub const SETTINGS_SCHEMA: &str = "settings/schema";
@@ -60,6 +60,10 @@ pub struct Initialize {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Initialized {
+    /// The [`PROTOCOL_VERSION`] the plugin was built for (the host refuses a mismatch). The
+    /// Rust SDK fills it in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_version: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }

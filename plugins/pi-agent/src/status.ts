@@ -2,41 +2,13 @@
 
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS, type ThinkingLevelName } from "./env.js";
-
-/** Space extension notification carrying the session's model info. */
-export const SPACE_STATUS = "_space/status";
-/** Space extension request switching a session's model and/or thinking level. */
-export const SPACE_CONFIGURE = "_space/session/configure";
-
-export interface ModelInfo {
-	provider: string;
-	id: string;
-	name?: string;
-}
-
-export interface SpaceStatus {
-	sessionId: string;
-	provider?: string;
-	model?: string;
-	thinkingLevel?: string;
-	availableModels?: ModelInfo[];
-	thinkingLevels?: string[];
-	contextTokens?: number;
-	contextWindow?: number;
-}
-
-export interface ConfigureParams {
-	sessionId: string;
-	provider?: string;
-	model?: string;
-	thinkingLevel?: string;
-}
+import type { ConfigureSession, ModelInfo, SpaceStatus } from "./generated/protocol.js";
 
 function str(v: unknown): string | undefined {
 	return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
-export function parseConfigureParams(raw: unknown): ConfigureParams {
+export function parseConfigureParams(raw: unknown): ConfigureSession {
 	const p = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
 	const sessionId = str(p.sessionId);
 	if (!sessionId) throw new Error("sessionId is required");
@@ -98,7 +70,7 @@ export function sessionStatus(sessionId: string, session: AgentSession): SpaceSt
 }
 
 /** Apply a configure request to `session`. Throws a readable Error on invalid input. */
-export async function configureSession(session: AgentSession, params: ConfigureParams): Promise<void> {
+export async function configureSession(session: AgentSession, params: ConfigureSession): Promise<void> {
 	if (params.model) {
 		const provider = params.provider ?? session.model?.provider;
 		if (!provider) throw new Error("provider is required: the session has no current model");

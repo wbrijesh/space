@@ -8,9 +8,19 @@ import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { type AgentConfig, ensureClaudeOnPath, isolatePiConfig, loadConfig, log } from "./env.js";
-import { CONFINE, contextFromMeta, type HostLink, PRE_EXECUTE, type PreExecuteResult } from "./host.js";
+import {
+	CONFIGURE_METHOD,
+	CONFINE_METHOD,
+	type ConfineResult,
+	PRE_EXECUTE_METHOD,
+	type PreExecuteResult,
+	PROTOCOL_VERSION,
+	PROTOCOL_VERSION_META_KEY,
+	STATUS_METHOD,
+} from "./generated/protocol.js";
+import { contextFromMeta, type HostLink } from "./host.js";
 import { createPiSession, type PiSession } from "./pi.js";
-import { configureSession, parseConfigureParams, SPACE_CONFIGURE, SPACE_STATUS, sessionStatus } from "./status.js";
+import { configureSession, parseConfigureParams, sessionStatus } from "./status.js";
 import { promptText, textToolContent, toolKind, toolResultText, toolTitle } from "./translate.js";
 
 const VERSION: string = (() => {
@@ -43,8 +53,8 @@ log(`v${VERSION} starting; model=${config.provider}/${config.modelId} thinking=$
 
 /** The host's pipeline over this ACP connection (requests to the client). */
 const host: HostLink = {
-	preExecute: (params) => connection.client.request<PreExecuteResult>(PRE_EXECUTE, params),
-	confine: (params) => connection.client.request<{ argv: string[] }>(CONFINE, params),
+	preExecute: (params) => connection.client.request<PreExecuteResult>(PRE_EXECUTE_METHOD, params),
+	confine: (params) => connection.client.request<ConfineResult>(CONFINE_METHOD, params),
 };
 
 /** Readable message for a failed pi turn, mapped to a JSON-RPC error. */
@@ -74,6 +84,8 @@ const app = acp
 			},
 			agentInfo: { name: "pi-agent", title: "Pi Agent", version: VERSION },
 			authMethods: [],
+			// The Space protocol this build speaks (the host refuses a mismatch).
+			_meta: { [PROTOCOL_VERSION_META_KEY]: PROTOCOL_VERSION },
 		};
 	})
 	.onRequest(acp.methods.agent.session.new, async ({ params, client }) => {
@@ -90,7 +102,7 @@ const app = acp
 		// Sent after the response is written so the client already knows the sessionId.
 		setImmediate(() => {
 			client
-				.notify(SPACE_STATUS, sessionStatus(sessionId, pi.session))
+				.notify(STATUS_METHOD, sessionStatus(sessionId, pi.session))
 				.catch((error: unknown) => log("failed to send _space/status:", error));
 		});
 		return { sessionId };
@@ -163,7 +175,7 @@ const app = acp
 		await outbox;
 		// Context usage changed; the model may have too (e.g. a retry fallback).
 		await client
-			.notify(SPACE_STATUS, sessionStatus(sessionId, session))
+			.notify(STATUS_METHOD, sessionStatus(sessionId, session))
 			.catch((error: unknown) => log("failed to send _space/status:", error));
 
 		if (turn.cancelled) return { stopReason: "cancelled" };
@@ -184,7 +196,7 @@ const app = acp
 				return { stopReason: "end_turn" };
 		}
 	})
-	.onRequest(SPACE_CONFIGURE, parseConfigureParams, async ({ params }) => {
+	.onRequest(CONFIGURE_METHOD, parseConfigureParams, async ({ params }) => {
 		const state = sessions.get(params.sessionId);
 		if (!state) throw acp.RequestError.sessionNotFound(params.sessionId);
 		if (state.turn) throw acp.RequestError.invalidRequest(undefined, "Cannot reconfigure while a prompt is running");

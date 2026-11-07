@@ -11,35 +11,21 @@
 import type { BashOperations, ExtensionFactory, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createBashToolDefinition, createLocalBashOperations } from "@earendil-works/pi-coding-agent";
 import { log } from "./env.js";
+import {
+	CONTEXT_META_KEY,
+	type Confine,
+	type ConfineResult,
+	type ContextSection,
+	type JsonValue,
+	type PreExecute,
+	type PreExecuteResult,
+} from "./generated/protocol.js";
 import { toolKind } from "./translate.js";
-
-export const PRE_EXECUTE = "_space/tools/preExecute";
-export const CONFINE = "_space/sandbox/confine";
-export const CONTEXT_META_KEY = "space/context";
-
-export interface PreExecuteParams {
-	sessionId: string;
-	toolCallId: string;
-	tool: string;
-	kind: string;
-	args: unknown;
-	cwd?: string;
-}
-
-export interface PreExecuteResult {
-	decision: "allow" | "deny";
-	reason?: string;
-}
-
-export interface ContextSection {
-	id: string;
-	text: string;
-}
 
 /** What pi-agent asks of the host. `main.ts` backs it with the ACP connection; tests fake it. */
 export interface HostLink {
-	preExecute(params: PreExecuteParams): Promise<PreExecuteResult>;
-	confine(params: { sessionId: string; argv: string[]; cwd: string }): Promise<{ argv: string[] }>;
+	preExecute(params: PreExecute): Promise<PreExecuteResult>;
+	confine(params: Confine): Promise<ConfineResult>;
 }
 
 /** Context sections from a prompt's `_meta` (anything malformed is ignored). */
@@ -85,12 +71,12 @@ export class HostBridge {
 				}
 			});
 			pi.on("tool_call", async (event) => {
-				const params: PreExecuteParams = {
+				const params: PreExecute = {
 					sessionId: this.sessionId,
 					toolCallId: event.toolCallId,
 					tool: event.toolName,
 					kind: toolKind(event.toolName),
-					args: event.input,
+					args: event.input as JsonValue,
 				};
 				let result: PreExecuteResult;
 				try {

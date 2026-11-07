@@ -3,12 +3,22 @@
 //! * [`manifest`] — the `space-plugin.toml` plugin manifest.
 //! * [`ext`] — Space-specific ACP extension methods (`_space/*`) and payloads.
 //! * [`service`] — the JSON-RPC protocol between the host and service plugins.
+//!
+//! These Rust types are the only definition of the protocol. TypeScript plugins use bindings
+//! generated from them (`plugins/pi-agent/src/generated/protocol.ts`; `just protocol`
+//! regenerates it, and a test fails while it is stale).
 //! * [`acp`] — re-export of the [`agent_client_protocol`] crate, so downstream crates
 //!   use exactly the ACP version Space was built against.
 
 pub mod ext;
 pub mod manifest;
 pub mod service;
+mod typescript;
+
+/// Version of Space's own protocol: the `_space/*` ACP extensions and the service-plugin
+/// protocol. Plugins report the version they were built for when they start, and a plugin on
+/// another version is refused. Bump it on any incompatible change to either.
+pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Re-export of the Agent Client Protocol SDK.
 pub use agent_client_protocol as acp;

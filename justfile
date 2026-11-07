@@ -67,3 +67,7 @@ smoke-stub prompt="hello, permission please":
     printf 'id="stub"\nname="Stub Agent"\nversion="0.1.0"\nprovides=["agent"]\n[run]\ncommand="%s"\n' \
         "{{project}}/target/debug/space-stub-agent" > "$dir/space-plugin.toml"
     SPACE_PLUGIN_DIRS="$(dirname "$dir")" ./target/debug/Space --smoke "{{prompt}}" --allow {{project}}
+
+# Regenerate the TypeScript protocol bindings (plugins/pi-agent/src/generated) from the Rust types
+protocol:
+    SPACE_WRITE_PROTOCOL=1 cargo test -p space-protocol typescript_bindings_are_current

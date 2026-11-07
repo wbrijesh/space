@@ -200,7 +200,7 @@ impl Plugin for Permissions {
         self.inner.set_key(init.settings.get(API_KEY).cloned(), unreadable);
         tokio::spawn(self.inner.clone().probe_loop());
         eprintln!("ready; sandbox tmpdir {}", self.inner.tmpdir);
-        Ok(Initialized { name: Some("Permissions".into()) })
+        Ok(Initialized { name: Some("Permissions".into()), ..Default::default() })
     }
 
     fn settings_schema(&self) -> SettingsSchema {

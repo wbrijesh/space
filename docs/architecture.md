@@ -98,9 +98,16 @@ Space extensions:
 
 Service plugins speak [`space_protocol::service`]; the Rust SDK is `crates/space-plugin`.
 
+The Rust types in `space-protocol` are the only definition of Space's protocol. TypeScript
+plugins import bindings generated from them (`plugins/pi-agent/src/generated/protocol.ts`):
+`just protocol` rewrites the file, and `cargo test` fails while it is stale. Both kinds of
+plugin report `PROTOCOL_VERSION` when they start (agents in `initialize`'s
+`_meta["space/protocolVersion"]`; a plain ACP agent leaves it out), and a plugin built for
+another version is not started.
+
 | Method | Direction | When |
 |---|---|---|
-| `plugin/initialize` | host → plugin | first, with every setting's value (and any unreadable secrets) |
+| `plugin/initialize` | host → plugin | first, with every setting's value (and any unreadable secrets); the plugin answers with the `protocolVersion` it was built for (the SDK fills it in) and is refused on a mismatch |
 | `settings/schema` | host → plugin | `provides settings`: the fields |
 | `settings/validate` | host → plugin | before a new value is stored: `ok`, `invalid` (not stored) or `unverifiable` (stored only if the user saves anyway) |
 | `settings/changed` | host → plugin | the user changed a setting |

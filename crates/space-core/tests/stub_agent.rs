@@ -249,3 +249,19 @@ async fn configure_switches_model_and_thinking() {
         .unwrap_err();
     assert!(format!("{err:#}").contains("configure"), "{err:#}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_on_another_protocol_version_is_refused() {
+    let tmp = stub_root();
+    let manifest = tmp.path().join("stub/space-plugin.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(&manifest, format!("{text}[run.env]\nSPACE_STUB_PROTOCOL = '999'\n")).unwrap();
+    let (host, mut events) = host(tmp.path());
+    let err = host.start_agent("stub").await.err().expect("refused");
+    assert!(err.to_string().contains("protocol v999"), "{err:#}");
+    let (mut state, mut seen) = (SessionState::default(), Vec::new());
+    until(&mut events, &mut state, &mut seen, |e| {
+        matches!(e, HostEvent::PluginStatus { status: PluginStatus::NotStarted(m), .. } if m.contains("v999"))
+    })
+    .await;
+}

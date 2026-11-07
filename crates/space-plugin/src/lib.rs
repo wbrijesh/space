@@ -144,7 +144,8 @@ async fn handle<P: Plugin>(plugin: &P, host: &OnceLock<Host>, method: &str, para
         INITIALIZE => {
             let init: Initialize = rpc::params(params)?;
             let host = host.get().cloned().ok_or_else(|| RpcError::internal("not connected"))?;
-            rpc::result(plugin.initialize(init, host).await?)
+            let initialized = plugin.initialize(init, host).await?;
+            rpc::result(Initialized { protocol_version: Some(PROTOCOL_VERSION), ..initialized })
         }
         SETTINGS_SCHEMA => rpc::result(plugin.settings_schema()),
         SETTINGS_VALIDATE => rpc::result(plugin.validate_setting(rpc::params(params)?).await?),
@@ -199,7 +200,7 @@ mod tests {
         async fn initialize(&self, init: Initialize, host: Host) -> Result<Initialized, RpcError> {
             *self.settings.lock().unwrap() = init.settings;
             let _ = self.host.set(host);
-            Ok(Initialized { name: Some("demo".into()) })
+            Ok(Initialized { name: Some("demo".into()), ..Default::default() })
         }
         fn settings_changed(&self, changed: SettingsChanged) {
             *self.settings.lock().unwrap() = changed.values;
@@ -224,6 +225,7 @@ mod tests {
         let init: Initialized =
             host.call(INITIALIZE, &Initialize { protocol_version: PROTOCOL_VERSION, ..Default::default() }, None).await.unwrap();
         assert_eq!(init.name.as_deref(), Some("demo"));
+        assert_eq!(init.protocol_version, Some(PROTOCOL_VERSION));
         let cat: Catalog = host.call(CATALOG_GET, &CatalogName { name: "modes".into() }, None).await.unwrap();
         assert!(!cat.entries[0].ready);
 

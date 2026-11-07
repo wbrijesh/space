@@ -17,9 +17,14 @@ pub const PRE_EXECUTE_METHOD: &str = "_space/tools/preExecute";
 pub const CONFINE_METHOD: &str = "_space/sandbox/confine";
 /// `_meta` key of a `session/prompt` carrying the prompt's hidden [`ContextSection`]s.
 pub const CONTEXT_META_KEY: &str = "space/context";
+/// `_meta` key of ACP `initialize` carrying [`crate::PROTOCOL_VERSION`], both ways. An agent that
+/// speaks the `_space/*` methods answers with the version it was built for, and the host refuses
+/// it on a mismatch; a plain ACP agent leaves it out.
+pub const PROTOCOL_VERSION_META_KEY: &str = "space/protocolVersion";
 
 /// A model the agent can switch a session to.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
     pub provider: String,
@@ -47,6 +52,7 @@ pub struct ModelInfo {
     JsonRpcResponse,
 )]
 #[notification(method = "_space/status")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceStatus {
     pub session_id: String,
@@ -105,6 +111,7 @@ impl SpaceStatus {
 /// change (a thinking level the model does not support may be clamped).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
 #[request(method = "_space/session/configure", response = SpaceStatus)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigureSession {
     pub session_id: String,
@@ -121,6 +128,7 @@ pub struct ConfigureSession {
 /// can take as long as the user does. An agent that gets an error must not run the call.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
 #[request(method = "_space/tools/preExecute", response = PreExecuteResult)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 #[serde(rename_all = "camelCase")]
 pub struct PreExecute {
     pub session_id: String,
@@ -139,6 +147,7 @@ pub struct PreExecute {
 
 /// The answer to [`PreExecute`]: `allow` or `deny` (an "ask" has already been put to the user).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcResponse)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 #[serde(rename_all = "camelCase")]
 pub struct PreExecuteResult {
     pub decision: Verdict,
@@ -148,6 +157,7 @@ pub struct PreExecuteResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum Verdict {
     Allow,
@@ -159,6 +169,7 @@ pub enum Verdict {
 /// spawn the command.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
 #[request(method = "_space/sandbox/confine", response = ConfineResult)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 #[serde(rename_all = "camelCase")]
 pub struct Confine {
     pub session_id: String,
@@ -167,6 +178,7 @@ pub struct Confine {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcResponse)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct ConfineResult {
     pub argv: Vec<String>,
@@ -175,6 +187,7 @@ pub struct ConfineResult {
 /// Hidden text a plugin adds to a prompt (the agent puts it in its system prompt, never in
 /// the user's message or the transcript).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct ContextSection {
     /// Stable id (the agent may use it as a prompt-section name).

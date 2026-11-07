@@ -25,8 +25,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use space_core::stub_script::{SCRIPT_ENV, Step, StubScript};
-use space_protocol::ext::CONTEXT_META_KEY;
-use space_protocol::{Confine, ConfigureSession, ModelInfo, PreExecute, SpaceStatus, Verdict};
+use space_protocol::ext::{CONTEXT_META_KEY, PROTOCOL_VERSION_META_KEY};
+use space_protocol::{Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, SpaceStatus, Verdict};
 use space_protocol::acp::{self, Agent, ByteStreams, Client, Responder};
 use space_protocol::acp_schema::*;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -48,6 +48,8 @@ struct StubSession {
     context_tokens: u64,
 }
 
+/// Overrides the Space protocol version the stub reports.
+const PROTOCOL_ENV: &str = "SPACE_STUB_PROTOCOL";
 const MODELS: [(&str, &str); 2] = [("stub-model", "Stub Model"), ("stub-fast", "Stub Fast")];
 const LEVELS: [&str; 4] = ["low", "medium", "high", "max"];
 impl State {
@@ -98,9 +100,14 @@ async fn main() -> acp::Result<()> {
         .name("space-stub-agent")
         .on_receive_request(
             async |req: InitializeRequest, responder, _cx| {
+                // The Space protocol it speaks; tests set another to see it refused.
+                let version = std::env::var(PROTOCOL_ENV).ok().and_then(|v| v.parse().ok()).unwrap_or(PROTOCOL_VERSION);
+                let mut meta = Meta::new();
+                meta.insert(PROTOCOL_VERSION_META_KEY.into(), version.into());
                 responder.respond(
                     InitializeResponse::new(req.protocol_version)
-                        .agent_info(Implementation::new("space-stub-agent", env!("CARGO_PKG_VERSION"))),
+                        .agent_info(Implementation::new("space-stub-agent", env!("CARGO_PKG_VERSION")))
+                        .meta(meta),
                 )
             },
             acp::on_receive_request!(),

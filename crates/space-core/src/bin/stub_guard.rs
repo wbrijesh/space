@@ -78,7 +78,7 @@ impl Plugin for Guard {
             });
         }
         let _ = self.host.set(host);
-        Ok(Initialized { name: Some("stub guard".into()) })
+        Ok(Initialized { name: Some("stub guard".into()), ..Default::default() })
     }
 
     fn settings_schema(&self) -> SettingsSchema {

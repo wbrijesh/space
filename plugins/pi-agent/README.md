@@ -6,7 +6,8 @@ The first Space plugin. It is an [ACP](https://agentclientprotocol.com) agent wr
 via the signed-in Claude Code CLI (`claude --print`), so it uses your Claude subscription. You don't need
 an API key.
 
-The contract with the harness (manifest, ACP subset, `_space/status`) is in
+The `_space/*` types and method names come from `src/generated/protocol.ts`, generated from the
+Rust types (`just protocol`; never edit it by hand). The contract with the harness (manifest, ACP subset, `_space/status`) is in
 [`docs/architecture.md`](../../docs/architecture.md).
 
 ## How it works
@@ -22,7 +23,7 @@ Space harness (ACP client) ──stdin/stdout NDJSON──▶ node dist/main.js
 
 | ACP | Behaviour |
 |---|---|
-| `initialize` | Returns `protocolVersion: 1`, `loadSession: false`, `agentInfo {name: "pi-agent", version}` |
+| `initialize` | Returns `protocolVersion: 1`, `loadSession: false`, `agentInfo {name: "pi-agent", version}`, and the Space protocol version in `_meta["space/protocolVersion"]` |
 | `session/new {cwd}` | Creates an isolated pi session for `cwd`, then sends the `_space/status` notification (`provider`, `model`, `thinkingLevel`, `availableModels`, `thinkingLevels`, context usage). No ACP modes: permission modes belong to the host. |
 | `session/prompt` | Joins the text blocks (other block types are described inline) and runs `session.prompt()`. Hidden context sections in `_meta["space/context"]` go into the run's system prompt. It streams pi events as `session/update` notifications and resolves with `end_turn`, `cancelled` or `max_tokens`. Provider errors become a JSON-RPC error (-32603) carrying pi's message, for example the claude-cli usage-credit stop. |
 | `session/cancel` | `session.abort()`; the pending prompt resolves with `cancelled` |
