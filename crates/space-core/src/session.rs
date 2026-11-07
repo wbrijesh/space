@@ -42,6 +42,8 @@ pub struct ToolCallInfo {
     pub output: String,
     /// File paths the tool touches.
     pub locations: Vec<String>,
+    /// The host's tool pipeline stopped this call, and why.
+    pub blocked: Option<String>,
 }
 
 /// Partial update to a tool call; `None` fields are unchanged.
@@ -116,6 +118,8 @@ pub enum SessionEvent {
     Plan(Vec<PlanEntry>),
     Status(SpaceStatus),
     PermissionRequested(PermissionRequest),
+    /// The host's tool pipeline denied a tool call (a guard plugin, or the user via its card).
+    ToolCallBlocked { id: String, reason: String },
     PermissionResolved { request_id: u64, decision: PermissionDecision },
     /// The prompt request settled. `stop_reason` is the ACP stop reason (`end_turn`,
     /// `cancelled`, ...) or `error`.
@@ -175,7 +179,9 @@ impl SessionState {
             },
             SessionEvent::ToolCall(call) => {
                 if let Some(existing) = self.tool_mut(&call.id) {
+                    let blocked = existing.blocked.take();
                     *existing = call.clone();
+                    existing.blocked = existing.blocked.take().or(blocked);
                 } else {
                     self.items.push(TranscriptItem::Tool(call.clone()));
                 }
@@ -192,6 +198,7 @@ impl SessionState {
                         status: ToolStatus::Pending,
                         output: String::new(),
                         locations: Vec::new(),
+                        blocked: None,
                     };
                     patch_tool(&mut call, patch);
                     self.items.push(TranscriptItem::Tool(call));
@@ -207,6 +214,18 @@ impl SessionState {
                 }
             }
             SessionEvent::Status(status) => self.status.merge(status),
+            SessionEvent::ToolCallBlocked { id, reason } => match self.tool_mut(id) {
+                Some(call) => call.blocked = Some(reason.clone()),
+                None => self.items.push(TranscriptItem::Tool(ToolCallInfo {
+                    id: id.clone(),
+                    title: String::new(),
+                    kind: "other".into(),
+                    status: ToolStatus::Failed,
+                    output: String::new(),
+                    locations: Vec::new(),
+                    blocked: Some(reason.clone()),
+                })),
+            },
             SessionEvent::PermissionRequested(request) => {
                 self.items.push(TranscriptItem::Permission { request: request.clone(), resolved: None })
             }
@@ -292,6 +311,7 @@ mod tests {
                 status: ToolStatus::Pending,
                 output: String::new(),
                 locations: vec![],
+                blocked: None,
             })),
             ev(SessionEvent::ToolCallUpdate(ToolCallPatch {
                 id: "t1".into(),
@@ -317,6 +337,32 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(s.items[4], TranscriptItem::Agent("Done".into()));
+    }
+
+    #[test]
+    fn blocked_calls_keep_their_reason() {
+        let mut s = SessionState::new("s1");
+        // The block can arrive before the agent reports the call.
+        s.apply(&SessionEvent::ToolCallBlocked { id: "t".into(), reason: "no".into() });
+        s.apply(&SessionEvent::ToolCall(ToolCallInfo {
+            id: "t".into(),
+            title: "bash: rm".into(),
+            kind: "execute".into(),
+            status: ToolStatus::InProgress,
+            output: String::new(),
+            locations: vec![],
+            blocked: None,
+        }));
+        s.apply(&SessionEvent::ToolCallUpdate(ToolCallPatch {
+            id: "t".into(),
+            status: Some(ToolStatus::Failed),
+            ..Default::default()
+        }));
+        let [TranscriptItem::Tool(t)] = s.items.as_slice() else { panic!("{:?}", s.items) };
+        assert_eq!((t.title.as_str(), t.blocked.as_deref(), t.status), ("bash: rm", Some("no"), ToolStatus::Failed));
+        // After the agent's report, too.
+        s.apply(&SessionEvent::ToolCallBlocked { id: "t".into(), reason: "again".into() });
+        assert_eq!(s.items.len(), 1);
     }
 
     #[test]

@@ -141,6 +141,8 @@ struct HostInner {
     services: Mutex<HashMap<String, Arc<Service>>>,
     /// When each service was last (re)started, for the restart backoff.
     started_at: Mutex<HashMap<String, Instant>>,
+    /// One start at a time per service: concurrent callers wait for it instead of failing.
+    start_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Text settings by plugin id (the app persists them; secrets live in the Keychain).
     text_settings: Mutex<HashMap<String, SettingValues>>,
     /// Catalog entries by catalog name.
@@ -185,6 +187,7 @@ impl Host {
                 disabled: Mutex::new(HashSet::new()),
                 services: Mutex::new(HashMap::new()),
                 started_at: Mutex::new(HashMap::new()),
+                start_locks: Mutex::new(HashMap::new()),
                 text_settings: Mutex::new(HashMap::new()),
                 catalogs: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashMap::new()),
@@ -384,6 +387,12 @@ impl HostInner {
 
     /// The running service `plugin_id`, started (or restarted) first if needed.
     async fn service(self: &Arc<Self>, plugin_id: &str) -> Result<Arc<Service>, String> {
+        if let Some(s) = self.services.lock().unwrap().get(plugin_id).filter(|s| s.alive()) {
+            return Ok(s.clone());
+        }
+        let lock = self.start_locks.lock().unwrap().entry(plugin_id.to_string()).or_default().clone();
+        let _starting = lock.lock().await;
+        // Started by whoever held the lock before us?
         if let Some(s) = self.services.lock().unwrap().get(plugin_id).filter(|s| s.alive()) {
             return Ok(s.clone());
         }
@@ -659,6 +668,7 @@ async fn pre_execute(shared: Arc<Shared>, req: PreExecute) -> PreExecuteResult {
                     record(false);
                     let reason = d.reason.unwrap_or_else(|| format!("Blocked by {name}."));
                     tracing::info!("{} {}: denied by {}: {reason}", req.tool, req.tool_call_id, plugin.id());
+                    host.emit_session(&session_id, SessionEvent::ToolCallBlocked { id: req.tool_call_id.clone(), reason: reason.clone() });
                     return PreExecuteResult { decision: Verdict::Deny, reason: Some(reason) };
                 }
                 svc::HookVerdict::Ask => asks.push(d.reason.unwrap_or_else(|| format!("{name} wants you to check this call."))),
@@ -687,7 +697,9 @@ async fn pre_execute(shared: Arc<Shared>, req: PreExecute) -> PreExecuteResult {
     if allowed {
         PreExecuteResult { decision: Verdict::Allow, reason: None }
     } else {
-        PreExecuteResult { decision: Verdict::Deny, reason: Some("The user didn't allow this call.".into()) }
+        let reason = "The user didn't allow this call.".to_string();
+        host.emit_session(&session_id, SessionEvent::ToolCallBlocked { id: req.tool_call_id.clone(), reason: reason.clone() });
+        PreExecuteResult { decision: Verdict::Deny, reason: Some(reason) }
     }
 }
 

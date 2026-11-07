@@ -25,6 +25,9 @@ pub struct Scenario {
     pub settings_page: bool,
     /// Contents of the scenario's settings file (a temp file; never `~/.space/settings.json`).
     pub settings: Option<&'static str>,
+    /// Also run the real permissions plugin (its Keychain items use a scenario-only prefix, so
+    /// no decision-model key is set).
+    pub permissions: bool,
 }
 
 #[derive(Default)]
@@ -35,6 +38,8 @@ pub struct ScenarioThread {
     /// Project-relative folder for the thread (default: the project).
     pub subdir: Option<&'static str>,
     pub draft: Option<String>,
+    /// Permission mode for the thread (with `permissions`).
+    pub mode: Option<&'static str>,
     /// Hold the transcript this many px above the bottom (as if scrolled up) once it's that long.
     pub scrolled_up: Option<f32>,
 }
@@ -52,6 +57,16 @@ fn tool(id: &str, title: &str, kind: &str, status: &str, output: Option<&str>) -
 }
 fn context(tokens: u64) -> Step {
     Step::Context { tokens }
+}
+fn guard(id: &str, title: &str, kind: &str, tool: &str, args: serde_json::Value, output: Option<&str>) -> Step {
+    Step::Guard {
+        id: id.into(),
+        title: title.into(),
+        kind: kind.into(),
+        tool: tool.into(),
+        args,
+        output: output.map(Into::into),
+    }
 }
 fn thread(prompt: &'static str, steps: Vec<Step>) -> ScenarioThread {
     ScenarioThread { prompt: Some(prompt), steps, ..Default::default() }
@@ -224,6 +239,14 @@ pub fn all() -> Vec<Scenario> {
             ..Default::default()
         },
         Scenario {
+            name: "guardrail",
+            description: "Permission modes with the real permissions plugin and no decision-model key: a Read Only \
+                          thread with a blocked edit, and a Workspace Write thread asking (sending is blocked).",
+            threads: vec![read_only_thread(), unchecked_thread()],
+            permissions: true,
+            ..Default::default()
+        },
+        Scenario {
             name: "settings",
             description: "The Settings page (⌘,) with the stub's models and a saved default.",
             threads: vec![explain_thread()],
@@ -234,6 +257,45 @@ pub fn all() -> Vec<Scenario> {
             ..Default::default()
         },
     ]
+}
+
+/// Read Only: inspection runs, the edit is blocked by the permissions plugin.
+fn read_only_thread() -> ScenarioThread {
+    ScenarioThread {
+        mode: Some("read-only"),
+        ..thread(
+            "Why do tool updates sometimes land out of order?",
+            vec![
+                thought("Inspect the reducer and its tests."),
+                guard("t1", "grep: ToolCallUpdate", "search", "grep", serde_json::json!({"pattern": "ToolCallUpdate"}), Some(
+                    "crates/space-core/src/session.rs:184",
+                )),
+                guard("t2", "write: crates/space-core/src/session.rs", "edit", "write", serde_json::json!({
+                    "path": "crates/space-core/src/session.rs", "content": "…"
+                }), None),
+                say("An update for a call the reducer hasn't seen is materialized **at the end** of the transcript. \
+                     I couldn't apply the fix here (Read Only); switch the thread to Workspace Write and I'll make it."),
+                context(36_000),
+            ],
+        )
+    }
+}
+
+/// Workspace Write without the decision model's key: the call is put to the user.
+fn unchecked_thread() -> ScenarioThread {
+    ScenarioThread {
+        mode: Some("workspace-write"),
+        ..thread(
+            "Upgrade node and rerun the build",
+            vec![
+                thought("Upgrade node first."),
+                guard("t1", "bash: brew upgrade node", "execute", "bash", serde_json::json!({"command": "brew upgrade node"}), Some(
+                    "==> Upgrading node",
+                )),
+                say("Upgraded."),
+            ],
+        )
+    }
 }
 
 /// The explain reply three times over, so the transcript always overflows the window.
@@ -315,6 +377,14 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         script_path.display().to_string(),
     );
     std::fs::write(plugin.join("space-plugin.toml"), manifest)?;
+    let permissions = root.join("permissions");
+    let _ = std::fs::remove_dir_all(&permissions);
+    if scenario.permissions {
+        let repo = space_core::discovery::find_repo_root(&Path::new(env!("CARGO_MANIFEST_DIR")).join("x"))
+            .context("the permissions plugin lives in the repo; run scenarios from a checkout")?;
+        std::fs::create_dir_all(&permissions)?;
+        std::fs::copy(repo.join("plugins/permissions/space-plugin.toml"), permissions.join("space-plugin.toml"))?;
+    }
     let settings_path = root.join("settings.json");
     match scenario.settings {
         Some(json) => std::fs::write(&settings_path, json)?,
@@ -335,6 +405,7 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
             prompt: t.prompt.map(Into::into),
             cwd: t.subdir.map(|d| project_dir.join(d)),
             draft: t.draft.clone(),
+            mode: t.mode.map(Into::into),
             scrolled_up: t.scrolled_up,
         })
         .collect();
@@ -377,6 +448,7 @@ mod tests {
             "many-threads",
             "long-composer",
             "scrolled-up",
+            "guardrail",
             "settings",
         ] {
             assert!(find(wanted).is_some(), "missing scenario {wanted}");

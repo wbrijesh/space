@@ -383,6 +383,28 @@ async fn run_script(
                 .block_task()
                 .await?;
             }
+            Step::Guard { id, title, kind, tool, args, output } => {
+                let kind_value: ToolKind = serde_json::from_value(serde_json::json!(kind)).unwrap_or(ToolKind::Other);
+                send(SessionUpdate::ToolCall(ToolCall::new(id.clone(), title).kind(kind_value).status(ToolCallStatus::Pending)))?;
+                let guard = cx
+                    .send_request(PreExecute {
+                        session_id: sid.0.to_string(),
+                        tool_call_id: id.clone(),
+                        tool,
+                        kind,
+                        args,
+                        cwd: None,
+                    })
+                    .block_task()
+                    .await;
+                let (status, text) = match guard {
+                    Ok(r) if r.decision == Verdict::Allow => (ToolCallStatus::Completed, output.unwrap_or_default()),
+                    Ok(r) => (ToolCallStatus::Failed, r.reason.unwrap_or_else(|| "denied".into())),
+                    Err(e) => (ToolCallStatus::Failed, format!("the tool pipeline failed: {e}")),
+                };
+                let content = vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(text)))];
+                send(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id, ToolCallUpdateFields::new().status(status).content(content))))?;
+            }
             Step::Context { tokens } => {
                 if let Some(s) = state.sessions.lock().unwrap().get_mut(&*sid.0) {
                     s.context_tokens = tokens;

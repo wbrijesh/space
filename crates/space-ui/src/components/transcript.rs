@@ -144,6 +144,16 @@ pub fn tool_row(ix: usize, call: &ToolCallInfo, open: bool, on_toggle: ToggleHan
     let (name, detail) = format::tool_parts(&title);
     let has_body = !call.output.trim().is_empty() || !call.locations.is_empty();
     let status: AnyElement = match call.status {
+        // Stopped by the tool pipeline: a calm shield, not an error.
+        _ if call.blocked.is_some() => div()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .text_size(text::XS)
+            .text_color(color::yellow())
+            .child("Blocked")
+            .child(Icon::new(Lucide::ShieldAlert).size(size::ICON_SM))
+            .into_any_element(),
         ToolStatus::InProgress => Spinner::new(size::SPINNER_SM).into_any_element(),
         ToolStatus::Pending => status_dot(color::text_3()).into_any_element(),
         ToolStatus::Completed => status_dot(color::green()).into_any_element(),
@@ -214,7 +224,11 @@ pub fn tool_row(ix: usize, call: &ToolCallInfo, open: bool, on_toggle: ToggleHan
             .when(more > 0, |d| d.child(div().text_color(color::text_3()).child(format!("… {more} more lines"))))
     });
 
-    div().flex().flex_col().child(header).children(body)
+    // Why it was stopped, without opening the row.
+    let reason = call.blocked.as_ref().map(|r| {
+        div().ml(px(30.)).mb_1().text_size(text::SM).text_color(color::text_2()).line_clamp(2).child(r.clone())
+    });
+    div().flex().flex_col().child(header).children(reason).children(body)
 }
 
 /// Pending permission request (Allow/Reject buttons), or a one-line record once answered.
@@ -267,8 +281,12 @@ pub fn permission_card(request: &PermissionRequest, resolved: Option<&Permission
                 .gap_2()
                 .text_size(text::SM)
                 .text_color(color::yellow())
-                .child(Icon::new(IconName::TriangleAlert).size(size::ICON))
-                .child("Permission needed"),
+                .child(if request.reason.is_some() {
+                    Icon::new(Lucide::ShieldAlert).size(size::ICON)
+                } else {
+                    Icon::new(IconName::TriangleAlert).size(size::ICON)
+                })
+                .child(if request.reason.is_some() { "Check this call" } else { "Permission needed" }),
         )
         .child(
             div()
@@ -286,6 +304,9 @@ pub fn permission_card(request: &PermissionRequest, resolved: Option<&Permission
                         .child(detail),
                 ),
         )
+        .when_some(request.reason.clone(), |d, reason| {
+            d.child(div().text_size(text::SM).text_color(color::text_2()).child(reason))
+        })
         .child(buttons)
 }
 
@@ -471,6 +492,40 @@ Invalid manifests are reported, not fatal.";
             status,
             output: output.into(),
             locations: vec![],
+            blocked: None,
+        }
+    }
+
+    /// A call the guardrail stopped.
+    pub fn blocked_tool() -> ToolCallInfo {
+        ToolCallInfo {
+            id: "t2".into(),
+            title: "bash: rm -rf ~/Library/Caches/space-old".into(),
+            kind: "execute".into(),
+            status: ToolStatus::Failed,
+            output: "Blocked by guardrail: it changes files outside the project folder.".into(),
+            locations: vec![],
+            blocked: Some("Blocked by guardrail: it changes files outside the project folder.".into()),
+        }
+    }
+
+    /// The pipeline asking the user, with the guardrail's reason.
+    pub fn guardrail_ask() -> PermissionRequest {
+        PermissionRequest {
+            reason: Some(
+                "The guardrail isn't sure about this call (allow, 64% sure): it changes the system outside the project."
+                    .into(),
+            ),
+            tool_call: space_core::ToolCallPatch {
+                id: "t3".into(),
+                title: Some("bash: brew upgrade node".into()),
+                ..Default::default()
+            },
+            options: vec![
+                PermissionOption { id: "allow".into(), name: "Allow once".into(), kind: PermissionKind::AllowOnce },
+                PermissionOption { id: "reject".into(), name: "Reject".into(), kind: PermissionKind::RejectOnce },
+            ],
+            request_id: 2,
         }
     }
 
@@ -530,8 +585,9 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         .width(w)
     };
 
-    let (t1, t2, t3, t4, t5, t6, t7) = (t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t);
-    let (a1, a2) = (answer.clone(), answer);
+    let (t1, t2, t3, t4, t5, t6, t7, t8) =
+        (t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t);
+    let (a1, a2, a3) = (answer.clone(), answer.clone(), answer);
     vec![
         ComponentPreview::new(Area::Transcript, "Messages", "User bubble and markdown reply.").stacked().examples([
             ex("user", Rc::new(|| user_bubble("Explain how plugin discovery works", &[]))),
@@ -553,6 +609,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             ex("done", Rc::new(move || tool_row(1, &tool(ToolStatus::Completed, TEST_OUTPUT), false, t5.clone()))),
             ex("failed", Rc::new(move || tool_row(2, &tool(ToolStatus::Failed, "error: could not compile"), false, t6.clone()))),
             ex("expanded", Rc::new(move || tool_row(3, &tool(ToolStatus::Completed, TEST_OUTPUT), true, t7.clone()))),
+            ex("blocked by the guardrail", Rc::new(move || tool_row(4, &blocked_tool(), false, t8.clone()))),
         ]),
         ComponentPreview::new(Area::Transcript, "Permission", "Allow/Reject; a one-line record once answered.")
             .stacked()
@@ -562,6 +619,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                     "allowed",
                     Rc::new(move || permission_card(&permission(), Some(&PermissionDecision::Selected("allow".into())), a2.clone())),
                 ),
+                ex("guardrail asks (with its reason)", Rc::new(move || permission_card(&guardrail_ask(), None, a3.clone()))),
             ]),
         ComponentPreview::new(Area::Transcript, "Status items", "Plan, error, divider, working row.").stacked().examples([
             ex(

@@ -70,6 +70,8 @@ pub struct SeedThread {
     pub prompt: Option<String>,
     pub cwd: Option<PathBuf>,
     pub draft: Option<String>,
+    /// Permission mode for the thread (a `permission-modes` id).
+    pub mode: Option<String>,
     /// Dev scenarios: hold the transcript this far above the bottom, as if scrolled up.
     pub scrolled_up: Option<f32>,
 }
@@ -701,6 +703,7 @@ impl SpaceApp {
             if let Some(t) = self.thread_mut(key) {
                 t.queued = s.prompt.map(|p| (p, Vec::new()));
                 t.draft = s.draft.unwrap_or_default();
+                t.mode = s.mode;
             }
             keys.push(key);
             scrolled_up.push(s.scrolled_up);
@@ -1240,9 +1243,13 @@ impl SpaceApp {
 }
 
 /// A thread's permission mode: its own choice, else the default for new threads, else the
-/// catalog's default entry, else its first; ids the catalog doesn't have are skipped. `None`
-/// when there is no catalog.
+/// catalog's default entry, else its first; ids the catalog doesn't have are skipped. Before
+/// the catalog has arrived, the choices are taken as they are (so a Read Only thread is never
+/// sent off in the default mode while the permissions plugin starts).
 pub(crate) fn resolve_mode(entries: &[CatalogEntry], thread: Option<&str>, default: Option<&str>) -> Option<String> {
+    if entries.is_empty() {
+        return thread.or(default).map(str::to_string);
+    }
     let known = |id: &&str| entries.iter().any(|e| e.id == *id);
     thread
         .filter(known)
@@ -1281,7 +1288,9 @@ mod tests {
     fn mode_resolution() {
         let e = |id: &str, default: bool| CatalogEntry { id: id.into(), name: id.into(), default, ..Default::default() };
         let modes = vec![e("read-only", false), e("workspace-write", true), e("full-access", false)];
-        assert_eq!(resolve_mode(&[], Some("read-only"), None), None);
+        assert_eq!(resolve_mode(&[], None, None), None);
+        assert_eq!(resolve_mode(&[], Some("read-only"), None).as_deref(), Some("read-only"));
+        assert_eq!(resolve_mode(&[], None, Some("full-access")).as_deref(), Some("full-access"));
         assert_eq!(resolve_mode(&modes, None, None).as_deref(), Some("workspace-write"));
         assert_eq!(resolve_mode(&modes, None, Some("read-only")).as_deref(), Some("read-only"));
         assert_eq!(resolve_mode(&modes, Some("full-access"), Some("read-only")).as_deref(), Some("full-access"));

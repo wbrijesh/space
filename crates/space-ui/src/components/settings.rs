@@ -600,6 +600,52 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     fn sonnet() -> Option<(String, String)> {
         Some(("claude-cli".into(), "claude-sonnet-5-5".into()))
     }
+    fn modes() -> Vec<CatalogEntry> {
+        super::composer::fixtures::modes("workspace-write", true).entries
+    }
+    /// The permissions plugin's section, its key field over a persistent input.
+    fn key_section(name: &'static str, set: bool) -> Example {
+        Example::new(name, move |window, cx| {
+            let input = window.use_keyed_state(SharedString::from(format!("p-key-{name}")), cx, |window, cx| {
+                InputState::new(window, cx).masked(true).placeholder(if set { "Enter a new key to replace it" } else { "sk-…" })
+            });
+            let field = FieldView {
+                plugin_id: "permissions".into(),
+                key: "openai_api_key".into(),
+                label: "OpenAI API key".into(),
+                description: "For the decision model (gpt-6-luna) that checks every operation in Workspace Write and Full access."
+                    .into(),
+                secret: true,
+                set,
+                input,
+            };
+            section("Permissions", None, vec![field_row(&field, &SettingsHandlers::default(), window).into_any_element()])
+                .into_any_element()
+        })
+        .width(size::CONTENT_MAX_W)
+    }
+    fn plugins() -> Vec<PluginRow> {
+        vec![
+            PluginRow {
+                id: "pi-agent".into(),
+                name: "Pi Agent".into(),
+                description: "Coding agent on the pi SDK, using the Claude CLI subscription.".into(),
+                agent: true,
+                enabled: true,
+                status: "Running".into(),
+            },
+            PluginRow {
+                id: "permissions".into(),
+                name: "Permissions".into(),
+                description: "Read Only runs commands in the macOS sandbox; Workspace Write and Full access check every \
+                              operation with a decision model first."
+                    .into(),
+                agent: false,
+                enabled: true,
+                status: "Running".into(),
+            },
+        ]
+    }
 
     vec![
         ComponentPreview::new(Area::Settings, "Settings page", "⌘, — defaults for new threads and notifications.")
@@ -610,6 +656,8 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                         .model(sonnet())
                         .thinking(Some("high".into()))
                         .permission(NotificationPermission::Allowed)
+                        .modes(modes(), Some("read-only".into()))
+                        .plugins(plugins())
                 }),
                 page("agent defaults, sound off", || {
                     SettingsPage::new(ready()).sound(false).permission(NotificationPermission::Allowed)
@@ -629,6 +677,25 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                         .permission(NotificationPermission::NotAsked)
                 }),
             ]),
+        ComponentPreview::new(Area::Settings, "Plugin settings", "Fields a plugin declares; secrets are masked.")
+            .stacked()
+            .examples([key_section("key not set", false), key_section("key saved", true)]),
+        ComponentPreview::new(Area::Settings, "Plugins", "Service plugins can be turned off; agents can't.")
+            .stacked()
+            .examples([Example::new("plugins", |window, _| {
+                let mut rows = plugins();
+                rows.push(PluginRow {
+                    id: "audit".into(),
+                    name: "Audit log".into(),
+                    description: "Writes every tool call to a file.".into(),
+                    agent: false,
+                    enabled: false,
+                    status: "Off".into(),
+                });
+                let rows = rows.iter().map(|p| plugin_row(p, Rc::new(|_, _, _, _| {}), window).into_any_element()).collect();
+                section("Plugins", None, rows).into_any_element()
+            })
+            .width(size::CONTENT_MAX_W)]),
         ComponentPreview::new(Area::Settings, "Permission row", "macOS notification permission, per state.")
             .stacked()
             .examples([

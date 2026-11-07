@@ -109,6 +109,7 @@ async fn deny_blocks_with_the_reason_and_sees_mode_and_history() {
     assert_eq!(t.status, space_core::ToolStatus::Failed);
     // The user's message is the one earlier item.
     assert_eq!(t.output, "blocked: no bash in read-only after 1");
+    assert_eq!(t.blocked.as_deref(), Some("no bash in read-only after 1"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -260,4 +261,22 @@ async fn catalogs_default_mode_and_secret_settings() {
         matches!(e, HostEvent::PluginStatus { plugin_id, status: PluginStatus::Stopped } if plugin_id == "guard")
     })
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_during_startup_waits_for_the_service() {
+    let root = root(&[("guard", HOOK, r#"{"decision":"deny","reason":"checked"}"#)]);
+    let (host, mut events) = host(root.path());
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.new_session(root.path()).await.unwrap();
+    let mut state = SessionState::new(session.id());
+    // Starting the services and the first tool call race; the call must still be checked.
+    let starting = {
+        let host = host.clone();
+        tokio::spawn(async move { host.start_services().await })
+    };
+    session.prompt("hello").await.unwrap();
+    starting.await.unwrap();
+    until(&mut events, &mut state, turn_ended).await;
+    assert_eq!(tool(&state).blocked.as_deref(), Some("checked"));
 }

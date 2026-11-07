@@ -311,34 +311,47 @@ impl RenderOnce for Composer {
             // More than one line: ⌘↓ moves the caret to the end instead of scrolling the
             // transcript (see the key bindings in space-app).
             .when(expanded, |d| d.key_context(MULTILINE_CONTEXT))
-            .child(card)
             .children(blocker.map(|b| blocker_row(b, h.on_blocker_action.clone())))
+            .child(card)
             .children(controls.map(|c| control_row(c, &h, window)))
     }
 }
 
-/// "Set up the decision model to use this mode · Open Settings", under the card.
+/// "Set up the decision model to use this mode · Open Settings", above the card.
 pub fn blocker_row(blocker: ComposerBlocker, on_action: Handler) -> Div {
-    div()
+    // A centered pill in the warning tint, so it reads as "do this first", not as a caption.
+    let pill = div()
         .flex()
         .items_center()
-        .gap_1p5()
-        .pl(px(ROW_INSET_LEFT + space::MD))
+        .gap_2()
+        .px_3()
+        .py_1p5()
+        .rounded_full()
+        .bg(color::yellow_bg())
+        .border_1()
+        .border_color(color::yellow_border())
         .text_size(text::SM)
-        .text_color(color::text_2())
-        .child(Icon::new(Lucide::ShieldAlert).size(size::ICON_SM).text_color(color::yellow()))
+        .text_color(color::text())
+        .child(Icon::new(Lucide::ShieldAlert).size(size::ICON).text_color(color::yellow()))
         .child(blocker.text)
         .when_some(blocker.action_label, |d, label| {
             d.child(
                 div()
                     .id("blocker-action")
-                    .text_color(color::accent())
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(color::yellow())
                     .cursor_pointer()
-                    .hover(|s| s.text_color(color::accent_hover()))
+                    .hover(|s| s.text_color(color::text()))
                     .child(label)
+                    .child(Icon::new(IconName::ChevronRight).size(size::ICON_SM))
                     .on_click(move |_, w, cx| on_action(w, cx)),
             )
-        })
+        });
+    // Extra space under it on top of the stack's gap, so it stands apart from the card.
+    div().flex().justify_center().px(px(space::MD)).mb(px(space::MD)).child(pill)
 }
 
 /// The Lucide icon for a catalog icon name.
@@ -481,11 +494,15 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers, window: &Window) -> Di
 
 /// Permission mode picker contents: one item per catalog entry, the current one checked.
 pub fn mode_menu(menu: PopupMenu, entries: &[CatalogEntry], current: &str, on_mode: StringHandler) -> PopupMenu {
-    let mut menu = menu.min_w(px(220.)).label("Permissions");
+    // The check goes on the right. Each row draws its own shield: the menu's icon slot is fixed
+    // at xsmall and would indent the "Permissions" label to the text column.
+    let mut menu = menu.min_w(px(220.)).check_side(gpui::component::Side::Right).label("Permissions");
     for e in entries {
         let (id, f) = (e.id.clone(), on_mode.clone());
-        let item = PopupMenuItem::new(e.name.clone())
-            .icon(Icon::new(mode_icon(e.icon.as_deref())))
+        let (name, icon) = (SharedString::from(e.name.clone()), mode_icon(e.icon.as_deref()));
+        let item = PopupMenuItem::element(move |_, _| {
+            div().flex().items_center().gap_2().child(Icon::new(icon).size(size::ICON_MD)).child(name.clone())
+        })
             .checked(e.id == current)
             .on_click(move |_, w, cx| f(id.clone(), w, cx));
         menu = menu.item(item);

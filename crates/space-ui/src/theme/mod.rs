@@ -72,6 +72,7 @@ pub mod color {
         blue = 0x2f7cf6ff;
         red_bg = 0xf851491a;
         red_border = 0xf8514955;
+        yellow_bg = 0xd299221a;
         yellow_border = 0xd2992266;
         scrollbar_thumb_hover = 0x4a4a4aff;
     }

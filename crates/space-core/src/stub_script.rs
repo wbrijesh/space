@@ -49,6 +49,19 @@ pub enum Step {
     },
     /// Ask `session/request_permission` for tool `tool_id` and wait for the answer.
     Permission { tool_id: String, title: String },
+    /// Report a tool call, put it to the host's tool pipeline (`_space/tools/preExecute`) and
+    /// finish it accordingly: completed with `output`, or failed with the pipeline's reason.
+    Guard {
+        id: String,
+        title: String,
+        #[serde(default = "default_kind")]
+        kind: String,
+        tool: String,
+        #[serde(default)]
+        args: serde_json::Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
     /// Report context usage in `_space/status`.
     Context { tokens: u64 },
     Sleep { ms: u64 },

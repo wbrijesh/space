@@ -296,6 +296,17 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 banner("Agent plugin `foo` not found; using `pi-agent`.", |_, _, _| {}).into_any_element()
             })
             .width(size::CONTENT_MAX_W),
+            Example::new("confirm a mode (Full access)", |_, _| {
+                confirm_card(
+                    "Full access lets the agent change files anywhere on this Mac. A decision model still checks every \
+                     operation first.",
+                    "Use Full access",
+                    |_, _, _| {},
+                    |_, _, _| {},
+                )
+                .into_any_element()
+            })
+            .width(size::CONTENT_MAX_W),
         ]),
         ComponentPreview::new(Area::Shell, "Empty state", "New thread: heading over the centered composer.")
             .example(Example::new("heading", |_, _| empty_heading().into_any_element()).width(size::CONTENT_MAX_W)),
