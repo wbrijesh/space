@@ -3,6 +3,7 @@
 //! * Read Only: commands are confined by the macOS sandbox; file-edit tools are denied.
 //! * Workspace Write and Full access: no sandbox; every tool call is reviewed first.
 
+mod luna;
 mod modes;
 mod sandbox;
 
@@ -19,11 +20,17 @@ struct Permissions {
     key: Mutex<Option<String>>,
     host: OnceLock<Host>,
     tmpdir: String,
+    luna: luna::Luna,
 }
 
 impl Permissions {
     fn new() -> Self {
-        Self { key: Mutex::new(None), host: OnceLock::new(), tmpdir: sandbox::tmpdir().display().to_string() }
+        Self {
+            key: Mutex::new(None),
+            host: OnceLock::new(),
+            tmpdir: sandbox::tmpdir().display().to_string(),
+            luna: luna::Luna::new(),
+        }
     }
 
     fn set_key(&self, settings: &SettingValues) {
@@ -34,14 +41,16 @@ impl Permissions {
         self.key.lock().unwrap().is_some()
     }
 
-    /// Workspace Write and Full access: the decision model's verdict.
-    async fn review(&self, _call: &HookCall) -> HookDecision {
-        if !self.has_key() {
+    /// Workspace Write and Full access: the decision model's verdict (logged, one line per call).
+    async fn review(&self, call: &HookCall) -> HookDecision {
+        let Some(key) = self.key.lock().unwrap().clone() else {
             return HookDecision::ask(
                 "The decision model isn't set up (Settings ▸ Permissions), so Space can't check this call.",
             );
-        }
-        HookDecision::ask("The decision model isn't available in this build.")
+        };
+        let review = self.luna.review(&key, call).await;
+        eprintln!("decision mode={} tool={} call={} {}", call.mode, call.call.tool, call.call.id, review.log);
+        review.decision
     }
 }
 

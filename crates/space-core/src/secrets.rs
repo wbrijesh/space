@@ -13,6 +13,8 @@ use anyhow::{Context as _, Result, bail};
 
 /// Default service prefix of Space's Keychain items.
 pub const DEFAULT_PREFIX: &str = "dev.brijesh.space.plugin";
+/// Env var overriding the prefix (tests and dev runs keep their items apart).
+pub const PREFIX_ENV: &str = "SPACE_KEYCHAIN_PREFIX";
 
 /// Where plugin secrets live. Cheap to clone.
 #[derive(Debug, Clone)]
@@ -21,8 +23,9 @@ pub struct Secrets {
 }
 
 impl Default for Secrets {
+    /// `SPACE_KEYCHAIN_PREFIX`, else [`DEFAULT_PREFIX`].
     fn default() -> Self {
-        Self::new(DEFAULT_PREFIX)
+        Self::new(std::env::var(PREFIX_ENV).ok().filter(|p| !p.is_empty()).unwrap_or_else(|| DEFAULT_PREFIX.into()))
     }
 }
 
