@@ -85,6 +85,29 @@ pub enum Launch {
     Gallery,
 }
 
+/// Shortcuts fire once per press: while a ⌘ shortcut is held, macOS sends repeated key-downs,
+/// and each would run its action again (⌘B toggling the sidebar on and off). Swallowing them
+/// here, before key bindings and the menu bar see them, covers every shortcut. Typing and
+/// plain editing keys (arrows, delete) still repeat.
+fn ignore_held_shortcuts(cx: &mut App) {
+    cx.intercept_keystrokes(|e, _, cx| {
+        if e.keystroke.modifiers.platform && current_key_down_is_repeat() {
+            cx.stop_propagation();
+        }
+    })
+    .detach();
+}
+
+/// Whether the key event macOS is delivering right now is an auto-repeat. GPUI's interceptors
+/// don't get the event's `is_held`, but they run while AppKit is handling it.
+fn current_key_down_is_repeat() -> bool {
+    use objc2_app_kit::{NSApplication, NSEventType};
+    let Some(mtm) = objc2_foundation::MainThreadMarker::new() else { return false };
+    NSApplication::sharedApplication(mtm)
+        .currentEvent()
+        .is_some_and(|e| e.r#type() == NSEventType::KeyDown && e.isARepeat())
+}
+
 pub fn run(host: Host, events: EventReceiver, launch: Launch) {
     gpui::application().with_assets(SpaceAssets).run(move |cx: &mut App| {
         gpui::init(cx);
@@ -113,6 +136,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-q", Quit, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
+        ignore_held_shortcuts(cx);
         #[allow(unused_mut)]
         let mut menus = vec![
             Menu {
