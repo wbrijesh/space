@@ -70,12 +70,16 @@ the composer's mode menu). Hook events: `tools/pre-execute`.
 `requires` names capabilities (`sandbox`, `context`, `catalog:<name>`), not plugin ids, so any provider
 satisfies it. A plugin starts once a provider of each runs. With no provider, or with requirements that
 lead back to itself, it isn't started and its status says why ("Needs a sandbox provider."). When a
-provider stops, is turned off or crashes, the plugins that need it stop first ("Waiting for …"); a crashed
-provider is started again after the restart backoff, and they start again once it runs (the app restarts
-its agent). When Space quits, agents stop first, then services, each after its dependents.
+provider is turned off, the plugins that need it stop first ("Waiting for …") and start again once it runs
+(the app restarts its agent). A provider that crashes or is restarted is only gone for a moment: what needs
+it keeps running (a turn isn't lost), tool calls its hooks would decide are held, and commands it would
+confine fail closed; a crashed provider is started again after the restart backoff. The exit of a process
+that was already replaced changes nothing. When Space quits, agents stop first, then services, each after
+its dependents.
 
-Discovery order (later wins on duplicate `id`): `<repo>/plugins/*`, `~/.space/plugins/*`,
-`<project>/.space/plugins/*`. Writing one: [plugins.md](plugins.md).
+Discovery order: `<repo>/plugins/*`, `~/.space/plugins/*`, `<project>/.space/plugins/*`. A project
+plugin replaces a user plugin with the same `id`; neither may use the `id` of a bundled plugin (it's
+refused, so it can't inherit that plugin's settings, secrets or trust). Writing one: [plugins.md](plugins.md).
 
 **Permissions.** A plugin gets only what its manifest declares:
 - the hooks it lists and the events it `observes`;
@@ -92,12 +96,13 @@ and `<project>/.space/plugins` don't start until you approve them in Settings �
 permissions in plain words. Until then they count as not installed, and the composer shows "… needs your
 approval" and won't send.
 
-Answers are saved in `plugin-grants.json` in Space's folder (the settings file's, `~/.space`), by plugin directory, with the
-permissions you answered for. A plugin that later asks for more asks again; one that asks for less keeps
+Answers are saved in `plugin-grants.json` in Space's folder (the settings file's, `~/.space`), by plugin directory, with its
+`id` and the permissions you answered for (a changed `id` asks again). A plugin that later asks for more asks again; one that asks for less keeps
 your answer.
 
-This governs what a plugin can do through Space. It is still a program running as you, with your access
-to files and the network.
+This governs only what a plugin can do through Space's channels. Plugins are unsandboxed programs running
+as you, with your access to files and the network: one could read `~/.space` (saved threads, approvals)
+directly. Approve only plugins you trust.
 
 ## Agent protocol (ACP subset)
 
@@ -174,8 +179,12 @@ scenarios, when nothing is kept). A thread is its summary (`ThreadMeta`: title, 
 agent and session, times) and its session events, which the store keeps without reading them. The app
 saves the user's messages, finished agent messages and thoughts (chunks merged), tool calls and
 results, permission and guardrail decisions, status changes and turn starts and ends, not held calls:
-when a turn ends, when the thread's mode changes, and on quit (up to 2 s). A failed save keeps the
-events for the next one and says so in the banner; the conversation goes on. At launch the sidebar lists
+when a turn ends, when the thread's mode changes, and on quit (up to 2 s). One save at a time per
+thread; one asked for meanwhile follows it. Each write says where its events start (`first`), so the store
+skips events it already has (a failed save that had written them, a quit save repeating one in flight),
+and an older summary never replaces a newer one. A thread deleted during a save is deleted after it. A
+failed save keeps the events for the next one and says so in the banner; the conversation goes on. A
+thread that fails to open is read again when next opened, and nothing is sent into it meanwhile. At launch the sidebar lists
 saved threads; opening one reads its events and replays them through `SessionState::apply` (a turn cut
 short ends as cancelled, so no card waits). Writing in it loads its session again (`session/load`) when
 the agent can; otherwise the composer offers "Continue in new session". Right-click → Delete Thread

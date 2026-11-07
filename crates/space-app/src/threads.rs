@@ -25,8 +25,13 @@ pub struct Thread {
     pub meta: Option<ThreadMeta>,
     /// Events to save next (agent text and thoughts merged).
     pub unsaved: Vec<SessionEvent>,
-    /// A save is in flight.
+    /// How many of its events the store has.
+    pub saved: u64,
+    /// A save is in flight, with these events.
     pub saving: bool,
+    pub inflight: Vec<SessionEvent>,
+    /// A save was asked for while one was in flight (or the thread was loading).
+    pub save_again: bool,
     /// A saved thread whose events haven't been read yet (they are when it's opened).
     pub unloaded: bool,
     pub loading: bool,
@@ -70,7 +75,10 @@ impl Thread {
             created_ms: crate::app::now_ms(),
             meta: None,
             unsaved: Vec::new(),
+            saved: 0,
             saving: false,
+            inflight: Vec::new(),
+            save_again: false,
             unloaded: false,
             loading: false,
             name: None,
@@ -205,7 +213,13 @@ impl SpaceApp {
                         this.create_pending_sessions(cx);
                     }
                     Err(e) => {
-                        this.agent_status = PluginStatus::Crashed(format!("{e:#}"));
+                        // The host's own status says whether it's waiting for something
+                        // (`NotStarted`: it starts once that runs) or failed.
+                        this.agent_status = this
+                            .host
+                            .status(&id)
+                            .filter(|s| matches!(s, PluginStatus::NotStarted(_)))
+                            .unwrap_or_else(|| PluginStatus::Crashed(format!("{e:#}")));
                     }
                 }
                 cx.notify();
@@ -376,7 +390,8 @@ impl SpaceApp {
         if text.is_empty() && thread.attachments.is_empty() {
             return;
         }
-        if thread.state.running || thread.queued.is_some() || thread.loading {
+        // Not into a saved thread that isn't open (it didn't load).
+        if thread.state.running || thread.queued.is_some() || thread.loading || thread.unloaded {
             return;
         }
         // The thread's mode isn't set up yet (the composer says so, with a link).
@@ -412,7 +427,10 @@ impl SpaceApp {
     pub(crate) fn prompt(&mut self, key: u64, text: String, attachments: Vec<PathBuf>, cx: &mut Context<Self>) {
         let Some(thread) = self.thread(key) else { return };
         let Some(session) = thread.session.clone() else { return };
-        let first = thread.name.is_none() && !thread.state.items.iter().any(|i| matches!(i, TranscriptItem::User { .. }));
+        // A thread that was saved already had its first message.
+        let first = thread.name.is_none()
+            && thread.meta.is_none()
+            && !thread.state.items.iter().any(|i| matches!(i, TranscriptItem::User { .. }));
         if first && !text.trim().is_empty() {
             self.request_title(key, session.id().to_string(), text.clone(), cx);
         }

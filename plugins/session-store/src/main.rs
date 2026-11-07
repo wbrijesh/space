@@ -8,7 +8,9 @@
 //! ```
 //!
 //! Events are kept as they are; Space decides what they mean. A line cut short (Space quit
-//! mid-write) is skipped when loading, and the next write starts on a fresh line. Without a
+//! mid-write) is skipped when loading, and the next write starts on a fresh line. Each write
+//! says where its events start (`first`), so events the store already has are skipped, and an
+//! older summary never replaces a newer one. Without a
 //! Space folder (tests, scenarios) nothing is kept: writes do nothing and the list is empty.
 
 use std::fs::{self, OpenOptions};
@@ -76,18 +78,7 @@ impl Store {
         let dir = self.dir(id)?.ok_or_else(|| RpcError::invalid_params(format!("no saved thread {id}")))?;
         let _guard = self.lock.lock().unwrap();
         let meta = read_meta(&dir)?.ok_or_else(|| RpcError::invalid_params(format!("no saved thread {id}")))?;
-        let text = match fs::read_to_string(dir.join(EVENTS)) {
-            Ok(t) => t,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(e) => return Err(io(&dir.join(EVENTS), e)),
-        };
-        let mut events = Vec::new();
-        for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
-            match serde_json::from_str::<Value>(line) {
-                Ok(v) => events.push(v),
-                Err(e) => eprintln!("space-session-store: {id} line {}: skipped ({e})", n + 1),
-            }
-        }
+        let events = read_events(&dir, true)?;
         Ok(StoredThread { meta, events })
     }
 
@@ -98,20 +89,28 @@ impl Store {
             return Err(RpcError::invalid_params(format!("thread {} has no summary yet", write.thread_id)));
         }
         fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
-        if !write.events.is_empty() {
+        // Skip the events it already has.
+        let have = read_events(&dir, false)?.len() as u64;
+        if write.first > have {
+            eprintln!("space-session-store: {}: events {have}..{} are missing", write.thread_id, write.first);
+        }
+        let skip = have.saturating_sub(write.first) as usize;
+        if write.events.len() > skip {
             let path = dir.join(EVENTS);
             let mut file = OpenOptions::new().read(true).append(true).create(true).open(&path).map_err(|e| io(&path, e))?;
             let mut lines = String::new();
             if !ends_with_newline(&mut file) {
                 lines.push('\n');
             }
-            for event in &write.events {
+            for event in &write.events[skip..] {
                 lines.push_str(&event.to_string());
                 lines.push('\n');
             }
             file.write_all(lines.as_bytes()).map_err(|e| io(&path, e))?;
         }
-        if let Some(meta) = write.meta {
+        // A write sent again may carry an older summary.
+        let newer = |m: &ThreadMeta| read_meta(&dir).ok().flatten().is_some_and(|saved| saved.updated_ms > m.updated_ms);
+        if let Some(meta) = write.meta.filter(|m| !newer(m)) {
             let mut json = serde_json::to_value(meta).map_err(|e| RpcError::internal(e.to_string()))?;
             json["version"] = FORMAT_VERSION.into();
             let (tmp, path) = (dir.join("meta.json.tmp"), dir.join(META));
@@ -179,6 +178,25 @@ fn read_meta(dir: &Path) -> Result<Option<ThreadMeta>, RpcError> {
     serde_json::from_value(json).map(Some).map_err(|e| RpcError::internal(format!("{}: {e}", path.display())))
 }
 
+/// A thread folder's events (lines that don't parse are skipped, and logged with `log`).
+fn read_events(dir: &Path, log: bool) -> Result<Vec<Value>, RpcError> {
+    let path = dir.join(EVENTS);
+    let text = match fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(io(&path, e)),
+    };
+    let mut events = Vec::new();
+    for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
+        match serde_json::from_str::<Value>(line) {
+            Ok(v) => events.push(v),
+            Err(e) if log => eprintln!("space-session-store: {} line {}: skipped ({e})", path.display(), n + 1),
+            Err(_) => {}
+        }
+    }
+    Ok(events)
+}
+
 /// Whether the file is empty or ends a line.
 fn ends_with_newline(file: &mut fs::File) -> bool {
     let mut last = [0u8; 1];
@@ -215,8 +233,24 @@ mod tests {
         ThreadMeta { id: id.into(), title: id.into(), project: "/p".into(), updated_ms, ..Default::default() }
     }
 
+    /// Append `events` after what's saved (as Space does).
     fn write(store: &Store, id: &str, meta: Option<ThreadMeta>, events: &[Value]) -> Result<(), RpcError> {
-        store.write(StoreWrite { thread_id: id.into(), meta, events: events.to_vec() })
+        let first = store.dir(id)?.map_or(Ok(0), |d| read_events(&d, false).map(|e| e.len() as u64))?;
+        store.write(StoreWrite { thread_id: id.into(), meta, events: events.to_vec(), first })
+    }
+
+    #[test]
+    fn a_write_sent_again_keeps_each_event_once_and_the_newest_summary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(tmp.path());
+        let n = |n: u64| serde_json::json!({ "n": n });
+        let send = |first, meta, events: Vec<Value>| store.write(StoreWrite { thread_id: "a".into(), meta, events, first });
+        send(0, Some(meta("new", 2)), vec![n(1), n(2)]).unwrap();
+        // Retried after a failure that had written the events; then a quit save repeating it.
+        send(0, Some(meta("old", 1)), vec![n(1), n(2)]).unwrap();
+        send(1, None, vec![n(2), n(3)]).unwrap();
+        assert_eq!(store.load("a").unwrap().events, [n(1), n(2), n(3)]);
+        assert_eq!(store.load("a").unwrap().meta.title, "new");
     }
 
     #[test]

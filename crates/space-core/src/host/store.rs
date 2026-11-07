@@ -18,6 +18,15 @@ use crate::session::SessionEvent;
 /// Loading a long thread reads a large file.
 const STORE_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// One thread's save at quit ([`Host::save_threads_blocking`]).
+pub struct ThreadSave {
+    pub id: String,
+    pub meta: ThreadMeta,
+    /// The event number of the first of `events`.
+    pub first: u64,
+    pub events: Vec<SessionEvent>,
+}
+
 impl Host {
     /// Whether a session store is installed (on and approved).
     pub fn has_session_store(&self) -> bool {
@@ -30,36 +39,45 @@ impl Host {
         Ok(list.threads)
     }
 
-    /// A saved thread's summary and events (events this Space can't read are left out).
-    pub async fn load_thread(&self, thread_id: &str) -> Result<(ThreadMeta, Vec<SessionEvent>)> {
+    /// A saved thread's summary, its events (events this Space can't read are left out) and
+    /// how many events the store has (the `first` of the next write).
+    pub async fn load_thread(&self, thread_id: &str) -> Result<(ThreadMeta, Vec<SessionEvent>, u64)> {
         let stored: svc::StoredThread = self.store_call(svc::STORE_LOAD, thread_ref(thread_id)).await?;
+        let count = stored.events.len() as u64;
         let events = stored
             .events
             .into_iter()
             .filter_map(|e| serde_json::from_value(e).map_err(|err| tracing::warn!("skipping a saved event of {thread_id}: {err}")).ok())
             .collect();
-        Ok((stored.meta, events))
+        Ok((stored.meta, events, count))
     }
 
-    /// Append `events` to a thread and, with `meta`, replace its summary.
-    pub async fn save_thread(&self, thread_id: &str, meta: Option<ThreadMeta>, events: &[SessionEvent]) -> Result<()> {
+    /// Append `events` to a thread, the first being its event number `first` (events the store
+    /// already has are skipped), and, with `meta`, replace its summary.
+    pub async fn save_thread(&self, thread_id: &str, meta: Option<ThreadMeta>, first: u64, events: &[SessionEvent]) -> Result<()> {
         let events = events.iter().map(serde_json::to_value).collect::<Result<_, _>>()?;
-        let write = svc::StoreWrite { thread_id: thread_id.to_string(), meta, events };
+        let write = svc::StoreWrite { thread_id: thread_id.to_string(), meta, events, first };
         let _: serde_json::Value = self.store_call(svc::STORE_WRITE, write).await?;
         Ok(())
     }
 
-    /// Save threads while Space quits (from a thread outside the runtime), waiting at most
-    /// `timeout` in all. Call before [`Host::shutdown`], which stops the store.
-    pub fn save_threads_blocking(&self, saves: Vec<(String, ThreadMeta, Vec<SessionEvent>)>, timeout: Duration) {
-        if saves.is_empty() {
+    /// Save threads, then delete threads, while Space quits (from a thread outside the
+    /// runtime), waiting at most `timeout` in all. Call before [`Host::shutdown`], which stops
+    /// the store.
+    pub fn save_threads_blocking(&self, saves: Vec<ThreadSave>, deletes: Vec<String>, timeout: Duration) {
+        if saves.is_empty() && deletes.is_empty() {
             return;
         }
         let host = self.clone();
         let saved = self.inner.rt.block_on(tokio::time::timeout(timeout, async move {
-            for (id, meta, events) in saves {
-                if let Err(e) = host.save_thread(&id, Some(meta), &events).await {
-                    tracing::warn!("saving thread {id}: {e:#}");
+            for save in saves {
+                if let Err(e) = host.save_thread(&save.id, Some(save.meta), save.first, &save.events).await {
+                    tracing::warn!("saving thread {}: {e:#}", save.id);
+                }
+            }
+            for id in deletes {
+                if let Err(e) = host.delete_thread(&id).await {
+                    tracing::warn!("deleting thread {id}: {e:#}");
                 }
             }
         }));

@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use gpui::{Context, Window};
 use space_core::protocol::service::ThreadMeta;
-use space_core::SessionEvent;
+use space_core::{SessionEvent, ThreadSave};
 
 use crate::app::{SpaceApp, now_ms};
 use crate::threads::Thread;
@@ -57,7 +57,8 @@ impl SpaceApp {
             title: thread.title(),
             project: thread.cwd.display().to_string(),
             mode: self.effective_mode(thread),
-            model: state.status.model.clone(),
+            // Not over what was saved while the thread (or its status) is still on its way.
+            model: state.status.model.clone().or_else(|| thread.meta.as_ref().and_then(|m| m.model.clone())),
             agent: Some(state.plugin_id.clone()).filter(|p| !p.is_empty()).or_else(|| thread.resume.as_ref().map(|r| r.0.clone())),
             session_id: session_id.or_else(|| thread.resume.as_ref().map(|r| r.1.clone())),
             created_ms: thread.created_ms,
@@ -66,37 +67,52 @@ impl SpaceApp {
         }
     }
 
-    /// Write the thread's waiting events and its summary (once it has something to save).
+    /// Write the thread's waiting events and its summary (once it has something to save). One
+    /// save at a time per thread: asked for during one (or while the thread loads), it follows.
     pub(crate) fn save_thread(&mut self, key: u64, cx: &mut Context<Self>) {
-        let Some(thread) = self.thread(key) else { return };
-        if thread.saving || thread.unloaded || (thread.state.items.is_empty() && thread.meta.is_none()) {
+        let Some(thread) = self.thread_mut(key) else { return };
+        if thread.unloaded {
             return;
         }
-        let meta = self.thread_meta(thread);
+        if thread.saving || thread.loading {
+            thread.save_again = true;
+            return;
+        }
+        if thread.state.items.is_empty() && thread.meta.is_none() {
+            return;
+        }
+        let meta = self.thread_meta(self.thread(key).expect("thread exists"));
         let host = self.host.clone();
         let thread = self.thread_mut(key).expect("thread exists");
-        let events = std::mem::take(&mut thread.unsaved);
+        thread.inflight = std::mem::take(&mut thread.unsaved);
         thread.saving = true;
-        let id = thread.id.clone();
+        thread.save_again = false;
+        let (id, first, events) = (thread.id.clone(), thread.saved, thread.inflight.clone());
         cx.spawn(async move |this, cx| {
-            let result = host.save_thread(&id, Some(meta.clone()), &events).await;
+            let result = host.save_thread(&id, Some(meta.clone()), first, &events).await;
             let _ = this.update(cx, |this, cx| {
-                let Some(thread) = this.thread_mut(key) else { return };
+                let Some(thread) = this.thread_mut(key) else {
+                    // Deleted while this save was in flight: delete what it wrote.
+                    if let Some(id) = this.deleted_while_saving.remove(&key) {
+                        this.remove_saved(id, cx);
+                    }
+                    return;
+                };
                 thread.saving = false;
+                let sent = std::mem::take(&mut thread.inflight);
                 match result {
                     Ok(()) => {
-                        // More arrived meanwhile (a turn ended, or it got its title): save that too.
-                        let again = matches!(thread.unsaved.last(), Some(SessionEvent::TurnEnded { .. })) || thread.title() != meta.title;
+                        thread.saved += sent.len() as u64;
                         thread.meta = Some(meta);
-                        if again {
-                            this.save_thread(key, cx);
-                        }
                     }
                     Err(e) => {
                         tracing::warn!("saving thread {id}: {e:#}");
-                        thread.unsaved.splice(0..0, events);
+                        thread.unsaved.splice(0..0, sent);
                         this.banner = Some(format!("Couldn't save this thread: {e:#}"));
                     }
+                }
+                if this.thread(key).is_some_and(|t| t.save_again) {
+                    this.save_thread(key, cx);
                 }
                 cx.notify();
             });
@@ -104,7 +120,9 @@ impl SpaceApp {
         .detach();
     }
 
-    /// Before quitting: save every thread's waiting events (blocks briefly).
+    /// Before quitting: save what every thread has waiting, the events of a save still in
+    /// flight included (the store skips what it already has), then delete the threads deleted
+    /// during a save. Blocks briefly.
     pub(crate) fn save_all_now(&mut self) {
         if !self.saving_threads() {
             return;
@@ -112,10 +130,17 @@ impl SpaceApp {
         let saves: Vec<_> = self
             .threads
             .iter()
-            .filter(|t| !t.unloaded && !t.saving && !t.state.items.is_empty() && (!t.unsaved.is_empty() || t.meta.is_none()))
-            .map(|t| (t.id.clone(), self.thread_meta(t), t.unsaved.clone()))
+            .filter(|t| !t.unloaded && !t.loading && !t.state.items.is_empty())
+            .filter(|t| t.saving || !t.unsaved.is_empty() || t.meta.is_none())
+            .map(|t| ThreadSave {
+                id: t.id.clone(),
+                meta: self.thread_meta(t),
+                first: t.saved,
+                events: t.inflight.iter().chain(&t.unsaved).cloned().collect(),
+            })
             .collect();
-        self.host.save_threads_blocking(saves, QUIT_SAVE_TIMEOUT);
+        let deletes = self.deleted_while_saving.drain().map(|(_, id)| id).collect();
+        self.host.save_threads_blocking(saves, deletes, QUIT_SAVE_TIMEOUT);
     }
 
     /// At launch: list the saved threads in the sidebar, below the launch threads.
@@ -167,15 +192,24 @@ impl SpaceApp {
                 let Some(thread) = this.thread_mut(key) else { return };
                 thread.loading = false;
                 match result {
-                    Ok((_, events)) => {
+                    Ok((_, events, count)) => {
+                        thread.saved = count;
+                        thread.error = None;
                         for event in &events {
                             thread.apply(event);
                         }
                         if thread.state.running || thread.state.pending_permission().is_some() {
                             thread.apply(&SessionEvent::TurnEnded { stop_reason: "cancelled".into() });
                         }
+                        if thread.save_again {
+                            this.save_thread(key, cx);
+                        }
                     }
-                    Err(e) => thread.error = Some(format!("Couldn't open this thread: {e:#}")),
+                    Err(e) => {
+                        // Read again when it's next opened; until then nothing is sent or saved.
+                        thread.unloaded = true;
+                        thread.error = Some(format!("Couldn't open this thread: {e:#}"));
+                    }
                 }
                 this.transcript_scroll.jump_to_bottom();
                 cx.notify();
@@ -195,17 +229,11 @@ impl SpaceApp {
             }
             self.session_threads.remove(session.id());
         }
-        if self.saving_threads() {
-            let (host, id) = (self.host.clone(), thread.id.clone());
-            cx.spawn(async move |this, cx| {
-                if let Err(e) = host.delete_thread(&id).await {
-                    let _ = this.update(cx, |this, cx| {
-                        this.banner = Some(format!("Couldn't delete the saved thread: {e:#}"));
-                        cx.notify();
-                    });
-                }
-            })
-            .detach();
+        if thread.saving {
+            // After the save in flight, so it can't write the thread back.
+            self.deleted_while_saving.insert(key, thread.id.clone());
+        } else if self.saving_threads() {
+            self.remove_saved(thread.id.clone(), cx);
         }
         self.back.retain(|k| *k != key);
         self.forward.retain(|k| *k != key);
@@ -217,6 +245,22 @@ impl SpaceApp {
             }
         }
         cx.notify();
+    }
+}
+
+impl SpaceApp {
+    /// Delete what was saved of thread `id`.
+    fn remove_saved(&mut self, id: String, cx: &mut Context<Self>) {
+        let host = self.host.clone();
+        cx.spawn(async move |this, cx| {
+            if let Err(e) = host.delete_thread(&id).await {
+                let _ = this.update(cx, |this, cx| {
+                    this.banner = Some(format!("Couldn't delete the saved thread: {e:#}"));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 }
 

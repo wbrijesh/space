@@ -67,6 +67,7 @@ use crate::secrets::Secrets;
 use crate::session::{SessionEvent, SessionId};
 
 pub use agents::{AgentHandle, Session};
+pub use store::ThreadSave;
 pub use titles::TITLE_TIMEOUT;
 use agents::AgentInner;
 use pipeline::SessionMeta;
@@ -204,6 +205,9 @@ struct HostInner {
     crashes: Mutex<HashMap<String, VecDeque<Instant>>>,
     /// The last status reported for each plugin.
     statuses: Mutex<HashMap<String, PluginStatus>>,
+    /// How often each plugin's process was launched: the exit of an older launch (one that
+    /// was replaced) changes nothing.
+    launches: Mutex<HashMap<String, u64>>,
     /// Started agents by plugin id (the app owns them).
     agents: Mutex<HashMap<String, Weak<AgentInner>>>,
     /// The session Space is frontmost on ([`Host::set_watching`]).
@@ -231,12 +235,18 @@ impl Host {
                 sessions: Mutex::new(HashMap::new()),
                 crashes: Mutex::new(HashMap::new()),
                 statuses: Mutex::new(HashMap::new()),
+                launches: Mutex::new(HashMap::new()),
                 agents: Mutex::new(HashMap::new()),
                 watching: Mutex::new(None),
             }),
         };
         host.discover();
         (host, rx)
+    }
+
+    /// The last status reported for `plugin_id`.
+    pub fn status(&self, plugin_id: &str) -> Option<PluginStatus> {
+        self.inner.statuses.lock().unwrap().get(plugin_id).cloned()
     }
 
     pub fn project_dir(&self) -> &Path {
@@ -264,6 +274,19 @@ impl HostInner {
     fn emit_status(&self, plugin_id: &str, status: PluginStatus) {
         self.statuses.lock().unwrap().insert(plugin_id.to_string(), status.clone());
         self.emit(HostEvent::PluginStatus { plugin_id: plugin_id.to_string(), status });
+    }
+
+    /// A new process for `plugin_id` is about to start: its launch number.
+    fn launch(&self, plugin_id: &str) -> u64 {
+        let mut launches = self.launches.lock().unwrap();
+        let n = launches.entry(plugin_id.to_string()).or_default();
+        *n += 1;
+        *n
+    }
+
+    /// Whether `launch` is the plugin's latest process (a replaced one's exit is stale).
+    fn is_current(&self, plugin_id: &str, launch: u64) -> bool {
+        self.launches.lock().unwrap().get(plugin_id) == Some(&launch)
     }
 
     /// A plugin process ended. Killing a plugin that failed to start or was refused doesn't

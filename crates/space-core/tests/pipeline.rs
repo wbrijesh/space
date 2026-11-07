@@ -524,9 +524,9 @@ async fn unmet_requirements_and_cycles_are_not_started() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn when_a_provider_crashes_its_dependents_stop_and_come_back() {
-    // `sb` crashes on its first confine (from the agent's tool call); the host stops `dep` and
-    // the agent, which both require a sandbox, starts `sb` again, and `dep` with it.
+async fn when_a_provider_crashes_its_dependents_keep_running() {
+    // `sb` crashes on the agent's confine: that command fails closed, but neither `dep` nor the
+    // agent (which both require a sandbox) is stopped, and `sb` is started again.
     let tmp = tempfile::tempdir().unwrap();
     let config = format!(r#"{{"crashUntil":"{}"}}"#, tmp.path().join("never").display());
     let root = root(&[("dep", NEEDS_SANDBOX, "{}"), ("sb", SANDBOX, &config)]);
@@ -539,21 +539,18 @@ async fn when_a_provider_crashes_its_dependents_stop_and_come_back() {
     let session = agent.new_session(root.path()).await.unwrap();
     let turn = tokio::spawn(async move { session.prompt("hello").await });
     let mut seen = Vec::new();
-    let s = status_of(&mut events, &mut seen, "dep", not_started).await;
-    assert_eq!(s, PluginStatus::NotStarted("Waiting for Guard sb.".into()));
-    status_of(&mut events, &mut seen, "stub", not_started).await;
-    let _ = turn.await;
-    // Its status changes before the kill lands; the process is gone moments later.
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while agent.is_running() {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("the agent stopped");
-    // Restarted after the backoff, and `dep` with it.
+    status_of(&mut events, &mut seen, "sb", |s| matches!(s, PluginStatus::Crashed(_))).await;
+    turn.await.unwrap().expect("the turn isn't lost");
+    // Restarted after the backoff; the others never stopped.
     status_of(&mut events, &mut seen, "sb", |s| *s == PluginStatus::Running).await;
-    status_of(&mut events, &mut seen, "dep", |s| *s == PluginStatus::Running).await;
+    while let Ok(e) = events.try_recv() {
+        if let HostEvent::PluginStatus { plugin_id, status } = e {
+            seen.push((plugin_id, status));
+        }
+    }
+    let crash = seen.iter().position(|(id, s)| id == "sb" && matches!(s, PluginStatus::Crashed(_))).unwrap();
+    assert!(!seen[crash..].iter().any(|(id, _)| id == "dep" || id == "stub"), "{seen:?}");
+    assert!(agent.is_running());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -563,6 +560,13 @@ async fn turning_a_provider_off_stops_its_dependents_first() {
     host.start_services().await;
     let mut seen = Vec::new();
     status_of(&mut events, &mut seen, "dep", |s| *s == PluginStatus::Running).await;
+    // Restart isn't off: `dep` keeps running.
+    host.restart_service("sb").await.unwrap();
+    while let Ok(e) = events.try_recv() {
+        if let HostEvent::PluginStatus { plugin_id, status } = e {
+            assert_ne!(plugin_id, "dep", "{status:?}");
+        }
+    }
     host.set_disabled(["sb".to_string()]);
     let s = status_of(&mut events, &mut seen, "dep", not_started).await;
     assert_eq!(s, PluginStatus::NotStarted("Waiting for Guard sb.".into()));

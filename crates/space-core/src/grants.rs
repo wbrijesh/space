@@ -3,7 +3,7 @@
 //! plugins are trusted.
 //!
 //! Kept as JSON (`~/.space/plugin-grants.json`, next to the settings file), by plugin
-//! directory: the permissions you answered for and the answer. An approval holds while the
+//! directory: its id, the permissions you answered for and the answer. An approval holds while the
 //! plugin asks for no more than that (it may ask for less); asking for more asks you again.
 
 use std::collections::BTreeMap;
@@ -68,7 +68,8 @@ impl Grants {
         }
         let grants = self.grants.lock().unwrap();
         match grants.get(&key(plugin)) {
-            Some(g) if plugin.manifest.permissions().iter().all(|p| g.permissions.contains(p)) => {
+            // Same folder, same id: a plugin that changes its id is asked again.
+            Some(g) if g.id == plugin.id() && plugin.manifest.permissions().iter().all(|p| g.permissions.contains(p)) => {
                 if g.approved { Approval::Approved } else { Approval::Denied }
             }
             _ => Approval::Pending,
@@ -180,6 +181,10 @@ mod tests {
         assert_eq!(grants.approval(&grown), Approval::Pending);
         // The same plugin somewhere else is a different plugin.
         assert_eq!(grants.approval(&plugin(&tmp.path().join("q"), PluginSource::User, "")), Approval::Pending);
+        // The same folder under another id asks again.
+        let mut renamed = user.clone();
+        renamed.manifest.id = "other".into();
+        assert_eq!(grants.approval(&renamed), Approval::Pending);
 
         grants.answer(&grown, false).unwrap();
         assert_eq!(grants.approval(&grown), Approval::Denied);

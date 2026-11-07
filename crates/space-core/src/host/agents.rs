@@ -138,6 +138,7 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
         dead: AtomicBool::new(false),
     });
 
+    let launch = host.launch(&plugin_id);
     let spawned = {
         let log_host = host.clone();
         let log_id = plugin_id.clone();
@@ -148,7 +149,9 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
             move |line| log_host.emit(HostEvent::PluginLog { plugin_id: log_id.clone(), line }),
             move |kind, tail| {
                 exit_shared.dead.store(true, Ordering::SeqCst);
-                exit_shared.host.emit_exit(&exit_shared.plugin_id, exit_status(kind, &tail));
+                if exit_shared.host.is_current(&exit_shared.plugin_id, launch) {
+                    exit_shared.host.emit_exit(&exit_shared.plugin_id, exit_status(kind, &tail));
+                }
             },
         )?
     };

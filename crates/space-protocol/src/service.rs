@@ -583,6 +583,11 @@ pub struct StoreWrite {
     pub meta: Option<ThreadMeta>,
     #[serde(default)]
     pub events: Vec<serde_json::Value>,
+    /// How many of the thread's events Space had saved before these. The store skips the ones
+    /// it already has, so a write that is sent again (after a failure, or at quit) isn't kept
+    /// twice.
+    #[serde(default)]
+    pub first: u64,
 }
 
 /// `store/list` result: every saved thread, newest first.

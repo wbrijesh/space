@@ -65,7 +65,8 @@ impl Host {
 
     /// Stop and start a service plugin again.
     pub async fn restart_service(&self, plugin_id: &str) -> Result<()> {
-        self.inner.stop_service(plugin_id);
+        // Back in a moment: what needs it keeps running (calls to it wait or fail closed).
+        self.inner.kill_service(plugin_id);
         self.inner.started_at.lock().unwrap().remove(plugin_id);
         let inner = self.inner.clone();
         let id = plugin_id.to_string();
@@ -178,9 +179,14 @@ impl Host {
 }
 
 impl HostInner {
-    /// Stop a service, after the plugins that need it.
+    /// Stop a service for good (turned off, Space quitting), after the plugins that need it.
     pub(super) fn stop_service(&self, plugin_id: &str) {
         self.stop_dependents(plugin_id);
+        self.kill_service(plugin_id);
+    }
+
+    /// Stop a service's process and drop what it published, leaving what needs it alone.
+    fn kill_service(&self, plugin_id: &str) {
         let Some(service) = self.services.lock().unwrap().remove(plugin_id) else { return };
         service._process.kill();
         let mut catalogs = self.catalogs.lock().unwrap();
@@ -243,14 +249,14 @@ impl HostInner {
         }
     }
 
-    /// A service crashed: stop what needs it, and start it again after the backoff so they
-    /// can come back (unless it keeps crashing; then Restart or Retry does).
+    /// A service that others need crashed: start it again after the backoff (unless it keeps
+    /// crashing; then Restart or Retry does). What needs it keeps running meanwhile: held tool
+    /// calls wait for it and sandboxed commands fail closed, so a turn isn't lost to a crash.
     fn provider_crashed(self: &Arc<Self>, plugin_id: &str) {
         let Some(plugin) = self.plugin(plugin_id) else { return };
         if !self.dependents(&plugin).iter().any(|d| self.is_running(d)) {
             return;
         }
-        self.stop_dependents(plugin_id);
         if !self.keeps_crashing(plugin_id) {
             let (host, id) = (self.clone(), plugin_id.to_string());
             self.rt.spawn(async move {
@@ -311,6 +317,7 @@ impl HostInner {
     pub(super) async fn start_service(self: &Arc<Self>, plugin: DiscoveredPlugin) -> Result<Arc<Service>> {
         let plugin_id = plugin.id().to_string();
         let dead = Arc::new(AtomicBool::new(false));
+        let launch = self.launch(&plugin_id);
         let spawned = {
             let weak = Arc::downgrade(self);
             let exit_weak = weak.clone();
@@ -325,7 +332,7 @@ impl HostInner {
                 },
                 move |kind, tail| {
                     exit_dead.store(true, Ordering::SeqCst);
-                    if let Some(host) = exit_weak.upgrade() {
+                    if let Some(host) = exit_weak.upgrade().filter(|h| h.is_current(&exit_id, launch)) {
                         let status = exit_status(kind, &tail);
                         let crashed = matches!(status, PluginStatus::Crashed(_));
                         if crashed {

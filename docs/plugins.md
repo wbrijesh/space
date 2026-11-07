@@ -11,7 +11,8 @@ panel). There are two kinds:
 
 Drop the directory into `<repo>/plugins`, `~/.space/plugins` or `<project>/.space/plugins`. It starts with
 the app and is restarted on next use if it exits. Plugins outside `<repo>/plugins` start only once you
-approve them in Settings → Plugins (and again if their manifest asks for more).
+approve them in Settings → Plugins (and again if their manifest asks for more, or changes its `id`), and
+can't use the `id` of a bundled plugin.
 
 ## 1. The manifest
 

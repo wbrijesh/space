@@ -220,6 +220,9 @@ pub struct SpaceApp {
     pub(crate) sidebar_open: bool,
     pub(crate) show_logs: bool,
     pub(crate) banner: Option<String>,
+    /// Threads deleted while a save of theirs was in flight (by key): their saved folder is
+    /// removed once it lands.
+    pub(crate) deleted_while_saving: HashMap<u64, String>,
     pub(crate) settings: SettingsStore,
     /// The Settings page replaces the thread view.
     pub(crate) show_settings: bool,
@@ -372,6 +375,7 @@ impl SpaceApp {
             sidebar_open: true,
             show_logs: false,
             banner,
+            deleted_while_saving: HashMap::new(),
             settings: SettingsStore::load(options.settings_path),
             show_settings: false,
             agent_models: None,
@@ -785,7 +789,7 @@ impl SpaceApp {
         self.pending_confirm = None;
         let Some(thread) = self.thread_mut(key) else { return };
         thread.mode = Some(id);
-        let saved = thread.meta.is_some();
+        let saved = thread.meta.is_some() || thread.saving;
         self.sync_session_modes();
         if saved {
             self.save_thread(key, cx);

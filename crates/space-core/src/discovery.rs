@@ -1,6 +1,7 @@
 //! Plugin discovery.
 //!
-//! Search order (later wins on duplicate `id`):
+//! Search order (a project plugin replaces a user plugin with the same `id`; neither may
+//! take the `id` of a bundled plugin):
 //! 1. bundled: `<repo>/plugins/*` (or every dir listed in `SPACE_PLUGIN_DIRS`)
 //! 2. user: `~/.space/plugins/*`
 //! 3. project: `<project>/.space/plugins/*`
@@ -77,8 +78,17 @@ pub fn discover(opts: &DiscoveryOptions) -> DiscoveryReport {
             match Manifest::load_from_dir(&dir) {
                 Ok(manifest) => {
                     let plugin = DiscoveredPlugin { manifest, dir, source };
-                    // Later roots override earlier ones with the same id, keeping position.
+                    // Later roots override earlier ones with the same id, keeping position,
+                    // except bundled plugins: a user or project plugin can't stand in for one
+                    // (and inherit its settings, secrets and trust).
                     if let Some(existing) = report.plugins.iter_mut().find(|p| p.id() == plugin.id()) {
+                        if existing.source == PluginSource::Bundled && source != PluginSource::Bundled {
+                            report.errors.push(ManifestError::Invalid {
+                                path: plugin.dir.join(MANIFEST_FILE),
+                                message: format!("uses the id of a bundled plugin (\"{}\")", plugin.id()),
+                            });
+                            continue;
+                        }
                         *existing = plugin;
                     } else {
                         report.plugins.push(plugin);
@@ -157,6 +167,8 @@ mod tests {
         write_plugin(&bundled, "a", "alpha", "Bundled Alpha");
         write_plugin(&bundled, "b", "beta", "Bundled Beta");
         write_plugin(&user, "a2", "alpha", "User Alpha");
+        write_plugin(&user, "d", "delta", "User Delta");
+        write_plugin(&project, "d2", "delta", "Project Delta");
         write_plugin(&project, "g", "gamma", "Project Gamma");
         // Invalid manifest is reported, not fatal.
         fs::create_dir_all(project.join("bad")).unwrap();
@@ -170,10 +182,12 @@ mod tests {
             project_root: Some(project.clone()),
         });
         let names: Vec<_> = report.plugins.iter().map(|p| p.manifest.name.as_str()).collect();
-        assert_eq!(names, ["User Alpha", "Bundled Beta", "Project Gamma"]);
-        assert_eq!(report.plugins[0].source, PluginSource::User);
-        assert_eq!(report.errors.len(), 1);
-        assert!(report.errors[0].to_string().contains("bad"));
+        // A user plugin can't take a bundled plugin's id; a project plugin may replace a user one.
+        assert_eq!(names, ["Bundled Alpha", "Bundled Beta", "Project Delta", "Project Gamma"]);
+        assert_eq!(report.plugins[0].source, PluginSource::Bundled);
+        assert_eq!(report.errors.len(), 2);
+        assert!(report.errors.iter().any(|e| e.to_string().contains("uses the id of a bundled plugin (\"alpha\")")));
+        assert!(report.errors.iter().any(|e| e.to_string().contains("bad")));
     }
 
     #[test]

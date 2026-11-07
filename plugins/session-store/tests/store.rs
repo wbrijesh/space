@@ -89,10 +89,11 @@ async fn a_saved_thread_comes_back_after_a_restart_and_continues() {
     let live = drain(&mut events).await;
     let mut shown = SessionState::default();
     live.iter().for_each(|e| shown.apply(e));
-    host.save_thread("t1", Some(meta("t1", session.id(), root.path())), &live).await.unwrap();
+    host.save_thread("t1", Some(meta("t1", session.id(), root.path())), 0, &live).await.unwrap();
 
     // Read back through the host: the same transcript.
-    let (saved_meta, saved) = host.load_thread("t1").await.unwrap();
+    let (saved_meta, saved, count) = host.load_thread("t1").await.unwrap();
+    assert_eq!(count, saved.len() as u64);
     assert_eq!(saved_meta.session_id.as_deref(), Some(session.id()));
     let mut replayed = SessionState::default();
     saved.iter().for_each(|e| replayed.apply(e));
@@ -141,7 +142,7 @@ async fn a_store_that_cant_write_doesnt_stop_the_conversation() {
     let session = agent.new_session_in(root.path(), host.thread_data_dir("t1").await).await.unwrap();
     assert_eq!(session.prompt("hello").await.unwrap(), "end_turn");
     let live = drain(&mut events).await;
-    let err = host.save_thread("t1", Some(meta("t1", session.id(), root.path())), &live).await.unwrap_err();
+    let err = host.save_thread("t1", Some(meta("t1", session.id(), root.path())), 0, &live).await.unwrap_err();
     assert!(format!("{err:#}").contains("Session Store"), "{err:#}");
     // The session goes on.
     assert_eq!(session.prompt("again").await.unwrap(), "end_turn");
