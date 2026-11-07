@@ -39,6 +39,8 @@ const EDITOR_PAD: f32 = space::XS;
 const ROW_INSET_LEFT: f32 = 1. + PAD + BUTTON / 2. - 7. - space::MD;
 const ROW_INSET_RIGHT: f32 = 1. + PAD;
 pub const MAX_LINES: usize = 10;
+/// Key context around the composer while its text spans more than one line.
+pub const MULTILINE_CONTEXT: &str = "ComposerMultiline";
 
 /// A textarea configured for the composer (placeholder, 1–10 line auto-grow, Enter submits).
 pub fn new_input(window: &mut Window, cx: &mut Context<TextareaState>) -> TextareaState {
@@ -286,6 +288,9 @@ impl RenderOnce for Composer {
             .flex()
             .flex_col()
             .gap_2()
+            // More than one line: ⌘↓ moves the caret to the end instead of scrolling the
+            // transcript (see the key bindings in space-app).
+            .when(expanded, |d| d.key_context(MULTILINE_CONTEXT))
             .child(card)
             .children(controls.map(|c| control_row(c, &h, running, window)))
     }

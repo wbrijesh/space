@@ -37,6 +37,8 @@ pub struct ScenarioThread {
     pub draft: Option<String>,
     /// The thread is in read-only mode (set before its prompt is sent).
     pub read_only: bool,
+    /// Hold the transcript this many px above the bottom (as if scrolled up) once it's that long.
+    pub scrolled_up: Option<f32>,
 }
 
 // ----- step helpers -------------------------------------------------------------------------
@@ -217,6 +219,13 @@ pub fn all() -> Vec<Scenario> {
             ..Default::default()
         },
         Scenario {
+            name: "scrolled-up",
+            description: "A long thread held scrolled up (scroll-to-bottom button) while the reply streams below.",
+            threads: vec![streaming_long_thread()],
+            select: None,
+            ..Default::default()
+        },
+        Scenario {
             name: "read-mode",
             description: "A thread in read-only mode with a finished investigation.",
             threads: vec![read_only_thread()],
@@ -269,6 +278,27 @@ fn long_thread() -> ScenarioThread {
     }
     steps.push(context(120_000));
     thread("Walk me through plugin discovery in detail", steps)
+}
+
+/// A long finished stretch, then a reply that keeps streaming a sentence every ~0.6 s for a few
+/// minutes and holds; the view is held scrolled up above it.
+fn streaming_long_thread() -> ScenarioThread {
+    let mut steps = Vec::new();
+    for i in 0..3 {
+        let title = "read: crates/space-core/src/session.rs";
+        steps.push(tool(&format!("t{i}"), title, "read", "completed", Some("350 lines")));
+        steps.push(say(EXPLAIN));
+    }
+    steps.push(say("\n\n**Streaming below** (scroll down or press ⌘↓ to follow):\n\n"));
+    for i in 1..=300 {
+        steps.push(Step::Sleep { ms: 600 });
+        steps.push(say(&format!("Line {i}: another sentence arrives below the fold while you read above.\n\n")));
+    }
+    steps.push(Step::Hold);
+    ScenarioThread {
+        scrolled_up: Some(600.),
+        ..thread("Walk me through the session reducer while it keeps going", steps)
+    }
 }
 
 pub fn find(name: &str) -> Option<Scenario> {
@@ -338,6 +368,7 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
             cwd: t.subdir.map(|d| project_dir.join(d)),
             draft: t.draft.clone(),
             read_only: t.read_only,
+            scrolled_up: t.scrolled_up,
         })
         .collect();
     let options = Options {
@@ -379,6 +410,7 @@ mod tests {
             "many-threads",
             "long-composer",
             "read-mode",
+            "scrolled-up",
             "settings",
         ] {
             assert!(find(wanted).is_some(), "missing scenario {wanted}");

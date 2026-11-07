@@ -26,6 +26,13 @@ pub const DOT_LIFT: f32 = 1.5;
 /// Segmented toggle (composer Write / Read-only): the knob slides to the chosen segment.
 pub const TOGGLE_SLIDE: Duration = Duration::from_millis(180);
 
+/// Scroll-to-bottom glide (button or ⌘↓), eased out, aimed at the live bottom.
+pub const SCROLL_GLIDE: Duration = Duration::from_millis(200);
+
+/// Floating buttons (scroll to bottom) fade in while scaling up from [`POP_SCALE`], and fade out.
+pub const POP: Duration = Duration::from_millis(160);
+pub const POP_SCALE: f32 = 0.92;
+
 /// Fast start, gentle stop (cubic). Used for the toggle knob.
 pub fn ease_out(t: f32) -> f32 {
     1. - (1. - t.clamp(0., 1.)).powi(3)
@@ -46,4 +53,6 @@ pub const ALL: &[(&str, Duration, &str)] = &[
     ("SPINNER_CYCLE", SPINNER_CYCLE, "ease_in_out rotation, 8 spokes, 1.3px, 60–100% radius"),
     ("DOTS_CYCLE", DOTS_CYCLE, "sin² pulse, 16% stagger, 50% pulse window"),
     ("TOGGLE_SLIDE", TOGGLE_SLIDE, "ease_out knob slide (composer Write / Read-only)"),
+    ("SCROLL_GLIDE", SCROLL_GLIDE, "ease_out glide to the bottom (scroll-to-bottom button, ⌘↓)"),
+    ("POP", POP, "ease_out fade + scale from 0.92 (scroll-to-bottom button)"),
 ];

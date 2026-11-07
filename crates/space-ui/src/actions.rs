@@ -12,6 +12,7 @@ gpui::actions!(
         OpenSettings,
         CloseSettings,
         ToggleReadOnly,
+        ScrollToBottom,
         Quit
     ]
 );

@@ -142,6 +142,11 @@ pub mod size {
     pub const CONTEXT_RING: f32 = 16.;
     /// Fade at the bottom of the transcript, above the composer.
     pub const SCROLL_FADE_H: Pixels = px(72.);
+    /// A scroll area follows its bottom while the user is within this distance of it.
+    pub const FOLLOW_SLOP: f32 = 24.;
+    /// Gap between the scroll-to-bottom button and the bottom of its scroll area (the top of
+    /// the composer card).
+    pub const SCROLL_BUTTON_INSET: Pixels = px(12.);
     /// Settings rows (label + description on the left, a control on the right).
     pub const SETTINGS_ROW_H: Pixels = px(60.);
     /// Settings dropdowns, so a section's controls line up.

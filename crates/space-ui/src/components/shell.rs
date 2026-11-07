@@ -7,6 +7,7 @@ use gpui::component::{Icon, IconName};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
+use super::follow_scroll::{FollowScroll, FollowScrollArea};
 use super::widgets::{icon_button, pill_button, status_dot, tip, tip_action};
 use crate::ClickHandler;
 use crate::actions::ToggleLogs;
@@ -125,17 +126,18 @@ impl RenderOnce for AgentFooter {
     }
 }
 
-/// Bottom panel with the agent's stderr.
+/// Bottom panel with the agent's stderr. Follows new lines while scrolled to the bottom (no
+/// scroll-to-bottom button: the panel is short, and the wheel gets back quickly).
 #[derive(IntoElement)]
 pub struct LogsPanel {
     title: SharedString,
     lines: Vec<SharedString>,
-    scroll: ScrollHandle,
+    scroll: FollowScroll,
     on_close: ClickHandler,
 }
 
 impl LogsPanel {
-    pub fn new(title: impl Into<SharedString>, lines: Vec<SharedString>, scroll: &ScrollHandle) -> Self {
+    pub fn new(title: impl Into<SharedString>, lines: Vec<SharedString>, scroll: &FollowScroll) -> Self {
         Self { title: title.into(), lines, scroll: scroll.clone(), on_close: Rc::new(|_, _, _| {}) }
     }
 
@@ -191,7 +193,7 @@ impl RenderOnce for LogsPanel {
                             .on_click(move |e, w, cx| close(e, w, cx)),
                     ),
             )
-            .child(div().id("logs").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.scroll).child(col))
+            .child(FollowScrollArea::new("logs", &self.scroll, col))
     }
 }
 
@@ -234,20 +236,6 @@ pub fn problem_card(message: impl Into<SharedString>, actions: Option<(ClickHand
 }
 
 /// Heading above the centered composer of an empty thread.
-/// Fade over the bottom edge of a scroll area so content dims into the background before it
-/// meets the composer. Place inside a `relative()` parent, after the scroll container. Has no
-/// hitbox, so wheel and clicks pass through to the content below.
-pub fn scroll_fade() -> Div {
-    let bg = color::bg();
-    div()
-        .absolute()
-        .left_0()
-        .right_0()
-        .bottom_0()
-        .h(size::SCROLL_FADE_H)
-        .bg(linear_gradient(180., linear_color_stop(bg.opacity(0.), 0.), linear_color_stop(bg, 1.)))
-}
-
 pub fn empty_heading() -> Div {
     div()
         .flex()
@@ -290,7 +278,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             .example(Example::new("heading", |_, _| empty_heading().into_any_element()).width(size::CONTENT_MAX_W)),
         ComponentPreview::new(Area::Shell, "Logs panel", "Agent stderr (⌘J).").stacked().example(
             Example::new("with output", |window, cx| {
-                let scroll = window.use_keyed_state("preview-logs-scroll", cx, |_, _| ScrollHandle::new());
+                let scroll = window.use_keyed_state("preview-logs-scroll", cx, |_, _| FollowScroll::new());
                 let lines = [
                     "[pi-agent] v0.1.0 starting; model=claude-cli/claude-opus-5-5 thinking=medium",
                     "[pi-agent] initialize: client protocolVersion=1",

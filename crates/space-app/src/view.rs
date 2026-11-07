@@ -8,7 +8,10 @@ use gpui::*;
 use space_core::PluginStatus;
 use space_ui::components::composer::{Composer, ComposerControls, ComposerHandlers, Handler, ModeControl};
 use space_ui::components::settings::{Catalog, SettingsHandlers, SettingsPage};
-use space_ui::components::shell::{AgentFooter, AgentState, LogsPanel, banner, empty_heading, problem_card, scroll_fade, sidebar_column};
+use space_ui::components::follow_scroll::FollowScrollArea;
+use space_ui::components::shell::{
+    AgentFooter, AgentState, LogsPanel, banner, empty_heading, problem_card, sidebar_column,
+};
 use space_ui::components::thread_row::{RowIndicator, ThreadRow};
 use space_ui::components::title_bar::{MainTitleBar, SidebarTitleBar, TitleBarNav};
 use space_ui::components::transcript::{TranscriptView, transcript_items};
@@ -17,8 +20,8 @@ use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
 
 use crate::app::{
-    CloseSettings, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, SpaceApp, Thread, ToggleLogs,
-    ToggleReadOnly, ToggleSidebar,
+    CloseSettings, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, ScrollToBottom, SpaceApp, Thread,
+    ToggleLogs, ToggleReadOnly, ToggleSidebar,
 };
 
 /// A click callback that runs `f` on the app.
@@ -77,6 +80,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &FocusComposer, window, cx| this.focus_composer(window, cx)))
         .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.toggle_settings(window, cx)))
         .on_action(cx.listener(|this, _: &ToggleReadOnly, _, cx| this.toggle_read_only(cx)))
+        .on_action(cx.listener(|this, _: &ScrollToBottom, _, cx| this.scroll_to_bottom(cx)))
         // Only while the page is open, so Esc is free otherwise.
         .when(app.show_settings, |d| {
             d.on_action(cx.listener(|this, _: &CloseSettings, window, cx| this.close_settings(window, cx)))
@@ -179,29 +183,25 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
         }),
     });
 
+    let content =
+        div().w_full().flex().justify_center().px_6().child(column().pt_6().pb(size::SCROLL_FADE_H).children(items));
+    let transcript = FollowScrollArea::new("transcript", &app.transcript_scroll, content)
+        .fade(true)
+        .button(true)
+        .on_follow_change(|following, _, _| {
+            #[cfg(feature = "dev")]
+            if crate::devscript::active() {
+                eprintln!("script: transcript following={following}");
+            }
+            let _ = following;
+        });
+
     div()
         .flex_1()
         .min_h_0()
         .flex()
         .flex_col()
-        .child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .relative()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .id("transcript")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .track_scroll(&app.transcript_scroll)
-                        .child(div().w_full().flex().justify_center().px_6().child(column().pt_6().pb(size::SCROLL_FADE_H).children(items))),
-                )
-                .child(scroll_fade()),
-        )
+        .child(transcript)
         .child(
             div()
                 .flex_none()

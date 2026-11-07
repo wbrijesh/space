@@ -3,6 +3,7 @@
 //! `previews()` function listing named example states (see [`crate::preview`]).
 
 pub mod composer;
+pub mod follow_scroll;
 pub mod loaders;
 pub mod settings;
 pub mod shell;

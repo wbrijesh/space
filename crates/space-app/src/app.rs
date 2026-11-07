@@ -26,11 +26,12 @@ use space_core::{
 };
 
 pub use space_ui::actions::{
-    CloseSettings, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, Quit, ToggleLogs, ToggleReadOnly,
-    ToggleSidebar,
+    CloseSettings, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, Quit, ScrollToBottom, ToggleLogs,
+    ToggleReadOnly, ToggleSidebar,
 };
 use space_ui::assets::SpaceAssets;
 use space_ui::components::composer;
+use space_ui::components::follow_scroll::FollowScroll;
 use space_ui::format;
 
 #[cfg(feature = "dev")]
@@ -39,6 +40,9 @@ use crate::notify::{self, NotificationPermission};
 use crate::settings::{ModelRef, SettingsStore};
 
 const MAX_LOG_LINES: usize = 2000;
+/// Where ⌘↓ means Scroll to Bottom inside the composer: a single-line textarea. Bound after
+/// gpui-component's own `cmd-down` (MoveToEnd, context `Input`), so it wins at equal depth.
+const SCROLL_IN_COMPOSER: &str = "Input && !ComposerMultiline";
 const DEFAULT_AGENT: &str = "pi-agent";
 
 pub struct Options {
@@ -67,6 +71,8 @@ pub struct SeedThread {
     pub draft: Option<String>,
     /// Start in read-only mode.
     pub read_only: bool,
+    /// Dev scenarios: hold the transcript this far above the bottom, as if scrolled up.
+    pub scrolled_up: Option<f32>,
 }
 
 /// What the process opens.
@@ -94,6 +100,12 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-l", FocusComposer, None),
             KeyBinding::new("cmd-,", OpenSettings, None),
             KeyBinding::new("cmd-shift-r", ToggleReadOnly, None),
+            // ⌘↓ scrolls the transcript to the bottom, also from the composer (where the
+            // textarea would move the caret to the end) unless its text spans several lines.
+            // Not context-free: a `None` binding counts as the deepest match and would beat
+            // the textarea's own MoveToEnd even in a multi-line composer.
+            KeyBinding::new("cmd-down", ScrollToBottom, Some("Space")),
+            KeyBinding::new("cmd-down", ScrollToBottom, Some(SCROLL_IN_COMPOSER)),
             KeyBinding::new("escape", CloseSettings, Some("Space")),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
@@ -123,6 +135,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
                     MenuItem::action("Back", GoBack),
                     MenuItem::action("Forward", GoForward),
                     MenuItem::separator(),
+                    MenuItem::action("Scroll to Bottom", ScrollToBottom),
                     MenuItem::action("Focus Composer", FocusComposer),
                     MenuItem::action("Toggle Read-only Mode", ToggleReadOnly),
                 ],
@@ -298,8 +311,9 @@ pub struct SpaceApp {
     orphans: HashMap<SessionId, Vec<SessionEvent>>,
     pub(crate) input: Entity<TextareaState>,
     pub(crate) focus: FocusHandle,
-    pub(crate) transcript_scroll: ScrollHandle,
-    pub(crate) log_scroll: ScrollHandle,
+    /// The selected thread's transcript; every thread opens at the bottom.
+    pub(crate) transcript_scroll: FollowScroll,
+    pub(crate) log_scroll: FollowScroll,
     pub(crate) sidebar_open: bool,
     pub(crate) show_logs: bool,
     pub(crate) banner: Option<String>,
@@ -415,8 +429,8 @@ impl SpaceApp {
             orphans: HashMap::new(),
             input,
             focus: cx.focus_handle(),
-            transcript_scroll: ScrollHandle::new(),
-            log_scroll: ScrollHandle::new(),
+            transcript_scroll: FollowScroll::new(),
+            log_scroll: FollowScroll::new(),
             sidebar_open: true,
             show_logs: false,
             banner,
@@ -488,9 +502,6 @@ impl SpaceApp {
                         self.logs.pop_front();
                     }
                     self.logs.push_back(line);
-                    if self.show_logs {
-                        self.log_scroll.scroll_to_bottom();
-                    }
                 }
             }
             HostEvent::Session { session_id, event } => {
@@ -527,9 +538,6 @@ impl SpaceApp {
         );
         if !selected && attention && !matches!(event, SessionEvent::TurnEnded { stop_reason } if stop_reason == "error") {
             thread.unread += 1;
-        }
-        if selected && !matches!(event, SessionEvent::Status(_)) {
-            self.transcript_scroll.scroll_to_bottom();
         }
         let prefs = &self.settings.settings.notifications;
         let alerts = notify::Alerts { notification: prefs.on_finish, sound: prefs.sound };
@@ -692,6 +700,7 @@ impl SpaceApp {
     fn seed_threads(&mut self, seed: Vec<SeedThread>, select: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
         let seed = if seed.is_empty() { vec![SeedThread::default()] } else { seed };
         let mut keys = Vec::new();
+        let mut scrolled_up = Vec::new();
         for s in seed {
             let key = self.add_thread(s.cwd.unwrap_or_else(|| self.project_dir.clone()));
             if let Some(t) = self.thread_mut(key) {
@@ -700,9 +709,14 @@ impl SpaceApp {
                 t.read_only = s.read_only;
             }
             keys.push(key);
+            scrolled_up.push(s.scrolled_up);
         }
-        let key = select.and_then(|i| keys.get(i).copied()).or(keys.last().copied());
+        let ix = select.filter(|i| *i < keys.len()).unwrap_or(keys.len() - 1);
+        let key = keys.get(ix).copied();
         self.selected = key;
+        if let Some(distance) = scrolled_up[ix] {
+            self.transcript_scroll.scroll_up_from_bottom(px(distance));
+        }
         if let Some(draft) = key.and_then(|k| self.thread(k)).map(|t| t.draft.clone()).filter(|d| !d.is_empty()) {
             self.input.update(cx, |s, cx| s.set_value(draft, window, cx));
         }
@@ -738,7 +752,7 @@ impl SpaceApp {
                 self.create_session(key, cx);
             }
         }
-        self.transcript_scroll.scroll_to_bottom();
+        self.transcript_scroll.jump_to_bottom();
         cx.notify();
     }
 
@@ -796,7 +810,7 @@ impl SpaceApp {
         if let Some(t) = self.thread_mut(key) {
             t.unread = 0;
         }
-        self.transcript_scroll.scroll_to_bottom();
+        self.transcript_scroll.jump_to_bottom();
         self.focus_composer(window, cx);
         cx.notify();
     }
@@ -1025,7 +1039,16 @@ impl SpaceApp {
 
     pub(crate) fn toggle_logs(&mut self, cx: &mut Context<Self>) {
         self.show_logs = !self.show_logs;
-        self.log_scroll.scroll_to_bottom();
+        self.log_scroll.jump_to_bottom();
+        cx.notify();
+    }
+
+    /// ⌘↓ or the button: glide the transcript to the bottom and follow again.
+    pub(crate) fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
+        if self.show_settings {
+            return;
+        }
+        self.transcript_scroll.glide_to_bottom();
         cx.notify();
     }
 
