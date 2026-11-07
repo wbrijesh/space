@@ -55,6 +55,7 @@ fn host_rechecking(root: &Path, recheck: Duration) -> (Host, EventReceiver) {
         discovery: DiscoveryOptions { bundled_roots: vec![root.to_path_buf()], user_root: None, project_root: None },
         secrets: Secrets::new(TEST_KEYCHAIN),
         held_recheck: recheck,
+        grants: None,
     };
     Host::new(tokio::runtime::Handle::current(), options)
 }

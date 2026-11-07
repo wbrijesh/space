@@ -17,6 +17,12 @@
 //!   runs again when a listener sends `hooks/ready`, a service (re)starts, the session's mode
 //!   changes, or every [`HostOptions::held_recheck`]; stopping the turn ends the wait.
 //! * `required` service plugins can't be turned off.
+//! * Plugins from `~/.space/plugins` and a project's `.space/plugins` start only once you
+//!   approve their permissions ([`crate::grants`]); until then they count as not installed.
+//! * A plugin gets only what its manifest declares: the hooks it lists, the events it
+//!   `observes`, the host services it `uses` (any other call is answered "not permitted"), the
+//!   transcript only with `read:transcript`, its own settings and secrets, and a clean
+//!   environment ([`crate::process::spawn`]).
 //! * A plugin starts after a provider of everything it `requires` runs (none: it isn't
 //!   started, and says why); when that provider stops or crashes, it stops first, and it
 //!   starts again once the provider runs again.
@@ -45,6 +51,7 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
 use crate::discovery::{DiscoveredPlugin, DiscoveryOptions};
+use crate::grants::Grants;
 use crate::process::ExitKind;
 use crate::secrets::Secrets;
 use crate::session::{SessionEvent, SessionId};
@@ -112,6 +119,8 @@ pub struct HostOptions {
     /// A held tool call runs the hook chain again at least this often (in case no listener
     /// says when it's ready, e.g. a crashed plugin to restart).
     pub held_recheck: Duration,
+    /// Where plugin approvals are saved (`None`: kept in memory only).
+    pub grants: Option<PathBuf>,
 }
 
 /// Default of [`HostOptions::held_recheck`].
@@ -126,6 +135,7 @@ impl HostOptions {
             project_dir,
             secrets: Secrets::default(),
             held_recheck: HELD_RECHECK,
+            grants: None,
         }
     }
 }
@@ -156,6 +166,8 @@ struct HostInner {
     plugins: Mutex<Vec<DiscoveredPlugin>>,
     /// Plugin ids turned off in Settings.
     disabled: Mutex<HashSet<String>>,
+    /// Which plugins you approved.
+    grants: Grants,
     /// Running service plugins by id.
     services: Mutex<HashMap<String, Arc<Service>>>,
     /// When each service was last (re)started, for the restart backoff.
@@ -180,6 +192,7 @@ impl Host {
     /// Create a host whose background work runs on `rt`. Runs an initial discovery.
     pub fn new(rt: Handle, options: HostOptions) -> (Self, EventReceiver) {
         let (events, rx) = mpsc::unbounded_channel();
+        let grants = Grants::load(options.grants.clone());
         let host = Host {
             inner: Arc::new(HostInner {
                 rt,
@@ -187,6 +200,7 @@ impl Host {
                 options,
                 plugins: Mutex::new(Vec::new()),
                 disabled: Mutex::new(HashSet::new()),
+                grants,
                 services: Mutex::new(HashMap::new()),
                 started_at: Mutex::new(HashMap::new()),
                 start_locks: Mutex::new(HashMap::new()),

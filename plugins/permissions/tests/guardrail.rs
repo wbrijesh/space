@@ -120,7 +120,7 @@ fn root(mock: &Mock, retry_secs: f64) -> tempfile::TempDir {
         format!(
             "id='permissions'\nname='Permissions'\nversion='1'\n\
              provides=['sandbox','context','settings','catalog:permission-modes']\n\
-             hooks=[{{event='tools/pre-execute', order=10}}]\nrequired=true\n[run]\ncommand='{PLUGIN}'\n\
+             hooks=[{{event='tools/pre-execute', order=10}}]\nuses=['read:transcript']\nrequired=true\n[run]\ncommand='{PLUGIN}'\n\
              [run.env]\nSPACE_LUNA_BASE_URL='{}'\nSPACE_GUARD_RETRY_SECS='{retry_secs}'\n",
             mock.url
         ),
@@ -134,6 +134,7 @@ fn host(root: &Path, keychain: &str) -> (Host, EventReceiver) {
         discovery: DiscoveryOptions { bundled_roots: vec![root.to_path_buf()], user_root: None, project_root: None },
         secrets: Secrets::new(keychain),
         held_recheck: Duration::from_secs(60),
+        grants: None,
     };
     Host::new(tokio::runtime::Handle::current(), options)
 }

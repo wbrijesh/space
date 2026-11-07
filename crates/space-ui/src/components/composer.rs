@@ -252,7 +252,7 @@ impl RenderOnce for Composer {
                 })
                 .child(Icon::new(IconName::ArrowUp).size(size::ICON_MD))
                 .when(can_send, |d| d.tooltip(tip("Send  ⏎")).on_click(move |_, w, cx| send(w, cx)))
-                .when(blocker.is_some(), |d| d.tooltip(tip("Can't send in this mode right now")))
+                .when(blocker.is_some(), |d| d.tooltip(tip("Can't send right now")))
                 .into_any_element()
         };
 
@@ -701,6 +701,15 @@ pub mod fixtures {
         failing("OpenAI's decision API changed (Unknown parameter); Space needs an update. Actions are paused.", None)
     }
 
+    /// A plugin from your home or project folder waits for your approval.
+    pub fn needs_approval() -> ComposerBlocker {
+        ComposerBlocker {
+            text: "Alerts needs your approval to run.".into(),
+            actions: vec![action("Review in Settings", "open-settings:alerts")],
+            times: None,
+        }
+    }
+
     pub fn with_blocker(mut c: ComposerControls, blocker: ComposerBlocker) -> ComposerControls {
         c.mode = Some(modes("workspace-write", false));
         c.blocker = Some(blocker);
@@ -777,6 +786,9 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             }),
             example("API changed", "", |c| {
                 c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::incompatible()))
+            }),
+            example("a plugin needs approval", "", |c| {
+                c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::needs_approval()))
             }),
             example("no permission modes (no plugin)", "", |c| {
                 c.controls(ComposerControls { mode: None, ..fixtures::controls(18_200, false) })

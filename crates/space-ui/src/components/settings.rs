@@ -84,6 +84,17 @@ pub struct PluginRow {
     pub enabled: bool,
     /// "Running", "Exited: …", "Off".
     pub status: SharedString,
+    /// Set for a plugin from your home or project folder you haven't approved.
+    pub approval: Option<PluginApproval>,
+}
+
+/// What a plugin from your home or project folder asks to do, and your answer so far.
+#[derive(Clone)]
+pub struct PluginApproval {
+    /// Its permissions in plain words.
+    pub permissions: Vec<SharedString>,
+    /// You said no (you can still approve it).
+    pub denied: bool,
 }
 
 /// Whether macOS lets Space post notifications.
@@ -129,6 +140,8 @@ pub struct SettingsHandlers {
     pub on_save_anyway: FieldHandler,
     pub on_clear_field: FieldHandler,
     pub on_plugin_enabled: PluginToggleHandler,
+    /// `(plugin id, approved)`.
+    pub on_plugin_approval: PluginToggleHandler,
 }
 
 impl Default for SettingsHandlers {
@@ -145,6 +158,7 @@ impl Default for SettingsHandlers {
             on_save_anyway: Rc::new(|_, _, _, _| {}),
             on_clear_field: Rc::new(|_, _, _, _| {}),
             on_plugin_enabled: Rc::new(|_, _, _, _| {}),
+            on_plugin_approval: Rc::new(|_, _, _, _| {}),
         }
     }
 }
@@ -326,7 +340,7 @@ impl RenderOnce for SettingsPage {
             section(p.title, None, rows)
         });
         let plugin_rows: Vec<AnyElement> =
-            plugins.iter().map(|p| plugin_row(p, h.on_plugin_enabled.clone(), window).into_any_element()).collect();
+            plugins.iter().map(|p| plugin_row(p, &h, window).into_any_element()).collect();
 
         div()
             .w_full()
@@ -419,13 +433,18 @@ pub fn field_row(f: &FieldView, h: &SettingsHandlers, _window: &Window) -> Div {
         .children(note.map(|n| div().pl_4().pb_3().child(n)))
 }
 
-/// A plugin: name, status and what it does; a switch for service plugins.
-pub fn plugin_row(p: &PluginRow, on_enabled: PluginToggleHandler, window: &Window) -> Div {
+/// A plugin: name, status and what it does; a switch for service plugins. One that waits for
+/// your approval lists what it asks to do, with Approve and Deny.
+pub fn plugin_row(p: &PluginRow, h: &SettingsHandlers, window: &Window) -> Div {
     let description: SharedString = if p.description.is_empty() {
         p.status.clone()
     } else {
         format!("{} · {}", p.status, p.description).into()
     };
+    if let Some(approval) = &p.approval {
+        return approval_row(p, approval, description, h);
+    }
+    let on_enabled = h.on_plugin_enabled.clone();
     let label = |t: &'static str| div().text_size(text::MD).text_color(color::text_3()).child(t).into_any_element();
     let control = if p.agent {
         label("Agent")
@@ -437,6 +456,44 @@ pub fn plugin_row(p: &PluginRow, on_enabled: PluginToggleHandler, window: &Windo
         toggle(element_id, p.enabled, Rc::new(move |on, w, cx| on_enabled(id.clone(), on, w, cx)), window).into_any_element()
     };
     row(p.name.clone(), description, Some(control))
+}
+
+fn approval_row(p: &PluginRow, approval: &PluginApproval, description: SharedString, h: &SettingsHandlers) -> Div {
+    let button = |what: &str, label: &'static str, approved: bool| {
+        let (f, id) = (h.on_plugin_approval.clone(), p.id.clone());
+        pill_button(SharedString::from(format!("plugin-{what}-{}", p.id)), label, approved)
+            .on_click(move |_, w, cx| f(id.clone(), approved, w, cx))
+    };
+    let controls = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .when(!approval.denied, |d| d.child(button("deny", "Deny", false)))
+        .child(button("approve", "Approve", true));
+    let permission = |text: SharedString| {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(Icon::new(IconName::Check).size(size::ICON_SM).text_color(color::text_3()))
+            .child(text)
+    };
+    let details = div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .px_4()
+        .pb_3()
+        .text_size(text::SM)
+        .text_color(color::text_2())
+        .children(approval.permissions.iter().cloned().map(permission))
+        .child(
+            div()
+                .pt_1()
+                .text_color(color::text_3())
+                .child("Like any program you run, it can also use your files and the network."),
+        );
+    div().flex().flex_col().child(row(p.name.clone(), description, Some(controls.into_any_element()))).child(details)
 }
 
 /// The "macOS permission" row: status text and, when it helps, one action.
@@ -692,6 +749,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 required: false,
                 enabled: true,
                 status: "Running".into(),
+                approval: None,
             },
             PluginRow {
                 id: "permissions".into(),
@@ -703,6 +761,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 required: true,
                 enabled: true,
                 status: "Running".into(),
+                approval: None,
             },
         ]
     }
@@ -757,7 +816,12 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                     Some(("OpenAI rejected your API key, so actions are paused. Last tried 2m 14s ago · next try in 2m 46s", false)),
                 ),
             ]),
-        ComponentPreview::new(Area::Settings, "Plugins", "Service plugins can be turned off; agents and required guards can't.")
+        ComponentPreview::new(
+            Area::Settings,
+            "Plugins",
+            "Service plugins can be turned off; agents and required guards can't. Plugins from your home or project \
+             folder wait for your approval.",
+        )
             .stacked()
             .examples([Example::new("plugins", |window, _| {
                 let mut rows = plugins();
@@ -769,8 +833,29 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                     required: false,
                     enabled: false,
                     status: "Off".into(),
+                    approval: None,
                 });
-                let rows = rows.iter().map(|p| plugin_row(p, Rc::new(|_, _, _, _| {}), window).into_any_element()).collect();
+                let asks = |id: &str, name: &str, status: &str, denied: bool| PluginRow {
+                    id: id.into(),
+                    name: name.to_string().into(),
+                    description: "From ~/.space/plugins.".into(),
+                    agent: false,
+                    required: false,
+                    enabled: true,
+                    status: status.to_string().into(),
+                    approval: Some(PluginApproval {
+                        permissions: vec![
+                            "Is told when the agent finishes".into(),
+                            "Shows notifications".into(),
+                            "Reads what you and the agent write".into(),
+                        ],
+                        denied,
+                    }),
+                };
+                rows.push(asks("alerts", "Alerts", "Needs your approval", false));
+                rows.push(asks("titles", "Titles", "Not approved", true));
+                let h = SettingsHandlers::default();
+                let rows = rows.iter().map(|p| plugin_row(p, &h, window).into_any_element()).collect();
                 section("Plugins", None, rows).into_any_element()
             })
             .width(size::CONTENT_MAX_W)]),

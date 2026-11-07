@@ -13,6 +13,7 @@
 
 mod convert;
 pub mod discovery;
+pub mod grants;
 mod host;
 pub mod process;
 pub mod secrets;
@@ -21,6 +22,7 @@ pub mod smoke;
 pub mod stub_script;
 
 pub use discovery::{DiscoveredPlugin, DiscoveryOptions, DiscoveryReport, PluginSource};
+pub use grants::Approval;
 pub use host::{
     AgentHandle, EventReceiver, HELD_RECHECK, Host, HostEvent, HostOptions, PluginStatus, Session, SettingError, SettingState,
 };

@@ -8,7 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use space_protocol::service::{self as svc, HistoryItem};
-use space_protocol::{CATALOG_PERMISSION_MODES, HOOK_TOOLS_PRE_EXECUTE, PreExecute, PreExecuteResult, Verdict};
+use space_protocol::{
+    CATALOG_PERMISSION_MODES, HOOK_TOOLS_PRE_EXECUTE, PreExecute, PreExecuteResult, USE_READ_TRANSCRIPT, Verdict,
+};
 
 use super::HostInner;
 use super::agents::Shared;
@@ -98,11 +100,14 @@ enum Pass {
     Hold(String),
 }
 
-/// Every listener, in order. A deny wins over a hold, a hold over asks.
+/// Every listener, in order. A deny wins over a hold, a hold over asks. Listeners without
+/// `read:transcript` get the history without what the user wrote.
 async fn run_chain(host: &Arc<HostInner>, hook: &svc::HookCall) -> Pass {
     let (mut asks, mut hold) = (Vec::new(), None);
+    let stripped = without_transcript(hook);
     for plugin in host.hook_listeners(HOOK_TOOLS_PRE_EXECUTE) {
         let name = &plugin.manifest.name;
+        let hook = if plugin.manifest.uses(USE_READ_TRANSCRIPT) { hook } else { &stripped };
         match host.call_service::<_, svc::HookDecision>(plugin.id(), svc::HOOK_PRE_EXECUTE, hook, HOOK_TIMEOUT).await {
             Ok(d) => match d.decision {
                 svc::HookVerdict::Deny => {
@@ -213,6 +218,17 @@ pub(super) async fn pre_execute(shared: Arc<Shared>, req: PreExecute) -> PreExec
     let allowed = matches!(rx.await, Ok(PermissionDecision::Selected(id)) if id == ASK_ALLOW);
     record(allowed);
     if allowed { PreExecuteResult { decision: Verdict::Allow, reason: None } } else { block("The user didn't allow this call.".into()) }
+}
+
+/// `hook` with the user's messages emptied (each still counts as an item).
+fn without_transcript(hook: &svc::HookCall) -> svc::HookCall {
+    let mut hook = hook.clone();
+    for item in &mut hook.history {
+        if let HistoryItem::User { text } = item {
+            text.clear();
+        }
+    }
+    hook
 }
 
 /// `bash: ls -la`, `read: src/main.rs`.

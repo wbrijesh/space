@@ -1,13 +1,14 @@
-//! The plugin registry: discovered plugins, which are turned off, who provides what, and who
-//! needs what (`requires`).
+//! The plugin registry: discovered plugins, which are turned off or not approved, who provides
+//! what, and who needs what (`requires`).
 
 use std::collections::HashSet;
 use std::sync::Weak;
 
 use space_protocol::service::CatalogEntry;
 
-use super::{Host, HostInner};
+use super::{Host, HostInner, PluginStatus};
 use crate::discovery::{self, DiscoveredPlugin, DiscoveryReport};
+use crate::grants::Approval;
 
 impl Host {
     /// Re-scan plugin directories, replacing the registry. Invalid manifests are returned
@@ -56,6 +57,24 @@ impl Host {
         self.inner.disabled.lock().unwrap().contains(plugin_id)
     }
 
+    /// Whether the plugin may start (`Pending` for an unknown id).
+    pub fn approval(&self, plugin_id: &str) -> Approval {
+        self.plugin(plugin_id).map_or(Approval::Pending, |p| self.inner.grants.approval(&p))
+    }
+
+    /// Approve or deny the plugin's current permissions (saved). An approved service starts
+    /// with the next [`Host::start_services`]; an approved agent with the next start.
+    pub fn answer_approval(&self, plugin_id: &str, approved: bool) -> anyhow::Result<()> {
+        let plugin = self.plugin(plugin_id).ok_or_else(|| anyhow::anyhow!("unknown plugin `{plugin_id}`"))?;
+        self.inner.grants.answer(&plugin, approved)?;
+        let status = match self.inner.grants.approval(&plugin).refusal() {
+            Some(why) => PluginStatus::NotStarted(why.into()),
+            None => PluginStatus::Stopped,
+        };
+        self.inner.emit_status(plugin_id, status);
+        Ok(())
+    }
+
     /// The entries of catalog `name` (empty until its provider has started).
     pub fn catalog(&self, name: &str) -> Vec<CatalogEntry> {
         self.inner.catalogs.lock().unwrap().get(name).cloned().unwrap_or_default()
@@ -63,10 +82,9 @@ impl Host {
 }
 
 impl HostInner {
+    /// Services that are on and approved, in discovery order.
     pub(super) fn enabled_services(&self) -> Vec<DiscoveredPlugin> {
-        let disabled = self.disabled.lock().unwrap().clone();
-        let plugins = self.plugins.lock().unwrap();
-        plugins.iter().filter(|p| !p.manifest.is_agent() && !disabled.contains(p.id())).cloned().collect()
+        self.enabled_plugins().into_iter().filter(|p| !p.manifest.is_agent()).collect()
     }
 
     /// Enabled services listening to `event`, in chain order.
@@ -89,10 +107,12 @@ impl HostInner {
         self.plugins.lock().unwrap().iter().find(|p| p.id() == plugin_id).cloned()
     }
 
-    /// Enabled plugins, agents included, in discovery order.
+    /// Plugins that are on and approved, agents included, in discovery order. The rest count
+    /// as not installed: they provide nothing and listen to nothing.
     fn enabled_plugins(&self) -> Vec<DiscoveredPlugin> {
         let disabled = self.disabled.lock().unwrap().clone();
-        self.plugins.lock().unwrap().iter().filter(|p| !disabled.contains(p.id())).cloned().collect()
+        let plugins = self.plugins.lock().unwrap().clone();
+        plugins.into_iter().filter(|p| !disabled.contains(p.id()) && self.grants.approval(p).allows_start()).collect()
     }
 
     /// Enabled plugins that need something `plugin` provides.
@@ -110,9 +130,12 @@ impl HostInner {
         }
     }
 
-    /// Why `plugin` can't run at all: something it requires that no enabled plugin provides,
-    /// or requirements that lead back to itself.
+    /// Why `plugin` can't run at all: you haven't approved it, something it requires that no
+    /// enabled plugin provides, or requirements that lead back to itself.
     pub(super) fn unmet_requirement(&self, plugin: &DiscoveredPlugin) -> Option<String> {
+        if let Some(why) = self.grants.approval(plugin).refusal() {
+            return Some(why.into());
+        }
         if let Some(cap) = plugin.manifest.requires.iter().find(|c| self.providers(c).is_empty()) {
             return Some(format!("Needs a {cap} provider."));
         }

@@ -438,6 +438,7 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         discovery: DiscoveryOptions { bundled_roots: vec![root], user_root: None, project_root: None },
         secrets,
         held_recheck: space_core::HELD_RECHECK,
+        grants: None,
     };
     let seed = scenario
         .threads

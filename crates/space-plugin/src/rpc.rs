@@ -27,6 +27,8 @@ impl RpcError {
     pub const INTERNAL: i64 = -32603;
     /// The connection closed or the call timed out (not a JSON-RPC code).
     pub const UNAVAILABLE: i64 = -32000;
+    /// The caller's manifest doesn't allow this call.
+    pub const NOT_PERMITTED: i64 = space_protocol::service::NOT_PERMITTED;
 
     pub fn new(code: i64, message: impl Into<String>) -> Self {
         Self { code, message: message.into() }
@@ -42,6 +44,9 @@ impl RpcError {
     }
     pub fn unavailable(message: impl Into<String>) -> Self {
         Self::new(Self::UNAVAILABLE, message)
+    }
+    pub fn not_permitted(message: impl Into<String>) -> Self {
+        Self::new(Self::NOT_PERMITTED, message)
     }
 }
 

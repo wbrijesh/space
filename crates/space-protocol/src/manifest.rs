@@ -24,6 +24,17 @@ pub const CATALOG_PERMISSION_MODES: &str = "permission-modes";
 /// Hook event: before an agent runs a tool (`hooks/tools.preExecute`).
 pub const HOOK_TOOLS_PRE_EXECUTE: &str = "tools/pre-execute";
 
+/// Events a service plugin can observe (`observes`): it is told, and can't change anything.
+pub const EVENT_SESSION_CREATED: &str = "session/created";
+pub const EVENT_TURN_STARTED: &str = "turn/started";
+pub const EVENT_TURN_ENDED: &str = "turn/ended";
+pub const EVENT_TOOL_RESULT: &str = "tool/result";
+pub const EVENT_THREAD_TITLED: &str = "thread/titled";
+pub const EVENTS: &[&str] =
+    &[EVENT_SESSION_CREATED, EVENT_TURN_STARTED, EVENT_TURN_ENDED, EVENT_TOOL_RESULT, EVENT_THREAD_TITLED];
+/// In `uses`: payloads include what the user and the agent wrote (else ids and metadata only).
+pub const USE_READ_TRANSCRIPT: &str = "read:transcript";
+
 /// `[[hooks]]`: an event the plugin listens to, and its place in the chain (lower runs first).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -55,7 +66,7 @@ pub struct RunConfig {
     pub args: Vec<String>,
     #[serde(default)]
     pub cwd: RunCwd,
-    /// Extra environment variables.
+    /// Environment variables to set (see also [`Manifest::env`]).
     #[serde(default)]
     pub env: BTreeMap<String, String>,
 }
@@ -84,6 +95,16 @@ pub struct Manifest {
     /// running, tool calls wait for it (fail closed).
     #[serde(default)]
     pub required: bool,
+    /// Events a service plugin is told about ([`EVENTS`]).
+    #[serde(default)]
+    pub observes: Vec<String>,
+    /// What a service plugin may ask of the host: host services
+    /// ([`crate::service::HOST_SERVICES`]) and [`USE_READ_TRANSCRIPT`].
+    #[serde(default)]
+    pub uses: Vec<String>,
+    /// Variables of Space's environment the plugin gets, beyond the few every plugin gets.
+    #[serde(default)]
+    pub env: Vec<String>,
     pub run: RunConfig,
 }
 
@@ -163,15 +184,60 @@ impl Manifest {
                 return Err(format!("`requires` names {cap:?}, which the plugin provides itself"));
             }
         }
-        if self.is_agent() && (self.provides.len() > 1 || !self.hooks.is_empty() || self.required) {
-            return Err("an `agent` plugin provides nothing else, has no hooks and isn't `required`".into());
+        if self.is_agent()
+            && (self.provides.len() > 1 || !self.hooks.is_empty() || self.required || !self.observes.is_empty() || !self.uses.is_empty())
+        {
+            return Err("an `agent` plugin provides nothing else and has no hooks, `observes`, `uses` or `required`".into());
         }
         for hook in &self.hooks {
             if hook.event != HOOK_TOOLS_PRE_EXECUTE {
                 return Err(format!("unknown hook event {:?}", hook.event));
             }
         }
+        if let Some(event) = self.observes.iter().find(|e| !EVENTS.contains(&e.as_str())) {
+            return Err(format!("unknown event {event:?} in `observes`"));
+        }
+        let known_use = |u: &String| u == USE_READ_TRANSCRIPT || crate::service::HOST_SERVICES.contains(&u.as_str());
+        if let Some(u) = self.uses.iter().find(|u| !known_use(u)) {
+            return Err(format!("unknown host service {u:?} in `uses`"));
+        }
+        let env_name = |v: &String| {
+            v.chars().next().is_some_and(|c| c.is_ascii_uppercase() || c == '_')
+                && v.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        };
+        if let Some(v) = self.env.iter().find(|v| !env_name(v)) {
+            return Err(format!("`env` lists {v:?}, which isn't an environment variable name"));
+        }
         Ok(())
+    }
+
+    /// Everything the plugin may do, as stable strings, sorted: `provides:<cap>`,
+    /// `hook:<event>`, `observes:<event>`, `uses:<service>`, `env:<NAME>` and `required`.
+    /// Approving a plugin approves exactly these.
+    pub fn permissions(&self) -> Vec<String> {
+        let mut all: Vec<String> = self
+            .provides
+            .iter()
+            .map(|c| format!("provides:{c}"))
+            .chain(self.hooks.iter().map(|h| format!("hook:{}", h.event)))
+            .chain(self.observes.iter().map(|e| format!("observes:{e}")))
+            .chain(self.uses.iter().map(|u| format!("uses:{u}")))
+            .chain(self.env.iter().map(|v| format!("env:{v}")))
+            .chain(self.required.then(|| "required".to_string()))
+            .collect();
+        all.sort();
+        all.dedup();
+        all
+    }
+
+    /// Whether the manifest lists `what` in `uses`.
+    pub fn uses(&self, what: &str) -> bool {
+        self.uses.iter().any(|u| u == what)
+    }
+
+    /// Whether the plugin observes `event`.
+    pub fn observes(&self, event: &str) -> bool {
+        self.observes.iter().any(|e| e == event)
     }
 
     /// An ACP agent plugin (else a service plugin).
@@ -337,5 +403,37 @@ FOO = "bar"
         assert!(err.to_string().contains("can't name \"agent\""), "{err}");
         let err = parse("provides=['sandbox']\nrequires=['sandbox']").unwrap_err();
         assert!(err.to_string().contains("provides itself"), "{err}");
+    }
+
+    #[test]
+    fn observes_uses_env_and_permissions() {
+        let parse = |extra: &str| {
+            Manifest::parse(&format!("id='a'\nname='A'\nversion='1'\n{extra}\n[run]\ncommand='x'\n"), Path::new("m.toml"))
+        };
+        let m = parse(
+            "provides=['context']\nobserves=['turn/ended']\nuses=['host/notify', 'read:transcript']\nenv=['SSH_AUTH_SOCK']\n\
+             hooks=[{event='tools/pre-execute'}]\nrequired=true",
+        )
+        .unwrap();
+        assert!(m.observes(EVENT_TURN_ENDED) && !m.observes(EVENT_TURN_STARTED));
+        assert!(m.uses(USE_READ_TRANSCRIPT) && m.uses("host/notify") && !m.uses("host/open-url"));
+        assert_eq!(
+            m.permissions(),
+            [
+                "env:SSH_AUTH_SOCK",
+                "hook:tools/pre-execute",
+                "observes:turn/ended",
+                "provides:context",
+                "required",
+                "uses:host/notify",
+                "uses:read:transcript"
+            ]
+        );
+        assert!(parse("provides=['context']\nobserves=['turn/over']").unwrap_err().to_string().contains("turn/over"));
+        assert!(parse("provides=['context']\nuses=['host/shell']").unwrap_err().to_string().contains("host/shell"));
+        assert!(parse("provides=['context']\nenv=['lower']").unwrap_err().to_string().contains("lower"));
+        let err = parse("provides=['agent']\nuses=['host/notify']").unwrap_err();
+        assert!(err.to_string().contains("nothing else"), "{err}");
+        assert_eq!(parse("provides=['agent']\nenv=['SPACE_PI_MODEL']").unwrap().permissions(), ["env:SPACE_PI_MODEL", "provides:agent"]);
     }
 }

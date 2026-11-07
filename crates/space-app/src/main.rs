@@ -104,6 +104,8 @@ fn main() -> Result<()> {
 
     #[allow(unused_mut)]
     let mut host_options = HostOptions::for_project(&args.project_dir);
+    // Plugin approvals live next to the settings file.
+    host_options.grants = settings::default_path().and_then(|p| Some(p.parent()?.join("plugin-grants.json")));
     #[allow(unused_mut)]
     let mut options = Options {
         project_dir: args.project_dir.clone(),

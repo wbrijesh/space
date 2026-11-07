@@ -309,6 +309,20 @@ impl SpaceApp {
         }
         cx.notify();
     }
+
+    /// Approve or deny a plugin from your home or project folder (saved). An approved one
+    /// starts at once.
+    pub(crate) fn answer_plugin_approval(&mut self, plugin_id: String, approved: bool, cx: &mut Context<Self>) {
+        if let Err(e) = self.host.answer_approval(&plugin_id, approved) {
+            self.banner = Some(format!("Couldn't save your answer: {e:#}"));
+        } else if approved && self.agent_id.as_deref() == Some(plugin_id.as_str()) {
+            self.restart_agent(cx);
+        } else if approved {
+            let host = self.host.clone();
+            cx.spawn(async move |_, _| host.start_services().await).detach();
+        }
+        cx.notify();
+    }
 }
 
 /// What a Settings field's button does.

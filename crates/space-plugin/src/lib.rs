@@ -105,6 +105,12 @@ impl Host {
     pub fn hooks_ready(&self) {
         self.peer.notify(HOOKS_READY, serde_json::json!({}));
     }
+
+    /// Call a host service (one the manifest lists in `uses`; others fail with
+    /// [`RpcError::NOT_PERMITTED`]).
+    pub async fn request(&self, method: &str, params: Value) -> Result<Value, RpcError> {
+        self.peer.request(method, params, None).await
+    }
 }
 
 /// Serve `plugin` on `reader`/`writer` until `reader` closes.

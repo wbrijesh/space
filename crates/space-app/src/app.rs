@@ -19,10 +19,11 @@ use std::time::Duration;
 
 use gpui::component::input::{InputEvent, InputState, TextareaState};
 use gpui::*;
-use space_core::protocol::service::CatalogEntry;
+use space_core::protocol::service::{BlockerAction, CatalogEntry};
 use space_core::protocol::{CATALOG_PERMISSION_MODES, ConfigureSession, ModelInfo};
 use space_core::{
-    AgentHandle, EventReceiver, Host, HostEvent, PermissionDecision, PluginStatus, SessionEvent, SessionId, SettingState,
+    AgentHandle, Approval, DiscoveredPlugin, EventReceiver, Host, HostEvent, PermissionDecision, PluginStatus, SessionEvent,
+    SessionId, SettingState,
 };
 use space_ui::components::settings::FieldCheck;
 
@@ -696,13 +697,29 @@ impl SpaceApp {
         self.permission_modes.iter().find(|e| e.id == id)
     }
 
-    /// Why the thread can't send right now (its mode isn't set up), if so.
+    /// Why the thread can't send right now (a plugin waits for your approval, or the thread's
+    /// mode isn't set up), if so.
     pub(crate) fn blocker(&self, thread: &Thread) -> Option<space_core::protocol::service::Blocker> {
+        let waiting = self.awaiting_approval();
+        if let Some(first) = waiting.first() {
+            let text = match waiting.len() {
+                1 => format!("{} needs your approval to run.", first.manifest.name),
+                n => format!("{n} plugins need your approval to run."),
+            };
+            let review = BlockerAction::new("Review in Settings", format!("open-settings:{}", first.id()));
+            return Some(space_core::protocol::service::Blocker { text, actions: vec![review], ..Default::default() });
+        }
         let entry = self.mode_entry(thread).filter(|e| !e.ready)?;
         Some(entry.blocker.clone().unwrap_or_else(|| space_core::protocol::service::Blocker {
             text: format!("{} isn't ready yet.", entry.name),
             ..Default::default()
         }))
+    }
+
+    /// Plugins (turned on) that wait for you to approve or deny them.
+    pub(crate) fn awaiting_approval(&self) -> Vec<DiscoveredPlugin> {
+        let pending = |p: &DiscoveredPlugin| self.host.approval(p.id()) == Approval::Pending && !self.host.is_disabled(p.id());
+        self.host.plugins().into_iter().filter(pending).collect()
     }
 
     /// Tell the host each live session's permission mode.

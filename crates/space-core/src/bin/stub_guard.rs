@@ -16,7 +16,12 @@
 //!   `hooks/ready` (checked every 50 ms).
 //! * `holdModes` — answer `unavailable` in these permission modes.
 //! * `crashUntil` — exit at once on every tool call or `sandbox/confine` until this file exists.
-//! * `reason` — `{mode}`, `{tool}` and `{history}` (the number of earlier items) are filled in.
+//! * `reason` — `{mode}`, `{tool}`, `{history}` (the number of earlier items) and `{said}`
+//!   (the user's messages in the history, joined by `|`) are filled in.
+//! * `call` — call this host service once initialized, and log the answer
+//!   (`space-stub-guard: <method> -> ok|<error>`).
+//! * `printEnv` — log which of these environment variables are set
+//!   (`space-stub-guard: env HOME=set CARGO=unset`).
 //! * `sandbox` — `sandbox/confine` puts these words in front of the argv.
 //! * `context` — one hidden context section with this text.
 //! * `catalog` — the entries of `permission-modes`; ids listed in `needsSecret` are not ready
@@ -49,6 +54,9 @@ struct Config {
     invalid: Vec<String>,
     #[serde(default)]
     unverifiable: Vec<String>,
+    call: Option<String>,
+    #[serde(default)]
+    print_env: Vec<String>,
 }
 
 struct Guard {
@@ -75,6 +83,16 @@ impl Plugin for Guard {
                 }
                 eprintln!("space-stub-guard: ready");
                 host.hooks_ready();
+            });
+        }
+        if let Some(method) = self.config.call.clone() {
+            let host = host.clone();
+            tokio::spawn(async move {
+                let answer = match host.request(&method, serde_json::json!({})).await {
+                    Ok(_) => "ok".to_string(),
+                    Err(e) => e.to_string(),
+                };
+                eprintln!("space-stub-guard: {method} -> {answer}");
             });
         }
         let _ = self.host.set(host);
@@ -153,7 +171,15 @@ impl Plugin for Guard {
 
     async fn pre_execute(&self, call: HookCall) -> Result<HookDecision, RpcError> {
         let reason = self.config.reason.as_deref().unwrap_or("stub guard");
-        let reason = self.fill(reason, &call.mode, &call.call.tool, call.history.len());
+        let said: Vec<&str> = call
+            .history
+            .iter()
+            .filter_map(|i| match i {
+                HistoryItem::User { text } => Some(text.as_str()),
+                HistoryItem::Tool { .. } => None,
+            })
+            .collect();
+        let reason = self.fill(reason, &call.mode, &call.call.tool, call.history.len()).replace("{said}", &said.join("|"));
         eprintln!("space-stub-guard: {} {} in {}", call.call.tool, call.call.args, call.mode);
         if let Some(path) = &self.config.crash_until
             && !std::path::Path::new(path).exists()
@@ -184,5 +210,13 @@ fn main() {
         Err(_) => Config::default(),
     };
     eprintln!("space-stub-guard: started");
+    if !config.print_env.is_empty() {
+        let vars: Vec<String> = config
+            .print_env
+            .iter()
+            .map(|v| format!("{v}={}", if std::env::var_os(v).is_some() { "set" } else { "unset" }))
+            .collect();
+        eprintln!("space-stub-guard: env {}", vars.join(" "));
+    }
     space_plugin::run(Guard { config, settings: Mutex::new(SettingValues::new()), host: OnceLock::new() });
 }

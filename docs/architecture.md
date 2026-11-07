@@ -49,13 +49,16 @@ provides = ["sandbox", "context", "settings", "catalog:permission-modes"]   # or
 hooks = [{ event = "tools/pre-execute", order = 10 }]                      # lower order runs first
 required = true                 # a guard Space can't run tools without (can't be turned off)
 requires = []                   # capabilities another plugin must provide (pi-agent: ["sandbox"])
+observes = []                   # events a service plugin is told about (e.g. "turn/ended")
+uses = ["read:transcript"]      # host services it may call, and read:transcript
+env = []                        # variables of Space's environment it gets (pi-agent: ["SSH_AUTH_SOCK", …])
 
 [run]
 command = "${target}/space-permissions"   # ${target}: the cargo profile dir Space runs from
 args = []                       # relative paths resolve against the plugin directory
 cwd = "plugin"                  # "plugin" or "project"
 
-[run.env]                       # optional extra environment
+[run.env]                       # optional variables to set
 ```
 
 Capabilities: `agent` (an ACP agent; provides nothing else), `sandbox` (`sandbox/confine`), `context`
@@ -71,6 +74,28 @@ its agent). When Space quits, agents stop first, then services, each after its d
 
 Discovery order (later wins on duplicate `id`): `<repo>/plugins/*`, `~/.space/plugins/*`,
 `<project>/.space/plugins/*`. Writing one: [plugins.md](plugins.md).
+
+**Permissions.** A plugin gets only what its manifest declares:
+- the hooks it lists and the events it `observes`;
+- the host services it `uses` (`host/notify`, `host/open-url`, `agent/complete`, `sessions/read`). Any other
+  call is answered "not permitted" (`-32003`).
+- with `read:transcript`, what the user and the agent wrote. Without it, payloads keep ids and metadata only:
+  a hook listener's history keeps each user message as an item, with its text emptied.
+- its own settings and secrets;
+- a clean environment: `PATH`, `HOME`, `USER`, `TMPDIR`, `LANG` and `SHELL`, the variables it names in `env`,
+  `[run.env]`, and `SPACE_PLUGIN_DIR`/`SPACE_PROJECT_DIR`.
+
+Bundled plugins (`<repo>/plugins`, or `SPACE_PLUGIN_DIRS`) are trusted. Plugins from `~/.space/plugins`
+and `<project>/.space/plugins` don't start until you approve them in Settings → Plugins, which lists their
+permissions in plain words. Until then they count as not installed, and the composer shows "… needs your
+approval" and won't send.
+
+Answers are saved in `plugin-grants.json` next to the settings file, by plugin directory, with the
+permissions you answered for. A plugin that later asks for more asks again; one that asks for less keeps
+your answer.
+
+This governs what a plugin can do through Space. It is still a program running as you, with your access
+to files and the network.
 
 ## Agent protocol (ACP subset)
 

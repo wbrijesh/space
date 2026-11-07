@@ -18,6 +18,11 @@
 //! | `hooks/tools.preExecute` | host → plugin | hook `tools/pre-execute`, before every tool call |
 //! | `hooks/ready` (notification) | plugin → host | a listener's answers may have changed (e.g. it can decide again): held calls run the chain again |
 //! | `plugin/retry` (notification) | host → plugin | the user pressed a blocker's "Retry now" |
+//!
+//! A plugin may call the host's services ([`HOST_SERVICES`]) that its manifest lists in `uses`;
+//! any other call is answered [`NOT_PERMITTED`]. Notifications a plugin sends about something
+//! its manifest doesn't declare (`catalog/changed` without a catalog, `hooks/ready` without a
+//! hook) are ignored.
 
 use std::collections::BTreeMap;
 
@@ -39,6 +44,15 @@ pub const SANDBOX_CONFINE: &str = "sandbox/confine";
 pub const HOOK_PRE_EXECUTE: &str = "hooks/tools.preExecute";
 pub const HOOKS_READY: &str = "hooks/ready";
 pub const PLUGIN_RETRY: &str = "plugin/retry";
+
+/// Host services: plugin → host calls, each allowed only when the manifest lists it in `uses`.
+pub const HOST_NOTIFY: &str = "host/notify";
+pub const HOST_OPEN_URL: &str = "host/open-url";
+pub const AGENT_COMPLETE: &str = "agent/complete";
+pub const SESSIONS_READ: &str = "sessions/read";
+pub const HOST_SERVICES: &[&str] = &[HOST_NOTIFY, HOST_OPEN_URL, AGENT_COMPLETE, SESSIONS_READ];
+/// JSON-RPC error code of a call the plugin's manifest doesn't allow.
+pub const NOT_PERMITTED: i64 = -32003;
 
 /// Setting values by key. Secrets are included in clear (the host keeps them in the Keychain);
 /// an unset setting is absent.

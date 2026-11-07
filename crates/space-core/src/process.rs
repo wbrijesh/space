@@ -81,7 +81,9 @@ pub struct Spawned {
     pub stdout: ChildStdout,
 }
 
-/// Spawn `plugin` per its `[run]` table. Must be called inside a tokio runtime.
+/// Spawn `plugin` per its `[run]` table, in a clean environment: [`BASE_ENV`], the variables
+/// its manifest names in `env`, `[run.env]`, and `SPACE_PLUGIN_DIR`/`SPACE_PROJECT_DIR`. Must
+/// be called inside a tokio runtime.
 ///
 /// * `on_log` is called for every stderr line.
 /// * `on_exit` is called once when the process ends.
@@ -105,6 +107,8 @@ pub fn spawn(
     let mut cmd = Command::new(&program);
     cmd.args(&args)
         .current_dir(&cwd)
+        .env_clear()
+        .envs(inherited_env(&plugin.manifest.env))
         .envs(&run.env)
         .env("SPACE_PLUGIN_DIR", &plugin.dir)
         .env("SPACE_PROJECT_DIR", project_dir)
@@ -152,6 +156,19 @@ pub fn spawn(
     }
 
     Ok(Spawned { process: PluginProcess { pid, logs, kill_tx: Mutex::new(Some(kill_tx)) }, stdin, stdout })
+}
+
+/// What every plugin gets of Space's environment; more only by name in its manifest's `env`.
+pub const BASE_ENV: &[&str] = &["PATH", "HOME", "USER", "TMPDIR", "LANG", "SHELL"];
+
+/// The variables of Space's environment a plugin gets: [`BASE_ENV`] plus `extra`, when set.
+fn inherited_env(extra: &[String]) -> Vec<(String, std::ffi::OsString)> {
+    BASE_ENV
+        .iter()
+        .copied()
+        .chain(extra.iter().map(String::as_str))
+        .filter_map(|name| std::env::var_os(name).map(|v| (name.to_string(), v)))
+        .collect()
 }
 
 /// Placeholder in `run.command` for the cargo target profile directory Space runs from
@@ -226,6 +243,15 @@ mod tests {
         }
         assert_eq!(b.snapshot(), ["2", "3", "4"]);
         assert_eq!(b.tail(2), ["3", "4"]);
+    }
+
+    #[test]
+    fn inherits_only_the_base_env_and_what_the_manifest_names() {
+        // Cargo sets these for test runs.
+        let names: Vec<String> = inherited_env(&["CARGO_MANIFEST_DIR".into()]).into_iter().map(|(n, _)| n).collect();
+        assert!(names.contains(&"PATH".to_string()) && names.contains(&"HOME".to_string()), "{names:?}");
+        assert!(names.contains(&"CARGO_MANIFEST_DIR".to_string()), "{names:?}");
+        assert!(std::env::var_os("CARGO").is_some() && !names.contains(&"CARGO".to_string()), "{names:?}");
     }
 
     #[test]

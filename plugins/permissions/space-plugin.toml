@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Read Only runs commands in the macOS sandbox; Workspace Write and Full access check every operation with a decision model first."
 provides = ["sandbox", "context", "settings", "catalog:permission-modes"]
 hooks = [{ event = "tools/pre-execute", order = 10 }]
+# The decision model judges a call against what the user asked for.
+uses = ["read:transcript"]
 # Space doesn't run tools without permission checks: this plugin can't be turned off, and tool
 # calls wait while it isn't running.
 required = true

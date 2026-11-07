@@ -5,6 +5,9 @@ provides = ["agent"]
 # Bash commands are confined by the sandbox provider (`_space/sandbox/confine`).
 requires = ["sandbox"]
 description = "Coding agent on the pi SDK, using the Claude CLI subscription."
+# Beyond PATH, HOME, USER, TMPDIR, LANG and SHELL: its own overrides, the Claude CLI's config
+# dir, and what the commands it runs commonly need (git over SSH).
+env = ["SPACE_PI_MODEL", "SPACE_PI_THINKING", "SPACE_PI_AGENT_DIR", "CLAUDE_CONFIG_DIR", "SSH_AUTH_SOCK", "LOGNAME"]
 
 [run]
 command = "node"

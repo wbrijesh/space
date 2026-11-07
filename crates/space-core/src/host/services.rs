@@ -50,7 +50,11 @@ impl Host {
             .inner
             .rt
             .spawn(async move {
-                let ids: Vec<String> = inner.enabled_services().into_iter().map(|p| p.id().to_string()).collect();
+                // Not approved ones too, so they say why they don't start.
+                let disabled = inner.disabled.lock().unwrap().clone();
+                let plugins = inner.plugins.lock().unwrap().clone();
+                let ids: Vec<String> =
+                    plugins.iter().filter(|p| !p.manifest.is_agent() && !disabled.contains(p.id())).map(|p| p.id().to_string()).collect();
                 futures::future::join_all(ids.iter().map(|id| inner.service(id))).await;
             })
             .await;
@@ -332,18 +336,27 @@ impl HostInner {
                 },
             )?
         };
-        let on_request: rpc::RequestHandler =
-            Arc::new(|method: String, _| Box::pin(async move { Err(RpcError::method_not_found(&method)) }));
+        let on_request: rpc::RequestHandler = {
+            let (weak, plugin) = (Arc::downgrade(self), plugin.clone());
+            Arc::new(move |method: String, params| {
+                let (weak, plugin) = (weak.clone(), plugin.clone());
+                Box::pin(async move {
+                    let host = weak.upgrade().ok_or_else(|| RpcError::unavailable("Space is quitting"))?;
+                    host.host_service(&plugin, &method, params).await
+                })
+            })
+        };
         let on_notification: rpc::NotificationHandler = {
-            let (weak, id) = (Arc::downgrade(self), plugin_id.clone());
+            let (weak, plugin) = (Arc::downgrade(self), plugin.clone());
             Arc::new(move |method: String, _params| {
                 let Some(host) = weak.upgrade() else { return };
+                // Only about what the manifest declares.
                 match method.as_str() {
-                    svc::CATALOG_CHANGED => {
-                        let id = id.clone();
+                    svc::CATALOG_CHANGED if plugin.manifest.catalogs().next().is_some() => {
+                        let id = plugin.id().to_string();
                         host.rt.clone().spawn(async move { host.refresh_catalogs(&id).await });
                     }
-                    svc::HOOKS_READY => host.wake_held(),
+                    svc::HOOKS_READY if !plugin.manifest.hooks.is_empty() => host.wake_held(),
                     _ => {}
                 }
             })
@@ -383,6 +396,24 @@ impl HostInner {
         // A (re)started listener may decide calls held while it wasn't running.
         self.wake_held();
         Ok(service)
+    }
+
+    /// A plugin's call to the host: a host service its manifest lists in `uses`.
+    async fn host_service(
+        self: &Arc<Self>,
+        plugin: &DiscoveredPlugin,
+        method: &str,
+        _params: serde_json::Value,
+    ) -> Result<serde_json::Value, RpcError> {
+        if !svc::HOST_SERVICES.contains(&method) {
+            return Err(RpcError::method_not_found(method));
+        }
+        if !plugin.manifest.uses(method) {
+            tracing::warn!("`{}` called {method}, which its manifest doesn't list in `uses`", plugin.id());
+            return Err(RpcError::not_permitted(format!("{method} isn't in the plugin's `uses`")));
+        }
+        // Declared, but this Space doesn't offer it.
+        Err(RpcError::method_not_found(method))
     }
 
     /// Fetch the catalogs `plugin_id` publishes and report them.

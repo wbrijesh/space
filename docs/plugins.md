@@ -10,7 +10,8 @@ panel). There are two kinds:
   This guide is about them.
 
 Drop the directory into `<repo>/plugins`, `~/.space/plugins` or `<project>/.space/plugins`. It starts with
-the app and is restarted on next use if it exits.
+the app and is restarted on next use if it exits. Plugins outside `<repo>/plugins` start only once you
+approve them in Settings → Plugins (and again if their manifest asks for more).
 
 ## 1. The manifest
 
@@ -40,6 +41,15 @@ isn't running, tool calls wait for it.
 
 `requires = ["sandbox"]` (capabilities, not plugin ids): your plugin starts after a provider of each, and
 stops while none runs. Without a provider it isn't started, and Settings says why.
+
+Declare everything else your plugin needs. Nothing undeclared is delivered or allowed:
+- `observes = ["turn/ended"]`: events you're told about.
+- `uses = ["host/notify"]`: host services you call (`Host::request` in Rust). Other calls fail with
+  `-32003` (not permitted).
+- `uses = ["read:transcript"]`: see what the user and the agent wrote. Without it, a hook's history has the
+  user's messages emptied.
+- `env = ["SSH_AUTH_SOCK"]`: variables of Space's environment you get. Every plugin gets only `PATH`,
+  `HOME`, `USER`, `TMPDIR`, `LANG` and `SHELL`; set your own with `[run.env]`.
 
 ## 2. In Rust, with `space-plugin`
 

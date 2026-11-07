@@ -5,13 +5,15 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use space_core::PluginStatus;
+use space_core::{Approval, PluginSource, PluginStatus, grants};
 use gpui::component::input::InputState;
 use space_core::protocol::service::SettingKind;
 use space_ui::components::composer::{
     Composer, ComposerBlocker, ComposerControls, ComposerHandlers, Handler, ModeChoice,
 };
-use space_ui::components::settings::{Catalog, FieldView, PluginRow, PluginSettingsView, SettingsHandlers, SettingsPage};
+use space_ui::components::settings::{
+    Catalog, FieldView, PluginApproval, PluginRow, PluginSettingsView, SettingsHandlers, SettingsPage,
+};
 use space_ui::components::follow_scroll::FollowScrollArea;
 use space_ui::components::shell::{
     AgentFooter, AgentState, LogsPanel, banner, confirm_card, empty_heading, problem_card, sidebar_column,
@@ -291,6 +293,12 @@ fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>)
                 let _ = this.update(cx, |this, cx| this.set_plugin_enabled(plugin, on, cx));
             })
         },
+        on_plugin_approval: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |plugin, approved, _, cx| {
+                let _ = this.update(cx, |this, cx| this.answer_plugin_approval(plugin, approved, cx));
+            })
+        },
     };
     let s = &app.settings.settings;
     let page = SettingsPage::new(catalog)
@@ -375,8 +383,11 @@ fn plugin_rows(app: &SpaceApp) -> Vec<PluginRow> {
             } else {
                 app.plugin_status.get(p.id())
             };
+            let approval = app.host.approval(p.id());
             let status = match (enabled, status) {
                 (false, _) => "Off".to_string(),
+                (true, _) if approval == Approval::Pending => "Needs your approval".into(),
+                (true, _) if approval == Approval::Denied => "Not approved".into(),
                 (true, Some(PluginStatus::Running)) => "Running".into(),
                 (true, Some(PluginStatus::Starting)) => "Starting…".into(),
                 (true, Some(PluginStatus::Crashed(m))) => format!("Exited: {}", format::one_line(m)),
@@ -386,11 +397,22 @@ fn plugin_rows(app: &SpaceApp) -> Vec<PluginRow> {
             PluginRow {
                 id: p.id().to_string(),
                 name: p.manifest.name.clone().into(),
-                description: p.manifest.description.clone().into(),
+                description: match (approval, p.source) {
+                    (Approval::Pending | Approval::Denied, PluginSource::User) => format!("From ~/.space/plugins. {}", p.manifest.description),
+                    (Approval::Pending | Approval::Denied, _) => format!("From this project's .space/plugins. {}", p.manifest.description),
+                    _ => p.manifest.description.clone(),
+                }
+                .trim_end()
+                .to_string()
+                .into(),
                 agent,
                 required: p.manifest.required,
                 enabled,
                 status: status.into(),
+                approval: matches!(approval, Approval::Pending | Approval::Denied).then(|| PluginApproval {
+                    permissions: p.manifest.permissions().iter().map(|perm| grants::describe(perm).into()).collect(),
+                    denied: approval == Approval::Denied,
+                }),
             }
         })
         .collect()
