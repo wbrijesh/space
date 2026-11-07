@@ -34,6 +34,7 @@ command = "${target}/space-audit"   # or any executable; relative args resolve a
 | `context` | `context/get` | adds your sections to every prompt, hidden from the transcript |
 | `sandbox` | `sandbox/confine` | gives agents your argv to spawn (one provider at a time) |
 | `session-store` | `store/list`, `store/load`, `store/write`, `store/delete`, `store/data-dir` | saves threads through you (one provider at a time; needs `uses = ["read:transcript"]`). `plugin/initialize`'s `spaceDir` is Space's folder; `plugins/session-store` is the bundled one |
+| `session-title` | `title/generate` | asks you to name a thread after its first message (one provider at a time; needs `uses = ["read:transcript"]`); keeps the first-line title if you fail or take over 15 s. `plugins/titles` is the bundled one |
 
 Hook `tools/pre-execute`: answer `hooks/tools.preExecute` for every tool call of every agent.
 
@@ -52,7 +53,8 @@ Declare everything else your plugin needs. Nothing undeclared is delivered or al
 - `uses = ["host/notify"]`: host services you call (`Host::request` in Rust). Other calls fail with
   `-32003` (not permitted). `host/notify {title, body?, sessionId?, banner, sound}` posts a macOS
   notification (body defaults to the thread's title; clicking opens it), or only plays the sound;
-  `host/open-url {url}` opens an `http(s)` URL.
+  `host/open-url {url}` opens an `http(s)` URL; `agent/complete {sessionId, prompt, provider?, model?}`
+  gets `{text}`, one short completion by that session's agent model (or the one named).
 - `uses = ["read:transcript"]`: see what the user and the agent wrote. Without it, a hook's history has the
   user's messages emptied, and events leave out tool output and titles.
 - `env = ["SSH_AUTH_SOCK"]`: variables of Space's environment you get. Every plugin gets only `PATH`,
@@ -103,7 +105,8 @@ changes. "Retry now" on your blocker (`retry:<your id>`) arrives as `plugin/retr
 ## 4. Settings
 
 Declare fields in `settings/schema` (`kind: "secret"` for keys, `"switch"` for on/off with a `default` of
-`"true"` or `"false"`; `plugins/alerts` is a small example). Before storing a new value the host
+`"true"` or `"false"`, `"model"` for one of the agent's models as `provider/model`, unset meaning "Same as
+agent"; `plugins/alerts` and `plugins/titles` are small examples). Before storing a new value the host
 calls `settings/validate`: answer `ok`, `invalid` (with why; nothing is stored) or `unverifiable` (you
 couldn't check; the user can save anyway). New values arrive as `settings/changed`; secrets the Keychain
 wouldn't hand over are listed in `unreadable`.

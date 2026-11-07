@@ -12,6 +12,10 @@ crates/space-core       discovery · process supervisor · ACP client · session
 crates/space-ui         design tokens · animation clock · components (+ previews and gallery, `dev`)
 crates/space-app        GPUI desktop app, binary `Space` (app state, wiring, dev scenarios)
 plugins/pi-agent        TypeScript ACP agent on the pi SDK (Claude CLI subscription)
+plugins/permissions     permission modes: macOS sandbox, decision-model guardrail
+plugins/alerts          a notification or sound when an agent finishes or pauses
+plugins/session-store   saved threads in ~/.space/threads
+plugins/titles          thread titles from the thread's agent model
 ```
 
 ## Prerequisites
@@ -77,10 +81,12 @@ After changing the icon, macOS may keep showing the old one (cached per bundle i
 
 ## Using the app
 
-The app starts the agent plugin in the background on launch and opens a new thread. There is no
-plugin list; the agent's status sits in the sidebar footer.
+The app starts the agent plugin in the background on launch and opens a new thread. The agent's status
+sits in the sidebar footer; Settings ▸ Plugins lists every plugin.
 
-- **Sidebar**: a plain list of thread titles (first line of your first message), newest first. A
+- **Sidebar**: a plain list of thread titles, newest first. A thread shows the first line of your first
+  message until the titles plugin names it (with the thread's model, or the one picked in Settings ▸
+  Titles); threads are saved and come back after a restart (right-click ▸ Delete Thread removes one). A
   spinner shows while a thread works; a dot marks news you haven't seen (blue: reply, red: error,
   yellow: waiting for your input). ⌘B hides the sidebar.
 - **Title bar**: sidebar toggle, back/forward through the threads you visited (⌘[ / ⌘]), new
@@ -110,7 +116,8 @@ plugin list; the agent's status sits in the sidebar footer.
   composer with several lines of text, ⌘↓ moves the caret to the end instead.
 - **Settings** (⌘, or Space ▸ Settings…): replaces the thread view, sidebar stays. *New threads*: default
   model and thinking level ("Agent default" leaves the agent's choice; existing threads don't change).
-  Then each plugin's settings (*Alerts*: notify when an agent finishes, play a sound). *Notifications*:
+  Then each plugin's settings (*Alerts*: notify when an agent finishes, play a sound; *Titles*: the title
+  model, "Same as agent" by default). *Notifications*:
   the macOS permission status (with a button to allow it or open System Settings). Esc, ⌘, again, ⌘[, ⌘N or clicking a thread leaves.
   Saved on every change to `~/.space/settings.json`.
 - **Logs**: the terminal icon in the sidebar footer (or ⌘J) opens the agent's stderr. If the agent

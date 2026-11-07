@@ -28,6 +28,7 @@ Space harness (ACP client) ──stdin/stdout NDJSON──▶ node dist/main.js
 | `session/load {sessionId, cwd}` | Continues the pi session kept in `_meta["space/dataDir"]` (pi's own session file; never `~/.pi`) under the same id, then sends `_space/status`. Nothing is replayed: Space shows the conversation from its own saved thread. |
 | `session/prompt` | Joins the text blocks (other block types are described inline) and runs `session.prompt()`. Hidden context sections in `_meta["space/context"]` go into the run's system prompt. It streams pi events as `session/update` notifications and resolves with `end_turn`, `cancelled` or `max_tokens`. Provider errors become a JSON-RPC error (-32603) carrying pi's message, for example the claude-cli usage-credit stop. |
 | `session/cancel` | `session.abort()`; the pending prompt resolves with `cancelled` |
+| `_space/complete {sessionId, prompt, provider?, model?}` | One `completeSimple` call on the session's model runtime (the session's model, or the one named; no tools, at most 256 tokens), outside the conversation; returns `{text}`. Space's titles plugin names threads with it. |
 | `_space/session/configure {sessionId, provider?, model?, thinkingLevel?}` | `session.setModel()` / `session.setThinkingLevel()` (session-only, pi clamps the level to the model), returns the new `_space/status` payload. Rejected while a prompt is running. |
 
 `availableModels` lists the current provider's models (for claude-cli: pi's built-in Anthropic catalog),

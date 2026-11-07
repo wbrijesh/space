@@ -15,7 +15,8 @@ v0 delivers the foundation: a Rust/GPUI **harness** that hosts out-of-process **
 ┌──────▼───────────────────────┐   ┌──────────────▼──────────────────────────┐
 │ plugins/pi-agent (Node, TS)  │   │ plugins/permissions (Rust)               │
 │ pi SDK + claude-cli          │   │ modes · macOS sandbox · decision model   │
-└──────────────────────────────┘   └──────────────────────────────────────────┘
+└──────────────────────────────┘   │ plugins/alerts · session-store · titles  │
+                                   └──────────────────────────────────────────┘
 ```
 
 Everything a plugin adds goes through the host: agents ask the host before every tool call
@@ -63,7 +64,7 @@ cwd = "plugin"                  # "plugin" or "project"
 
 Capabilities: `agent` (an ACP agent; provides nothing else), `sandbox` (`sandbox/confine`), `context`
 (hidden prompt sections), `settings` (fields on the Settings page), `session-store` (saved threads; must
-also use `read:transcript`), `catalog:<name>` (a list the UI renders, e.g. `catalog:permission-modes` for
+also use `read:transcript`), `session-title` (thread titles; must also use `read:transcript`), `catalog:<name>` (a list the UI renders, e.g. `catalog:permission-modes` for
 the composer's mode menu). Hook events: `tools/pre-execute`.
 
 `requires` names capabilities (`sandbox`, `context`, `catalog:<name>`), not plugin ids, so any provider
@@ -120,6 +121,7 @@ Space extensions:
 | client → agent | `_space/session/configure` | `{ sessionId, provider?, model?, thinkingLevel? }` → the full `SpaceStatus` |
 | agent → client | `_space/tools/preExecute` | `{ sessionId, toolCallId, tool, kind, args, cwd? }` → `{ decision: allow \| deny, reason? }`, after the host's pipeline (may take as long as the call is held) |
 | agent → client | `_space/sandbox/confine` | `{ sessionId, argv, cwd }` → `{ argv }` to spawn instead (unchanged without a `sandbox` provider) |
+| client → agent | `_space/complete` | `{ sessionId, prompt, provider?, model? }` → `{ text }`: one short, tool-free completion by the session's model (or the one named), outside the conversation. The host forwards plugins' `agent/complete` here |
 
 `SpaceStatus` (every field but `sessionId` optional; the client merges partial updates):
 
@@ -154,6 +156,8 @@ another version is not started.
 | `plugin/retry` | host → plugin | the user pressed a blocker's "Retry now" |
 | `events/observe` | host → plugin | an event the plugin `observes`, one at a time per plugin; see below |
 | `host/notify`, `host/open-url` | plugin → host | host services the plugin `uses`; the app carries them out |
+| `agent/complete` | plugin → host | a host service: `_space/complete` on the agent of the given session |
+| `title/generate` | host → plugin | `provides session-title`: `{ sessionId, firstMessage, projectRoot }` → `{ title }`; see below |
 | `store/list`, `store/load`, `store/write`, `store/delete`, `store/data-dir` | host → plugin | `provides session-store`: saved threads; see below |
 
 **Observed events** (`session/created`, `turn/started`, `turn/ended`, `tool/held`, `tool/result`,
@@ -175,7 +179,15 @@ events for the next one and says so in the banner; the conversation goes on. At 
 saved threads; opening one reads its events and replays them through `SessionState::apply` (a turn cut
 short ends as cancelled, so no card waits). Writing in it loads its session again (`session/load`) when
 the agent can; otherwise the composer offers "Continue in new session". Right-click → Delete Thread
-removes the folder. Without a store, threads live in memory.
+removes the folder. Without a store, threads live in memory. A reloaded session's guards start with what
+the thread shows (`Session::seed_history`: its messages, and its tool calls by title), so their first
+judgements have the same context as later ones.
+
+**Thread titles.** A thread shows the first line of its first message at once. When that message is sent,
+the host asks the `session-title` provider (bundled: `plugins/titles`) for a title; it answers through
+`agent/complete`, with the thread's own model unless its "Title model" setting picks one, and the reply
+is tidied to a few words. A title replaces the first line, is saved (`ThreadMeta.titled`) and told to
+observers (`thread/titled`); a failure, or no title within 15 s, keeps the first line.
 
 Catalog entries can carry a **blocker** (`ready: false`): text, links (`open-settings:<plugin>`,
 `open-url:<url>`, `retry:<plugin>`, `use-mode:<entry>`, `new-session:<thread>`) and the last/next attempt times. The composer
@@ -256,14 +268,16 @@ host's own records; never tool output).
   whose callback runs off the main thread and answers through a oneshot channel; it's refreshed when
   the page opens and whenever the window becomes active.
 - **Plugin settings.** Secrets live in the macOS Keychain (`Secrets`, service `dev.brijesh.space`; tests
-  use their own services), text and switch values in the settings file (older files' `notifications`
+  use their own services), text, switch and model values (`provider/model`, picked from the agent's
+models with "Same as agent" first) in the settings file (older files' `notifications`
   switches move to the alerts plugin's settings on load). A save goes through `settings/validate`
   first; the field shows "Checking…", then the outcome, and "Save anyway" when the plugin couldn't check.
 - **Testing.** `space-core` ships `space-stub-agent` (a scripted ACP agent) and `space-stub-guard` (a
   scripted service plugin: decisions, holds, crashes, catalogs, validation). `crates/space-core/tests/`
   run the host and pipeline against them; `plugins/permissions/tests/guardrail.rs` runs the real
   permissions plugin against a scripted local stand-in for OpenAI, and `plugins/session-store/tests/`
-  saves, restarts and continues a thread with the real store and the stub agent.
+  saves, restarts and continues a thread with the real store and the stub agent, and
+  `plugins/titles/tests/` names threads through the stub agent's `_space/complete`.
 
 ## Repository layout
 
@@ -279,6 +293,7 @@ space/
 │  ├─ pi-agent/         # TypeScript ACP agent on the pi SDK
 │  ├─ permissions/      # Rust service plugin: modes, sandbox, decision model
 │  ├─ alerts/           # Rust service plugin: a notification or sound when a turn ends or pauses
-│  └─ session-store/    # Rust service plugin: saved threads in ~/.space/threads
+│  ├─ session-store/    # Rust service plugin: saved threads in ~/.space/threads
+│  └─ titles/           # Rust service plugin: thread titles from the thread's agent model
 └─ docs/
 ```
