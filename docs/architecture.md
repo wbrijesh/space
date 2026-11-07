@@ -150,6 +150,15 @@ another version is not started.
 | `hooks/tools.preExecute` | host → plugin | before every tool call: `allow`, `deny`, `ask`, `next` or `unavailable` |
 | `hooks/ready` | plugin → host | the plugin's answers may have changed: held calls run the chain again |
 | `plugin/retry` | host → plugin | the user pressed a blocker's "Retry now" |
+| `events/observe` | host → plugin | an event the plugin `observes`, one at a time per plugin; see below |
+| `host/notify`, `host/open-url` | plugin → host | host services the plugin `uses`; the app carries them out |
+
+**Observed events** (`session/created`, `turn/started`, `turn/ended`, `tool/held`, `tool/result`,
+`thread/titled`) come from the host's own session events. Each observing plugin has a bounded queue
+(256) drained by its own task, which sends one event and waits for the answer (10 s at most) before the
+next, so events arrive in order and nothing else waits: a slow plugin only drops its own newest events,
+with a warning. `turn/ended` and `tool/held` say whether the user is `watching` the thread (the app tells
+the host which session is on screen while Space is frontmost).
 
 Catalog entries can carry a **blocker** (`ready: false`): text, links (`open-settings:<plugin>`,
 `open-url:<url>`, `retry:<plugin>`, `use-mode:<entry>`) and the last/next attempt times. The composer
@@ -166,7 +175,7 @@ host's own records; never tool output).
 - `allow` / `next` pass the call on; with no listeners the call is allowed.
 - `unavailable`, an error, a timeout, or a listener that isn't running **holds** the call (fail closed).
   The agent's request stays open; the tool row shows **Paused** with the reason, the sidebar row a pause
-  icon, and a notification goes out if you aren't watching. The whole chain runs again (with fresh
+  icon, and the alerts plugin (`tool/held`) posts a notification if you aren't watching. The whole chain runs again (with fresh
   facts, so a mode change applies) when a listener sends `hooks/ready`, a service (re)starts, the
   thread's mode changes, the user presses Retry now, or every 10 s (`HostOptions::held_recheck`).
   Stopping the turn ends the wait. A listener that crashed 3 times in 5 minutes is reported as "keeps
@@ -229,7 +238,8 @@ host's own records; never tool output).
   whose callback runs off the main thread and answers through a oneshot channel; it's refreshed when
   the page opens and whenever the window becomes active.
 - **Plugin settings.** Secrets live in the macOS Keychain (`Secrets`, service `dev.brijesh.space`; tests
-  use their own services), text values in the settings file. A save goes through `settings/validate`
+  use their own services), text and switch values in the settings file (older files' `notifications`
+  switches move to the alerts plugin's settings on load). A save goes through `settings/validate`
   first; the field shows "Checking…", then the outcome, and "Save anyway" when the plugin couldn't check.
 - **Testing.** `space-core` ships `space-stub-agent` (a scripted ACP agent) and `space-stub-guard` (a
   scripted service plugin: decisions, holds, crashes, catalogs, validation). `crates/space-core/tests/`
@@ -248,6 +258,7 @@ space/
 │  └─ space-app/        # GPUI binary `Space`
 ├─ plugins/
 │  ├─ pi-agent/         # TypeScript ACP agent on the pi SDK
-│  └─ permissions/      # Rust service plugin: modes, sandbox, decision model
+│  ├─ permissions/      # Rust service plugin: modes, sandbox, decision model
+│  └─ alerts/           # Rust service plugin: a notification or sound when a turn ends or pauses
 └─ docs/
 ```

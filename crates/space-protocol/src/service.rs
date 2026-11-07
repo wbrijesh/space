@@ -18,11 +18,16 @@
 //! | `hooks/tools.preExecute` | host → plugin | hook `tools/pre-execute`, before every tool call |
 //! | `hooks/ready` (notification) | plugin → host | a listener's answers may have changed (e.g. it can decide again): held calls run the chain again |
 //! | `plugin/retry` (notification) | host → plugin | the user pressed a blocker's "Retry now" |
+//! | `events/observe` | host → plugin | `observes` the event ([`Observed`]) |
 //!
 //! A plugin may call the host's services ([`HOST_SERVICES`]) that its manifest lists in `uses`;
 //! any other call is answered [`NOT_PERMITTED`]. Notifications a plugin sends about something
 //! its manifest doesn't declare (`catalog/changed` without a catalog, `hooks/ready` without a
 //! hook) are ignored.
+//!
+//! Observed events are told one at a time, in order, and the host waits for each answer before
+//! the next; nothing waits on the plugin. A plugin that falls behind loses its own newest
+//! events (with a warning in the logs), never anyone else's.
 
 use std::collections::BTreeMap;
 
@@ -44,6 +49,7 @@ pub const SANDBOX_CONFINE: &str = "sandbox/confine";
 pub const HOOK_PRE_EXECUTE: &str = "hooks/tools.preExecute";
 pub const HOOKS_READY: &str = "hooks/ready";
 pub const PLUGIN_RETRY: &str = "plugin/retry";
+pub const EVENTS_OBSERVE: &str = "events/observe";
 
 /// Host services: plugin → host calls, each allowed only when the manifest lists it in `uses`.
 pub const HOST_NOTIFY: &str = "host/notify";
@@ -94,6 +100,9 @@ pub struct SettingField {
     pub kind: SettingKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
+    /// The value while the setting isn't set (a switch: `true` or `false`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -104,6 +113,8 @@ pub enum SettingKind {
     Text,
     /// Stored in the macOS Keychain, never shown again once saved.
     Secret,
+    /// On or off (`true` / `false`), stored in the settings file.
+    Switch,
 }
 
 /// `settings/schema` result.
@@ -157,6 +168,93 @@ pub enum SettingStatus {
     Ok,
     Invalid,
     Unverifiable,
+}
+
+/// `events/observe` params: one event the plugin `observes`. What the user and the agent wrote
+/// (`output`, `title`) is included only for plugins that use `read:transcript`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "event", rename_all_fields = "camelCase")]
+pub enum Observed {
+    /// A thread's session was created.
+    #[serde(rename = "session/created")]
+    SessionCreated { session_id: String, agent: String, project_root: String },
+    /// The user sent a prompt; the agent is working.
+    #[serde(rename = "turn/started")]
+    TurnStarted { session_id: String },
+    /// The prompt settled. `stop_reason`: the ACP stop reason (`end_turn`, `cancelled`, ...)
+    /// or `error`. `watching`: Space is frontmost on this thread.
+    #[serde(rename = "turn/ended")]
+    TurnEnded { session_id: String, stop_reason: String, watching: bool },
+    /// A tool call waits because a guard can't decide right now, and why.
+    #[serde(rename = "tool/held")]
+    ToolHeld { session_id: String, call_id: String, reason: String, watching: bool },
+    /// A tool call finished.
+    #[serde(rename = "tool/result")]
+    ToolResult {
+        session_id: String,
+        call_id: String,
+        failed: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
+    /// A thread got its title.
+    #[serde(rename = "thread/titled")]
+    ThreadTitled {
+        session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+    },
+}
+
+impl Observed {
+    /// The event's name, as manifests list it in `observes`.
+    pub fn name(&self) -> &'static str {
+        use crate::manifest::*;
+        match self {
+            Observed::SessionCreated { .. } => EVENT_SESSION_CREATED,
+            Observed::TurnStarted { .. } => EVENT_TURN_STARTED,
+            Observed::TurnEnded { .. } => EVENT_TURN_ENDED,
+            Observed::ToolHeld { .. } => EVENT_TOOL_HELD,
+            Observed::ToolResult { .. } => EVENT_TOOL_RESULT,
+            Observed::ThreadTitled { .. } => EVENT_THREAD_TITLED,
+        }
+    }
+
+    /// The event without what the user and the agent wrote.
+    pub fn without_transcript(self) -> Self {
+        match self {
+            Observed::ToolResult { session_id, call_id, failed, .. } => {
+                Observed::ToolResult { session_id, call_id, failed, output: None }
+            }
+            Observed::ThreadTitled { session_id, .. } => Observed::ThreadTitled { session_id, title: None },
+            other => other,
+        }
+    }
+}
+
+/// `host/notify` params: a macOS notification, or only the sound.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Notify {
+    pub title: String,
+    /// The second line. Default: the thread's title, when `session_id` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// Clicking the notification opens this session's thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Show a banner. Without one, or when Space can't post notifications (not allowed, not
+    /// bundled), only the sound plays.
+    #[serde(default = "yes")]
+    pub banner: bool,
+    #[serde(default)]
+    pub sound: bool,
+}
+
+/// `host/open-url` params: an `https://` or `http://` URL to open in the browser.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct OpenUrl {
+    pub url: String,
 }
 
 /// `catalog/get` params, and `catalog/changed` params.
@@ -381,5 +479,28 @@ mod tests {
             serde_json::to_value(SettingVerdict::unverifiable("offline")).unwrap(),
             serde_json::json!({"status": "unverifiable", "message": "offline"})
         );
+    }
+
+    #[test]
+    fn observed_events() {
+        let ended = Observed::TurnEnded { session_id: "s".into(), stop_reason: "end_turn".into(), watching: true };
+        assert_eq!(
+            serde_json::to_value(&ended).unwrap(),
+            serde_json::json!({"event": "turn/ended", "sessionId": "s", "stopReason": "end_turn", "watching": true})
+        );
+        // The tag is the name manifests use.
+        let result = Observed::ToolResult { session_id: "s".into(), call_id: "c".into(), failed: false, output: Some("x".into()) };
+        let titled = Observed::ThreadTitled { session_id: "s".into(), title: Some("t".into()) };
+        for e in [ended, result.clone(), titled.clone()] {
+            assert_eq!(serde_json::to_value(&e).unwrap()["event"], e.name());
+            assert!(crate::manifest::EVENTS.contains(&e.name()));
+        }
+        assert_eq!(
+            result.without_transcript(),
+            Observed::ToolResult { session_id: "s".into(), call_id: "c".into(), failed: false, output: None }
+        );
+        assert_eq!(titled.without_transcript(), Observed::ThreadTitled { session_id: "s".into(), title: None });
+        let n: Notify = serde_json::from_value(serde_json::json!({"title": "Done"})).unwrap();
+        assert!(n.banner && !n.sound && n.body.is_none());
     }
 }

@@ -12,6 +12,7 @@ use space_plugin::rpc::{self, Peer, RpcError};
 use space_protocol::service::{self as svc, SettingField, SettingKind, SettingValues};
 use space_protocol::{CAP_CONTEXT, CAP_SANDBOX, CAP_SETTINGS, Confine, ContextSection};
 
+use super::observers::Observer;
 use super::{Host, HostEvent, HostInner, PluginStatus, SettingError, SettingState, check_protocol, exit_status, start_failure};
 use crate::discovery::DiscoveredPlugin;
 use crate::process::{self, PluginProcess};
@@ -28,11 +29,13 @@ const RESTART_BACKOFF: Duration = Duration::from_secs(3);
 
 /// A running service plugin.
 pub(super) struct Service {
-    plugin: DiscoveredPlugin,
+    pub(super) plugin: DiscoveredPlugin,
     peer: Peer,
     _process: PluginProcess,
     dead: Arc<AtomicBool>,
     fields: Vec<SettingField>,
+    /// The plugin's event queue, when it `observes` anything.
+    pub(super) observer: Option<Observer>,
 }
 
 impl Service {
@@ -152,7 +155,7 @@ impl Host {
                             .map_err(|e| failed(anyhow!(e)))?
                             .map_err(failed)?;
                     }
-                    SettingKind::Text => {
+                    SettingKind::Text | SettingKind::Switch => {
                         let mut text = inner.text_settings.lock().unwrap();
                         let map = text.entry(plugin_id.clone()).or_default();
                         match value {
@@ -377,7 +380,8 @@ impl HostInner {
         } else {
             Vec::new()
         };
-        let mut service = Service { plugin, peer, _process: process, dead, fields };
+        let observer = (!plugin.manifest.observes.is_empty()).then(|| Observer::start(&self.rt, peer.clone(), plugin_id.clone()));
+        let mut service = Service { plugin, peer, _process: process, dead, fields, observer };
         let (settings, unreadable) = self.setting_values(&service).await;
         let init = svc::Initialize { protocol_version: svc::PROTOCOL_VERSION, settings, unreadable };
         let initialized: svc::Initialized = service
@@ -403,7 +407,7 @@ impl HostInner {
         self: &Arc<Self>,
         plugin: &DiscoveredPlugin,
         method: &str,
-        _params: serde_json::Value,
+        params: serde_json::Value,
     ) -> Result<serde_json::Value, RpcError> {
         if !svc::HOST_SERVICES.contains(&method) {
             return Err(RpcError::method_not_found(method));
@@ -412,8 +416,23 @@ impl HostInner {
             tracing::warn!("`{}` called {method}, which its manifest doesn't list in `uses`", plugin.id());
             return Err(RpcError::not_permitted(format!("{method} isn't in the plugin's `uses`")));
         }
-        // Declared, but this Space doesn't offer it.
-        Err(RpcError::method_not_found(method))
+        let plugin_id = plugin.id().to_string();
+        match method {
+            svc::HOST_NOTIFY => {
+                let notify: svc::Notify = rpc::params(params)?;
+                self.emit(HostEvent::Notify { plugin_id, notify });
+            }
+            svc::HOST_OPEN_URL => {
+                let svc::OpenUrl { url } = rpc::params(params)?;
+                if !(url.starts_with("https://") || url.starts_with("http://")) {
+                    return Err(RpcError::invalid_params("only http(s) URLs can be opened"));
+                }
+                self.emit(HostEvent::OpenUrl { plugin_id, url });
+            }
+            // Declared, but this Space doesn't offer it.
+            _ => return Err(RpcError::method_not_found(method)),
+        }
+        Ok(serde_json::Value::Null)
     }
 
     /// Fetch the catalogs `plugin_id` publishes and report them.
@@ -439,7 +458,7 @@ impl HostInner {
         let text = self.text_settings.lock().unwrap().get(service.plugin.id()).cloned().unwrap_or_default();
         for field in &service.fields {
             let value = match field.kind {
-                SettingKind::Text => text.get(&field.key).cloned(),
+                SettingKind::Text | SettingKind::Switch => text.get(&field.key).cloned(),
                 SettingKind::Secret => {
                     let (secrets, id, key) = (self.options.secrets.clone(), service.plugin.id().to_string(), field.key.clone());
                     match tokio::task::spawn_blocking(move || secrets.get(&id, &key)).await {
@@ -467,7 +486,7 @@ impl HostInner {
             .iter()
             .map(|field| {
                 let (set, value) = match field.kind {
-                    SettingKind::Text => (text.contains_key(&field.key), text.get(&field.key).cloned()),
+                    SettingKind::Text | SettingKind::Switch => (text.contains_key(&field.key), text.get(&field.key).cloned()),
                     SettingKind::Secret => {
                         let set = self.options.secrets.get(service.plugin.id(), &field.key).ok().flatten().is_some();
                         (set, None)

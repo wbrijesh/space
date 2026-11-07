@@ -213,6 +213,7 @@ impl Plugin for Permissions {
                     .into(),
                 kind: SettingKind::Secret,
                 placeholder: Some("sk-…".into()),
+                default: None,
             }],
         }
     }

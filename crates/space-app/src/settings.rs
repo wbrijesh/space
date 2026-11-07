@@ -26,8 +26,11 @@ pub const SETTINGS_ENV: &str = "SPACE_SETTINGS";
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub new_threads: NewThreads,
-    pub notifications: Notifications,
     pub plugins: Plugins,
+    /// Older files: the alerts switches, before they were the alerts plugin's settings. Moved
+    /// there on load, and no longer written.
+    #[serde(skip_serializing)]
+    notifications: Option<LegacyNotifications>,
 }
 
 /// Applied when a new thread's session is created; `None` keeps the agent's default.
@@ -55,18 +58,31 @@ pub struct ModelRef {
     pub id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-pub struct Notifications {
-    /// System notification when a turn finishes in a thread you're not looking at.
-    pub on_finish: bool,
-    /// Play a sound when a turn finishes.
-    pub sound: bool,
+struct LegacyNotifications {
+    on_finish: Option<bool>,
+    sound: Option<bool>,
 }
 
-impl Default for Notifications {
-    fn default() -> Self {
-        Self { on_finish: true, sound: true }
+/// The alerts plugin's id, and its switches the old `notifications` settings become.
+const ALERTS: &str = "alerts";
+
+impl Settings {
+    /// Move old `notifications` switches that were off to the alerts plugin's settings (unless
+    /// it has its own). Whether anything changed.
+    fn migrate(&mut self) -> bool {
+        let Some(old) = self.notifications.take() else { return false };
+        let alerts = self.plugins.settings.entry(ALERTS.into()).or_default();
+        for (key, on) in [("notify", old.on_finish), ("sound", old.sound)] {
+            if on == Some(false) {
+                alerts.entry(key.into()).or_insert_with(|| "false".into());
+            }
+        }
+        if alerts.is_empty() {
+            self.plugins.settings.remove(ALERTS);
+        }
+        true
     }
 }
 
@@ -87,7 +103,13 @@ pub struct SettingsStore {
 
 impl SettingsStore {
     pub fn load(path: Option<PathBuf>) -> Self {
-        let settings = path.as_deref().map(read).unwrap_or_default();
+        let mut settings: Settings = path.as_deref().map(read).unwrap_or_default();
+        if settings.migrate()
+            && let Some(path) = &path
+            && let Err(e) = write(path, &settings)
+        {
+            tracing::warn!("saving settings to {} failed: {e:#}", path.display());
+        }
         Self { path, settings }
     }
 
@@ -205,15 +227,6 @@ impl SpaceApp {
         cx.notify();
     }
 
-    pub(crate) fn set_notify_on_finish(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.settings.update(|s| s.notifications.on_finish = on);
-        cx.notify();
-    }
-
-    pub(crate) fn set_sound(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.settings.update(|s| s.notifications.sound = on);
-        cx.notify();
-    }
 
     pub(crate) fn set_default_mode(&mut self, mode: Option<String>, cx: &mut Context<Self>) {
         self.settings.update(|s| s.new_threads.permission_mode = mode);
@@ -288,6 +301,24 @@ impl SpaceApp {
         cx.notify();
     }
 
+    /// Flip a plugin's switch setting (saved at once).
+    pub(crate) fn set_plugin_switch(&mut self, plugin_id: String, key: String, on: bool, cx: &mut Context<Self>) {
+        let (host, value) = (self.host.clone(), on.to_string());
+        cx.spawn(async move |this, cx| {
+            let result = host.set_setting(&plugin_id, &key, Some(value.clone()), false).await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(()) => this.settings.update(|s| {
+                        s.plugins.settings.entry(plugin_id).or_default().insert(key, value);
+                    }),
+                    Err(e) => this.banner = Some(format!("Couldn't save the setting: {e}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Turn a service plugin on or off (saved; takes effect at once).
     pub(crate) fn set_plugin_enabled(&mut self, plugin_id: String, enabled: bool, cx: &mut Context<Self>) {
         if self.host.plugin(&plugin_id).is_some_and(|p| p.manifest.required) {
@@ -351,27 +382,41 @@ mod tests {
         let path = temp("roundtrip");
         let mut store = SettingsStore::load(Some(path.clone()));
         assert_eq!(store.settings, Settings::default());
-        assert!(store.settings.notifications.on_finish && store.settings.notifications.sound);
         assert!(!path.exists(), "loading never writes");
         store.update(|s| {
             s.new_threads.model = Some(ModelRef { provider: "stub".into(), id: "stub-fast".into() });
             s.new_threads.thinking_level = Some("high".into());
             s.new_threads.permission_mode = Some("read-only".into());
-            s.notifications.sound = false;
             s.plugins.disabled = vec!["permissions".into()];
         });
         let json = std::fs::read_to_string(&path).unwrap();
-        assert!(json.contains("\"newThreads\"") && json.contains("\"thinkingLevel\"") && json.contains("\"onFinish\""));
+        assert!(json.contains("\"newThreads\"") && json.contains("\"thinkingLevel\""));
+        assert!(!json.contains("notifications"));
         assert!(json.contains("\"permissionMode\"") && json.contains("\"disabled\""));
         assert_eq!(SettingsStore::load(Some(path)).settings, store.settings);
     }
 
     #[test]
     fn partial_file_takes_defaults() {
-        let s: Settings = serde_json::from_str(r#"{ "notifications": { "sound": false } }"#).unwrap();
-        assert!(s.notifications.on_finish);
-        assert!(!s.notifications.sound);
-        assert_eq!(s.new_threads, NewThreads::default());
+        let s: Settings = serde_json::from_str(r#"{ "newThreads": { "thinkingLevel": "high" } }"#).unwrap();
+        assert_eq!(s.new_threads.thinking_level.as_deref(), Some("high"));
+        assert_eq!(s.plugins, Plugins::default());
+    }
+
+    #[test]
+    fn old_notification_switches_move_to_the_alerts_plugin() {
+        let path = temp("legacy");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{ "notifications": { "onFinish": true, "sound": false } }"#).unwrap();
+        let store = SettingsStore::load(Some(path.clone()));
+        let alerts = &store.settings.plugins.settings[ALERTS];
+        assert_eq!((alerts.get("notify"), alerts.get("sound").map(String::as_str)), (None, Some("false")));
+        let json = std::fs::read_to_string(&path).unwrap();
+        assert!(!json.contains("notifications") && json.contains("\"alerts\""), "{json}");
+        // Both on: nothing to keep.
+        let mut s: Settings = serde_json::from_str(r#"{ "notifications": { "sound": true } }"#).unwrap();
+        assert!(s.migrate());
+        assert!(s.plugins.settings.is_empty());
     }
 
     #[test]
@@ -383,7 +428,7 @@ mod tests {
         assert_eq!(store.settings, Settings::default());
         store.update(|_| {});
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
-        store.update(|s| s.notifications.on_finish = false);
-        assert!(!SettingsStore::load(Some(path)).settings.notifications.on_finish);
+        store.update(|s| s.new_threads.thinking_level = Some("low".into()));
+        assert_eq!(SettingsStore::load(Some(path)).settings.new_threads.thinking_level.as_deref(), Some("low"));
     }
 }

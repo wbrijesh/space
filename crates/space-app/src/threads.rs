@@ -11,7 +11,6 @@ use space_core::{AgentHandle, PluginStatus, Session, SessionEvent, SessionState,
 use space_ui::format;
 
 use crate::app::{SeedThread, SpaceApp};
-use crate::notify;
 use crate::settings::ModelRef;
 
 /// One conversation with the agent (an ACP session once it has been created).
@@ -36,8 +35,8 @@ pub struct Thread {
     pub mode: Option<String>,
     /// Modes that need confirming (Full access) and were confirmed in this thread.
     pub confirmed: HashSet<String>,
-    /// This turn already alerted that a tool call is paused.
-    paused_alerted: bool,
+    /// This turn already counted a paused tool call as unread.
+    paused_seen: bool,
     /// Expanded thought/tool items (transcript indices).
     pub expanded: HashSet<usize>,
     thought_started: HashMap<usize, Instant>,
@@ -60,7 +59,7 @@ impl Thread {
             queued: None,
             mode: None,
             confirmed: HashSet::new(),
-            paused_alerted: false,
+            paused_seen: false,
             expanded: HashSet::new(),
             thought_started: HashMap::new(),
             thought_secs: HashMap::new(),
@@ -117,45 +116,25 @@ impl SpaceApp {
         let selected = self.selected == Some(key) && !self.show_settings;
         let Some(thread) = self.thread_mut(key) else { return };
         thread.apply(event);
-        // A tool call waiting for the guardrail: alert once per turn (it may stay paused long).
+        // A tool call waiting for the guardrail counts once per turn (it may stay paused long).
         let paused = match event {
             SessionEvent::TurnStarted => {
-                thread.paused_alerted = false;
-                None
+                thread.paused_seen = false;
+                false
             }
-            SessionEvent::ToolCallHeld { reason: Some(reason), .. } if !thread.paused_alerted => {
-                thread.paused_alerted = true;
-                Some(reason.clone())
+            SessionEvent::ToolCallHeld { reason: Some(_), .. } if !thread.paused_seen => {
+                thread.paused_seen = true;
+                true
             }
-            _ => None,
+            _ => false,
         };
-        let attention = paused.is_some()
+        let attention = paused
             || matches!(
                 event,
                 SessionEvent::TurnEnded { .. } | SessionEvent::PermissionRequested(_) | SessionEvent::Error { .. }
             );
         if !selected && attention && !matches!(event, SessionEvent::TurnEnded { stop_reason } if stop_reason == "error") {
             thread.unread += 1;
-        }
-        let prefs = &self.settings.settings.notifications;
-        let alerts = notify::Alerts { notification: prefs.on_finish, sound: prefs.sound };
-        if let SessionEvent::TurnEnded { stop_reason } = event
-            && self.notify
-            && (alerts.notification || alerts.sound)
-            && stop_reason != "cancelled"
-            && let Some(thread) = self.thread(key)
-        {
-            // Headline says what happened; the second line says which thread.
-            let headline = if stop_reason == "error" { "Agent stopped with an error" } else { "Agent finished" };
-            notify::turn_finished(key, headline, &thread.title(), selected && notify::app_active(), alerts);
-        }
-        if let Some(reason) = paused
-            && self.notify
-            && (alerts.notification || alerts.sound)
-            && let Some(thread) = self.thread(key)
-        {
-            let headline = format!("Paused: {}", reason.trim_end_matches('.'));
-            notify::turn_finished(key, &headline, &thread.title(), selected && notify::app_active(), alerts);
         }
     }
 

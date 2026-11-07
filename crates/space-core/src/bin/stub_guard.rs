@@ -18,8 +18,10 @@
 //! * `crashUntil` — exit at once on every tool call or `sandbox/confine` until this file exists.
 //! * `reason` — `{mode}`, `{tool}`, `{history}` (the number of earlier items) and `{said}`
 //!   (the user's messages in the history, joined by `|`) are filled in.
-//! * `call` — call this host service once initialized, and log the answer
-//!   (`space-stub-guard: <method> -> ok|<error>`).
+//! * `call` — call this host service once initialized (with `callParams`, default `{}`), and
+//!   log the answer (`space-stub-guard: <method> -> ok|<error>`).
+//! * `observeDelayMs` — take this long over each observed event. Every observed event is
+//!   logged as `space-stub-guard: observed <event JSON>`.
 //! * `printEnv` — log which of these environment variables are set
 //!   (`space-stub-guard: env HOME=set CARGO=unset`).
 //! * `sandbox` — `sandbox/confine` puts these words in front of the argv.
@@ -55,6 +57,8 @@ struct Config {
     #[serde(default)]
     unverifiable: Vec<String>,
     call: Option<String>,
+    call_params: Option<serde_json::Value>,
+    observe_delay_ms: Option<u64>,
     #[serde(default)]
     print_env: Vec<String>,
 }
@@ -87,8 +91,9 @@ impl Plugin for Guard {
         }
         if let Some(method) = self.config.call.clone() {
             let host = host.clone();
+            let params = self.config.call_params.clone().unwrap_or_else(|| serde_json::json!({}));
             tokio::spawn(async move {
-                let answer = match host.request(&method, serde_json::json!({})).await {
+                let answer = match host.request(&method, params).await {
                     Ok(_) => "ok".to_string(),
                     Err(e) => e.to_string(),
                 };
@@ -106,6 +111,7 @@ impl Plugin for Guard {
             description: "Test secret".into(),
             kind: SettingKind::Secret,
             placeholder: None,
+            default: None,
         });
         SettingsSchema { fields: fields.collect() }
     }
@@ -167,6 +173,13 @@ impl Plugin for Guard {
         let mut argv = self.config.sandbox.clone().unwrap_or_default();
         argv.extend(request.argv);
         Ok(Confined { argv })
+    }
+
+    async fn observe(&self, event: Observed) {
+        eprintln!("space-stub-guard: observed {}", serde_json::to_string(&event).unwrap_or_default());
+        if let Some(ms) = self.config.observe_delay_ms {
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+        }
     }
 
     async fn pre_execute(&self, call: HookCall) -> Result<HookDecision, RpcError> {

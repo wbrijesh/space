@@ -50,9 +50,10 @@ Environment:
 - `SPACE_PLUGIN_DIRS=dir1:dir2` replaces the bundled plugin roots (`<repo>/plugins`).
   `~/.space/plugins` and `<project>/.space/plugins` are still scanned.
 - `SPACE_AUTOPROMPT="…"` sends that prompt in the first thread once its session is up.
-- `SPACE_NOTIFY=0` turns off the "agent finished" alert. When a turn ends, Space plays a sound if you're
-  watching that thread, otherwise it posts a macOS notification (bundled app only); clicking it opens
-  the thread. Both can be turned off in Settings (⌘,). Scenarios are silent unless `SPACE_NOTIFY=1`.
+- `SPACE_NOTIFY=0` turns off notifications and sounds. The bundled alerts plugin (`plugins/alerts`) plays a
+  sound when a turn ends in the thread you're watching, otherwise Space posts a macOS notification
+  (bundled app only); clicking it opens the thread. Both can be turned off in Settings (⌘,) ▸ Alerts.
+  Scenarios are silent unless `SPACE_NOTIFY=1`.
 - `SPACE_SETTINGS=<file>` uses that settings file instead of `~/.space/settings.json`. Scenarios always
   use a temp file.
 - `RUST_LOG=space_core=debug` turns on logging (stderr).
@@ -109,8 +110,8 @@ plugin list; the agent's status sits in the sidebar footer.
   composer with several lines of text, ⌘↓ moves the caret to the end instead.
 - **Settings** (⌘, or Space ▸ Settings…): replaces the thread view, sidebar stays. *New threads*: default
   model and thinking level ("Agent default" leaves the agent's choice; existing threads don't change).
-  *Notifications*: notify when an agent finishes, play a sound, and the macOS permission status (with a
-  button to allow it or open System Settings). Esc, ⌘, again, ⌘[, ⌘N or clicking a thread leaves.
+  Then each plugin's settings (*Alerts*: notify when an agent finishes, play a sound). *Notifications*:
+  the macOS permission status (with a button to allow it or open System Settings). Esc, ⌘, again, ⌘[, ⌘N or clicking a thread leaves.
   Saved on every change to `~/.space/settings.json`.
 - **Logs**: the terminal icon in the sidebar footer (or ⌘J) opens the agent's stderr. If the agent
   exits, the thread shows the error with Restart and Logs.

@@ -28,10 +28,17 @@ pub const HOOK_TOOLS_PRE_EXECUTE: &str = "tools/pre-execute";
 pub const EVENT_SESSION_CREATED: &str = "session/created";
 pub const EVENT_TURN_STARTED: &str = "turn/started";
 pub const EVENT_TURN_ENDED: &str = "turn/ended";
+pub const EVENT_TOOL_HELD: &str = "tool/held";
 pub const EVENT_TOOL_RESULT: &str = "tool/result";
 pub const EVENT_THREAD_TITLED: &str = "thread/titled";
-pub const EVENTS: &[&str] =
-    &[EVENT_SESSION_CREATED, EVENT_TURN_STARTED, EVENT_TURN_ENDED, EVENT_TOOL_RESULT, EVENT_THREAD_TITLED];
+pub const EVENTS: &[&str] = &[
+    EVENT_SESSION_CREATED,
+    EVENT_TURN_STARTED,
+    EVENT_TURN_ENDED,
+    EVENT_TOOL_HELD,
+    EVENT_TOOL_RESULT,
+    EVENT_THREAD_TITLED,
+];
 /// In `uses`: payloads include what the user and the agent wrote (else ids and metadata only).
 pub const USE_READ_TRANSCRIPT: &str = "read:transcript";
 

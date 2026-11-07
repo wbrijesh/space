@@ -32,6 +32,8 @@ pub type LevelHandler = Rc<dyn Fn(Option<String>, &mut Window, &mut App)>;
 /// `(plugin id, key)`.
 pub type FieldHandler = Rc<dyn Fn(String, String, &mut Window, &mut App)>;
 pub type PluginToggleHandler = Rc<dyn Fn(String, bool, &mut Window, &mut App)>;
+/// `(plugin id, key, on)`.
+pub type FieldToggleHandler = Rc<dyn Fn(String, String, bool, &mut Window, &mut App)>;
 
 /// One plugin setting field.
 #[derive(Clone)]
@@ -42,6 +44,8 @@ pub struct FieldView {
     pub description: SharedString,
     /// Masked, kept in the Keychain, never shown again once saved.
     pub secret: bool,
+    /// A switch, and whether it's on (then `input`, `check` and `status` aren't shown).
+    pub switch: Option<bool>,
     pub set: bool,
     pub input: Entity<InputState>,
     /// The last save: being checked, or what the plugin said.
@@ -127,8 +131,6 @@ pub struct SettingsHandlers {
     /// `None`: the agent's default.
     pub on_model: ModelHandler,
     pub on_thinking: LevelHandler,
-    pub on_notify: ToggleHandler,
-    pub on_sound: ToggleHandler,
     /// Ask macOS for notification permission.
     pub on_allow: Handler,
     pub on_open_system_settings: Handler,
@@ -139,6 +141,8 @@ pub struct SettingsHandlers {
     /// Store the field's value although it couldn't be checked.
     pub on_save_anyway: FieldHandler,
     pub on_clear_field: FieldHandler,
+    /// A switch setting was flipped.
+    pub on_toggle_field: FieldToggleHandler,
     pub on_plugin_enabled: PluginToggleHandler,
     /// `(plugin id, approved)`.
     pub on_plugin_approval: PluginToggleHandler,
@@ -149,14 +153,13 @@ impl Default for SettingsHandlers {
         Self {
             on_model: Rc::new(|_, _, _| {}),
             on_thinking: Rc::new(|_, _, _| {}),
-            on_notify: Rc::new(|_, _, _| {}),
-            on_sound: Rc::new(|_, _, _| {}),
             on_allow: Rc::new(|_, _| {}),
             on_open_system_settings: Rc::new(|_, _| {}),
             on_mode: Rc::new(|_, _, _| {}),
             on_save_field: Rc::new(|_, _, _, _| {}),
             on_save_anyway: Rc::new(|_, _, _, _| {}),
             on_clear_field: Rc::new(|_, _, _, _| {}),
+            on_toggle_field: Rc::new(|_, _, _, _, _| {}),
             on_plugin_enabled: Rc::new(|_, _, _, _| {}),
             on_plugin_approval: Rc::new(|_, _, _, _| {}),
         }
@@ -170,8 +173,6 @@ pub struct SettingsPage {
     /// Default model for new threads as (provider, id); `None`: the agent's default.
     model: Option<(String, String)>,
     thinking: Option<String>,
-    notify: bool,
-    sound: bool,
     permission: NotificationPermission,
     /// The `permission-modes` catalog (empty: no plugin publishes modes, so no row).
     modes: Vec<CatalogEntry>,
@@ -188,8 +189,6 @@ impl SettingsPage {
             catalog,
             model: None,
             thinking: None,
-            notify: true,
-            sound: true,
             permission: NotificationPermission::Checking,
             modes: Vec::new(),
             mode: None,
@@ -225,16 +224,6 @@ impl SettingsPage {
         self
     }
 
-    pub fn notify(mut self, on: bool) -> Self {
-        self.notify = on;
-        self
-    }
-
-    pub fn sound(mut self, on: bool) -> Self {
-        self.sound = on;
-        self
-    }
-
     pub fn permission(mut self, permission: NotificationPermission) -> Self {
         self.permission = permission;
         self
@@ -258,8 +247,7 @@ fn model_name(m: &ModelInfo) -> String {
 
 impl RenderOnce for SettingsPage {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        let Self { catalog, model, thinking, notify, sound, permission, modes, mode, plugin_settings, plugins, handlers: h } =
-            self;
+        let Self { catalog, model, thinking, permission, modes, mode, plugin_settings, plugins, handlers: h } = self;
 
         // Model: "Agent default" + the agent's models.
         let (model_row, thinking_row) = match &catalog {
@@ -314,22 +302,9 @@ impl RenderOnce for SettingsPage {
             }
         };
 
-        let (on_notify, on_sound) = (h.on_notify.clone(), h.on_sound.clone());
-        let notifications = vec![
-            row(
-                "Notify when an agent finishes",
-                "Shows a notification when you're not looking at the thread.",
-                Some(toggle("settings-notify", notify, on_notify, window).into_any_element()),
-            )
-            .into_any_element(),
-            row(
-                "Play a sound",
-                "When an agent finishes.",
-                Some(toggle("settings-sound", sound, on_sound, window).into_any_element()),
-            )
-            .into_any_element(),
-            permission_row(permission, &h).into_any_element(),
-        ];
+        // What to be told about is the alerts plugin's (its own section); whether macOS lets
+        // Space post notifications at all is Space's.
+        let notifications = vec![permission_row(permission, &h).into_any_element()];
 
         let mut new_threads = vec![model_row.into_any_element(), thinking_row.into_any_element()];
         if !modes.is_empty() {
@@ -371,7 +346,14 @@ fn mode_row(modes: &[CatalogEntry], chosen: Option<&str>, on_mode: LevelHandler,
 
 /// One plugin setting: its label, whether it's set, a field, Save and (when set) Remove; under
 /// it, how the last save went (checking, rejected, "Save anyway") or how the value is doing.
-pub fn field_row(f: &FieldView, h: &SettingsHandlers, _window: &Window) -> Div {
+/// A switch is just its label and the switch.
+pub fn field_row(f: &FieldView, h: &SettingsHandlers, window: &Window) -> Div {
+    if let Some(on) = f.switch {
+        let (toggle_field, pid, key) = (h.on_toggle_field.clone(), f.plugin_id.clone(), f.key.clone());
+        let on_change: ToggleHandler = Rc::new(move |on, w, cx| toggle_field(pid.clone(), key.clone(), on, w, cx));
+        let id = SharedString::from(format!("switch-{}-{}", f.plugin_id, f.key));
+        return row(f.label.clone(), f.description.clone(), Some(toggle(id, on, on_change, window).into_any_element()));
+    }
     let stored = match (f.secret, f.set) {
         (true, true) => "Saved in your Keychain.",
         (true, false) => "Not set. Stored in your Keychain once saved.",
@@ -729,6 +711,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 description: "For the decision model (gpt-6-luna) that checks every operation in Workspace Write and Full access."
                     .into(),
                 secret: true,
+                switch: None,
                 set,
                 input,
                 check: check(),
@@ -767,7 +750,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     }
 
     vec![
-        ComponentPreview::new(Area::Settings, "Settings page", "⌘, — defaults for new threads and notifications.")
+        ComponentPreview::new(Area::Settings, "Settings page", "⌘, — defaults for new threads, plugin settings, notifications.")
             .stacked()
             .examples([
                 page("models loaded, choice set", || {
@@ -778,17 +761,12 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                         .modes(modes(), Some("read-only".into()))
                         .plugins(plugins())
                 }),
-                page("agent defaults, sound off", || {
-                    SettingsPage::new(ready()).sound(false).permission(NotificationPermission::Allowed)
-                }),
+                page("agent defaults", || SettingsPage::new(ready()).permission(NotificationPermission::Allowed)),
                 page("loading models", || {
                     SettingsPage::new(Catalog::Loading).model(sonnet()).permission(NotificationPermission::Checking)
                 }),
-                page("agent unavailable, toggles off", || {
-                    SettingsPage::new(Catalog::Unavailable)
-                        .notify(false)
-                        .sound(false)
-                        .permission(NotificationPermission::Denied)
+                page("agent unavailable, notifications denied", || {
+                    SettingsPage::new(Catalog::Unavailable).permission(NotificationPermission::Denied)
                 }),
                 page("saved model no longer offered", || {
                     SettingsPage::new(ready())
@@ -799,6 +777,29 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         ComponentPreview::new(Area::Settings, "Plugin settings", "Fields a plugin declares; secrets are masked.")
             .stacked()
             .examples([
+                Example::new("switches (alerts)", |window, cx| {
+                    let input = window.use_keyed_state("alerts-unused", cx, InputState::new);
+                    let switch = |key: &str, label: &'static str, description: &'static str, on: bool| FieldView {
+                        plugin_id: "alerts".into(),
+                        key: key.into(),
+                        label: label.into(),
+                        description: description.into(),
+                        secret: false,
+                        switch: Some(on),
+                        set: !on,
+                        input: input.clone(),
+                        check: FieldCheck::Idle,
+                        status: None,
+                    };
+                    let fields = [
+                        switch("notify", "Notify when an agent finishes", "Shows a notification when you're not looking at the thread.", true),
+                        switch("sound", "Play a sound", "When an agent finishes.", false),
+                    ];
+                    let h = SettingsHandlers::default();
+                    section("Alerts", None, fields.iter().map(|f| field_row(f, &h, window).into_any_element()).collect())
+                        .into_any_element()
+                })
+                .width(size::CONTENT_MAX_W),
                 key_section("key not set", false, || FieldCheck::Idle, None),
                 key_section("checking a new key", false, || FieldCheck::Checking, None),
                 key_section("rejected", false, || FieldCheck::Invalid("OpenAI rejected this key.".into()), None),

@@ -134,6 +134,7 @@ pub fn describe(permission: &str) -> String {
         ("observes", manifest::EVENT_SESSION_CREATED) => "Is told when a thread starts",
         ("observes", manifest::EVENT_TURN_STARTED) => "Is told when the agent starts working",
         ("observes", manifest::EVENT_TURN_ENDED) => "Is told when the agent finishes",
+        ("observes", manifest::EVENT_TOOL_HELD) => "Is told when a tool call waits for a guard",
         ("observes", manifest::EVENT_TOOL_RESULT) => "Is told which tools ran and how they ended",
         ("observes", manifest::EVENT_THREAD_TITLED) => "Is told when a thread gets its title",
         ("uses", USE_READ_TRANSCRIPT) => "Reads what you and the agent write",

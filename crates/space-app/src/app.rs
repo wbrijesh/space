@@ -56,8 +56,8 @@ pub struct Options {
     pub seed: Vec<SeedThread>,
     /// Index into `seed` of the thread to select (default: the last).
     pub select: Option<usize>,
-    /// Notify (sound, plus a system notification when not watching) when a turn finishes.
-    /// Off for scenarios; `SPACE_NOTIFY=0` turns it off too. Settings can turn either off.
+    /// Post the notifications plugins ask for (the alerts plugin: when a turn finishes). Off for
+    /// scenarios; `SPACE_NOTIFY=0` turns it off too.
     pub notify: bool,
     /// Settings file (`None`: in memory only). Scenarios use a temp file.
     pub settings_path: Option<PathBuf>,
@@ -310,10 +310,12 @@ impl SpaceApp {
         });
 
         // Back from System Settings (or anywhere): the notification permission may have changed.
+        // Either way, re-render so the host knows whether you're watching a thread.
         let activation = cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 this.refresh_permission(cx);
             }
+            cx.notify();
         });
 
         cx.spawn(async move |this, cx| {
@@ -470,6 +472,15 @@ impl SpaceApp {
             HostEvent::PluginSettings { plugin_id, settings } => {
                 self.plugin_settings.insert(plugin_id, settings);
             }
+            HostEvent::Notify { notify: n, .. } => {
+                if !self.notify {
+                    return;
+                }
+                let thread = n.session_id.as_ref().and_then(|sid| self.session_threads.get(sid)).and_then(|k| self.thread(*k));
+                let body = n.body.clone().or_else(|| thread.map(Thread::title)).unwrap_or_default();
+                notify::post(thread.map(|t| t.key), &n.title, &body, n.banner, n.sound);
+            }
+            HostEvent::OpenUrl { url, .. } => open_url(url),
             HostEvent::Session { session_id, event } => {
                 let Some(&key) = self.session_threads.get(&session_id) else {
                     // Arrived before `new_session` returned; applied once the thread knows its id.
@@ -782,14 +793,7 @@ impl SpaceApp {
         let (verb, arg) = action.split_once(':').unwrap_or((action, ""));
         match verb {
             "open-settings" => self.open_settings(window, cx),
-            "open-url" if arg.starts_with("https://") => {
-                let url = arg.to_string();
-                std::thread::spawn(move || {
-                    if let Err(e) = std::process::Command::new("open").arg(&url).status() {
-                        tracing::warn!("opening {url}: {e}");
-                    }
-                });
-            }
+            "open-url" if arg.starts_with("https://") => open_url(arg.to_string()),
             "retry" => {
                 let (host, id) = (self.host.clone(), arg.to_string());
                 cx.spawn(async move |_, _| host.retry_plugin(&id).await).detach();
@@ -874,8 +878,21 @@ pub(crate) fn resolve_mode(entries: &[CatalogEntry], thread: Option<&str>, defau
 }
 
 
+/// Open a URL in the browser (on a thread, so the `open` child is reaped).
+fn open_url(url: String) {
+    std::thread::spawn(move || {
+        if let Err(e) = std::process::Command::new("open").arg(&url).status() {
+            tracing::warn!("opening {url}: {e}");
+        }
+    });
+}
+
 impl Render for SpaceApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Whatever changed what's on screen re-renders, so this is where the host learns which
+        // thread you're watching (Settings and other apps: none).
+        let watching = self.current().and_then(|t| t.session.as_ref()).map(|s| s.id().to_string());
+        self.host.set_watching(watching.filter(|_| !self.show_settings && window.is_window_active()));
         crate::view::render_root(self, window, cx)
     }
 }

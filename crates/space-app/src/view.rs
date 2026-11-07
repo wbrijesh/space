@@ -246,20 +246,8 @@ fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>)
                 let _ = this.update(cx, |this, cx| this.set_default_model(model, cx));
             })
         },
-        on_thinking: {
-            let this = this.clone();
-            Rc::new(move |level, _, cx| {
-                let _ = this.update(cx, |this, cx| this.set_default_thinking(level, cx));
-            })
-        },
-        on_notify: {
-            let this = this.clone();
-            Rc::new(move |on, _, cx| {
-                let _ = this.update(cx, |this, cx| this.set_notify_on_finish(on, cx));
-            })
-        },
-        on_sound: Rc::new(move |on, _, cx| {
-            let _ = this.update(cx, |this, cx| this.set_sound(on, cx));
+        on_thinking: Rc::new(move |level, _, cx| {
+            let _ = this.update(cx, |this, cx| this.set_default_thinking(level, cx));
         }),
         on_allow: handler(cx, |this, _, cx| this.allow_notifications(cx)),
         on_open_system_settings: Rc::new(|_, _| crate::notify::open_system_settings()),
@@ -287,6 +275,12 @@ fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>)
                 let _ = this.update(cx, |this, cx| this.save_plugin_setting(plugin, key, SaveKind::Clear, w, cx));
             })
         },
+        on_toggle_field: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |plugin, key, on, _, cx| {
+                let _ = this.update(cx, |this, cx| this.set_plugin_switch(plugin, key, on, cx));
+            })
+        },
         on_plugin_enabled: {
             let this = cx.entity().downgrade();
             Rc::new(move |plugin, on, _, cx| {
@@ -304,8 +298,6 @@ fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>)
     let page = SettingsPage::new(catalog)
         .model(s.new_threads.model.clone().map(|m| (m.provider, m.id)))
         .thinking(s.new_threads.thinking_level.clone())
-        .notify(s.notifications.on_finish)
-        .sound(s.notifications.sound)
         .permission(app.permission)
         .modes(app.permission_modes.clone(), s.new_threads.permission_mode.clone())
         .plugin_settings(plugin_sections)
@@ -339,6 +331,8 @@ fn plugin_settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
             .into_iter()
             .map(|st| {
                 let secret = st.field.kind == SettingKind::Secret;
+                let switch = (st.field.kind == SettingKind::Switch)
+                    .then(|| st.value.as_deref().or(st.field.default.as_deref()) == Some("true"));
                 let placeholder = st.field.placeholder.clone().unwrap_or_default();
                 let placeholder =
                     if st.set && secret { "Enter a new key to replace it".to_string() } else { placeholder };
@@ -358,6 +352,7 @@ fn plugin_settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
                     label: st.field.label.clone().into(),
                     description: st.field.description.clone().into(),
                     secret,
+                    switch,
                     set: st.set,
                     input,
                     check,

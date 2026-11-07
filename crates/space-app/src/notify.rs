@@ -1,7 +1,6 @@
-//! "Agent finished" alerts: a macOS notification when you're not looking at the thread, a
-//! sound alone when you are (each can be turned off in Settings). Clicking a notification
-//! brings Space forward on that thread. Also: the notification permission status for the
-//! Settings page, and asking for it.
+//! Notifications plugins ask for (`host/notify`; the alerts plugin decides when): a macOS
+//! notification, or the sound alone. Clicking a notification brings Space forward on its
+//! thread. Also: the notification permission status for the Settings page, and asking for it.
 //!
 //! Notifications need a bundled app (`just run` launches `target/debug/Space.app`); a bare
 //! binary has no bundle id, so `UNUserNotificationCenter` is unavailable and only the sound
@@ -28,7 +27,7 @@ use objc2_user_notifications::{
 
 pub use space_ui::components::settings::NotificationPermission;
 
-/// System sound played when a turn finishes while you're watching it.
+/// System sound played for an alert without a banner.
 const DONE_SOUND: &str = "Glass";
 const ICON_PNG: &[u8] = include_bytes!("../resources/AppIcon.png");
 const ID_PREFIX: &str = "space.thread.";
@@ -102,34 +101,27 @@ pub fn init() -> UnboundedReceiver<u64> {
     rx
 }
 
-/// Which alerts the user wants (Settings ▸ Notifications).
-#[derive(Debug, Clone, Copy)]
-pub struct Alerts {
-    pub notification: bool,
-    pub sound: bool,
-}
-
-/// A turn finished. `watching`: Space is frontmost on this thread (sound only). A thread you
-/// aren't watching gets a notification (silent when the sound is off); when notifications are
-/// off, unavailable or not allowed, the sound plays alone.
-pub fn turn_finished(thread_key: u64, headline: &str, thread_title: &str, watching: bool, alerts: Alerts) {
-    let center = center().filter(|_| !watching && alerts.notification && !DENIED.load(Ordering::Relaxed));
-    match center {
+/// Post a notification for a plugin (`host/notify`): `title` and `body`, clicking it opens
+/// thread `thread_key`. Without `banner`, or when notifications are unavailable or not allowed,
+/// only the sound plays (if `sound`).
+pub fn post(thread_key: Option<u64>, title: &str, body: &str, banner: bool, sound: bool) {
+    match center().filter(|_| banner && !DENIED.load(Ordering::Relaxed)) {
         Some(center) => {
             let content = UNMutableNotificationContent::new();
-            content.setTitle(&NSString::from_str(headline));
-            content.setBody(&NSString::from_str(thread_title));
-            if alerts.sound {
+            content.setTitle(&NSString::from_str(title));
+            content.setBody(&NSString::from_str(body));
+            if sound {
                 content.setSound(Some(&UNNotificationSound::defaultSound()));
             }
-            content.setThreadIdentifier(&NSString::from_str(&format!("{ID_PREFIX}{thread_key}")));
-            // Unique per turn, so an older banner for the thread doesn't swallow the new one.
+            let thread = thread_key.map_or_else(|| "space".to_string(), |k| format!("{ID_PREFIX}{k}"));
+            content.setThreadIdentifier(&NSString::from_str(&thread));
+            // Unique per alert, so an older banner for the thread doesn't swallow the new one.
             let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-            let id = NSString::from_str(&format!("{ID_PREFIX}{thread_key}.{nanos}"));
+            let id = NSString::from_str(&format!("{thread}.{nanos}"));
             let request = UNNotificationRequest::requestWithIdentifier_content_trigger(&id, &content, None);
             center.addNotificationRequest_withCompletionHandler(&request, None);
         }
-        None if alerts.sound => play_sound(),
+        None if sound => play_sound(),
         None => {}
     }
 }
@@ -218,9 +210,4 @@ fn set_dock_icon() {
     if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
         unsafe { NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&image)) };
     }
-}
-
-/// Whether Space is the active app.
-pub fn app_active() -> bool {
-    MainThreadMarker::new().is_some_and(|mtm| NSApplication::sharedApplication(mtm).isActive())
 }

@@ -30,12 +30,15 @@
 //!   failing provider: an error, so the agent doesn't spawn).
 //! * Before each prompt, every `context` provider adds hidden sections (`_meta`).
 //! * Catalogs (`catalog:<name>`) and settings (`settings`) are cached and reported as events.
+//! * Session events are told to the plugins that `observe` them ([`observers`]); `host/notify`
+//!   and `host/open-url` calls are reported as events for the app to carry out.
 //!
 //! Files: [`registry`] (who is discovered, turned off, provides what), [`services`] (service
-//! processes, settings, catalogs, seams), [`pipeline`] (the hook chain and held calls),
-//! [`agents`] (ACP connections and sessions).
+//! processes, settings, catalogs, seams, host services), [`pipeline`] (the hook chain and held
+//! calls), [`observers`] (observed events), [`agents`] (ACP connections and sessions).
 
 mod agents;
+mod observers;
 mod pipeline;
 mod registry;
 mod services;
@@ -46,7 +49,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use space_protocol::PROTOCOL_VERSION;
-use space_protocol::service::{CatalogEntry, SettingField, SettingValues};
+use space_protocol::service::{CatalogEntry, Notify, SettingField, SettingValues};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
@@ -96,6 +99,10 @@ pub enum HostEvent {
     Catalog { name: String, entries: Vec<CatalogEntry> },
     /// A service plugin's settings, and which of them are set.
     PluginSettings { plugin_id: String, settings: Vec<SettingState> },
+    /// A plugin asked for a notification (`host/notify`).
+    Notify { plugin_id: String, notify: Notify },
+    /// A plugin asked to open an `http(s)` URL in the browser (`host/open-url`).
+    OpenUrl { plugin_id: String, url: String },
 }
 
 /// One plugin setting as the Settings page shows it.
@@ -186,6 +193,8 @@ struct HostInner {
     statuses: Mutex<HashMap<String, PluginStatus>>,
     /// Started agents by plugin id (the app owns them).
     agents: Mutex<HashMap<String, Weak<AgentInner>>>,
+    /// The session Space is frontmost on ([`Host::set_watching`]).
+    watching: Mutex<Option<SessionId>>,
 }
 
 impl Host {
@@ -210,6 +219,7 @@ impl Host {
                 crashes: Mutex::new(HashMap::new()),
                 statuses: Mutex::new(HashMap::new()),
                 agents: Mutex::new(HashMap::new()),
+                watching: Mutex::new(None),
             }),
         };
         host.discover();
@@ -254,6 +264,7 @@ impl HostInner {
     }
 
     fn emit_session(&self, session_id: &str, event: SessionEvent) {
+        self.observe_session(session_id, &event);
         self.emit(HostEvent::Session { session_id: session_id.to_string(), event });
     }
 }

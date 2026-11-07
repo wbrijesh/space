@@ -43,11 +43,17 @@ isn't running, tool calls wait for it.
 stops while none runs. Without a provider it isn't started, and Settings says why.
 
 Declare everything else your plugin needs. Nothing undeclared is delivered or allowed:
-- `observes = ["turn/ended"]`: events you're told about.
+- `observes = ["turn/ended"]`: events you're told about (`events/observe`; `observe` in Rust):
+  `session/created`, `turn/started`, `turn/ended` (with `stopReason` and whether the user is
+  `watching` the thread), `tool/held` (a guard can't decide; the reason), `tool/result` and
+  `thread/titled`. They come one at a time, in order, and nothing waits on you; fall too far behind
+  and your own newest events are dropped.
 - `uses = ["host/notify"]`: host services you call (`Host::request` in Rust). Other calls fail with
-  `-32003` (not permitted).
+  `-32003` (not permitted). `host/notify {title, body?, sessionId?, banner, sound}` posts a macOS
+  notification (body defaults to the thread's title; clicking opens it), or only plays the sound;
+  `host/open-url {url}` opens an `http(s)` URL.
 - `uses = ["read:transcript"]`: see what the user and the agent wrote. Without it, a hook's history has the
-  user's messages emptied.
+  user's messages emptied, and events leave out tool output and titles.
 - `env = ["SSH_AUTH_SOCK"]`: variables of Space's environment you get. Every plugin gets only `PATH`,
   `HOME`, `USER`, `TMPDIR`, `LANG` and `SHELL`; set your own with `[run.env]`.
 
@@ -95,7 +101,8 @@ changes. "Retry now" on your blocker (`retry:<your id>`) arrives as `plugin/retr
 
 ## 4. Settings
 
-Declare fields in `settings/schema` (`kind: "secret"` for keys). Before storing a new value the host
+Declare fields in `settings/schema` (`kind: "secret"` for keys, `"switch"` for on/off with a `default` of
+`"true"` or `"false"`; `plugins/alerts` is a small example). Before storing a new value the host
 calls `settings/validate`: answer `ok`, `invalid` (with why; nothing is stored) or `unverifiable` (you
 couldn't check; the user can save anyway). New values arrive as `settings/changed`; secrets the Keychain
 wouldn't hand over are listed in `unreadable`.

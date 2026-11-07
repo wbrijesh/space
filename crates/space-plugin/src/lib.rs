@@ -81,6 +81,14 @@ pub trait Plugin: Send + Sync + 'static {
         async move { Ok(Confined { argv: request.argv }) }
     }
 
+    /// An event the manifest `observes`. Events come one at a time, in order; the next waits
+    /// until this returns, so a slow one only delays (and can make the host drop) the plugin's
+    /// own events.
+    fn observe(&self, event: Observed) -> impl Future<Output = ()> + Send {
+        let _ = event;
+        async {}
+    }
+
     /// Hook `tools/pre-execute`: a verdict on the pending tool call.
     fn pre_execute(&self, call: HookCall) -> impl Future<Output = Result<HookDecision, RpcError>> + Send {
         let _ = call;
@@ -159,6 +167,10 @@ async fn handle<P: Plugin>(plugin: &P, host: &OnceLock<Host>, method: &str, para
         CONTEXT_GET => rpc::result(plugin.context(rpc::params(params)?).await?),
         SANDBOX_CONFINE => rpc::result(plugin.confine(rpc::params(params)?).await?),
         HOOK_PRE_EXECUTE => rpc::result(plugin.pre_execute(rpc::params(params)?).await?),
+        EVENTS_OBSERVE => {
+            plugin.observe(rpc::params(params)?).await;
+            rpc::result(())
+        }
         _ => Err(RpcError::method_not_found(method)),
     }
 }

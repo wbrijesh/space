@@ -1,0 +1,11 @@
+id = "alerts"
+name = "Alerts"
+version = "0.1.0"
+description = "Tells you when an agent finishes or pauses: a notification when you're not looking at the thread, a sound when you are."
+provides = ["settings"]
+observes = ["turn/started", "turn/ended", "tool/held"]
+uses = ["host/notify"]
+
+[run]
+# Built with the workspace (`cargo build --workspace`); ${target} is the profile dir Space runs from.
+command = "${target}/space-alerts"
