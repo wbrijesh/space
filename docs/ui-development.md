@@ -22,7 +22,7 @@ for these.
 | `size` | Control heights, icon sizes, layout widths (`size::THREAD_ROW_H`, `size::SPINNER_LG`, …) |
 | `radius` | Corner radii (`radius::MD` for buttons and rows, `radius::CARD` for the composer) |
 | `text` | Type scale (`text::MD`, `text::BODY`, …), line heights, `UI_FONT` / `MONO_FONT` |
-| `motion` | Animation cycles and curves: spinner (1.6 s, 8 spokes), dots (1.3 s, 16% stagger), toggle slide (180 ms, ease-out) |
+| `motion` | Animation cycles and curves: spinner (1.6 s, 8 spokes), dots (1.3 s, 16% stagger), toggle slide (180 ms, ease-out), scroll glide (200 ms), button pop (160 ms, from 0.92) |
 
 `theme::install` maps the tokens onto gpui-component's theme, so stock widgets (textarea, popup
 menus, tooltips, scrollbars) match. The gallery's **Tokens** page shows all of them.
@@ -103,6 +103,7 @@ until you cancel it. Nothing in the UI is faked. `Space --scenario list` prints 
 | `many-threads` | nine threads in mixed states (working, waiting, unread, error) |
 | `long-composer` | finished thread with a 12-line draft |
 | `long-transcript` | thread longer than the window, scrolled to the end (bottom fade) |
+| `scrolled-up` | long thread held scrolled up (scroll-to-bottom button) while the reply keeps streaming below |
 | `read-mode` | a thread in Read-only mode with a finished investigation (toggle under the composer) |
 | `settings` | the Settings page, with the stub's models and a saved default model and thinking level |
 
@@ -149,10 +150,12 @@ stays available in optimized builds for profiling. CI and lint run both configur
 
 ## Interaction scripts
 
-`SPACE_SCRIPT=<file>` replays clicks, keys and typing through GPUI's own event dispatch. The
-commands are `click X Y`, `key cmd-n`, `type text`, `wait MS`, `shot NAME` and `shotnow NAME`;
-`shot` and `shotnow` run `$SPACE_SHOT_CMD NAME`. Use it for interaction checks that need no OS
-input permissions (see `crates/space-app/src/devscript.rs`).
+`SPACE_SCRIPT=<file>` replays clicks, scrolls, keys and typing through GPUI's own event
+dispatch. The commands are `click X Y`, `move X Y`, `scroll X Y DY` (trackpad scroll; negative DY
+moves the view up), `key cmd-n`, `type text`, `wait MS`, `shot NAME` and `shotnow NAME`; `shot` and
+`shotnow` run `$SPACE_SHOT_CMD NAME`. Use it for interaction checks that need no OS input
+permissions (see `crates/space-app/src/devscript.rs`). While a script runs, the app logs
+`script: transcript following=…` when the transcript stops or resumes following its bottom.
 
 ## Inspired by
 

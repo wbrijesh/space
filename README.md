@@ -99,7 +99,10 @@ plugin list; the agent's status sits in the sidebar footer.
   into your message, so the transcript doesn't show it. The toggle is hidden for agents without these modes.
 - **Transcript**: your messages as bubbles, replies as markdown, thinking collapsed as
   "Thought for Ns", tool calls as compact rows that expand to their output, permission cards
-  (Allow/Reject).
+  (Allow/Reject). It follows new output while you're at the bottom; scroll up to read and it stays
+  put while the agent keeps working, with a round ↓ button above the composer. The button, ⌘↓ or
+  View ▸ Scroll to Bottom glide back down and follow again (sending a message jumps there too). In a
+  composer with several lines of text, ⌘↓ moves the caret to the end instead.
 - **Settings** (⌘, or Space ▸ Settings…): replaces the thread view, sidebar stays. *New threads*: default
   model and thinking level ("Agent default" leaves the agent's choice; existing threads don't change).
   *Notifications*: notify when an agent finishes, play a sound, and the macOS permission status (with a

@@ -161,6 +161,17 @@ space/
   ring) stayed active after clicking elsewhere. Clickable chrome is plain styled divs (no focus);
   dropdown triggers show a focus ring only after keyboard input, because popup menus hand focus back
   to their trigger when they close. Selected and hovered rows use clearly different fills.
+- **Follow scrolling.** The transcript and the logs panel use `space-ui`'s `FollowScrollArea`
+  (`components/follow_scroll.rs`). It measures its content after layout and before the scroll
+  container's prepaint, so it decides with this frame's max offset. Only input changes the offset
+  between frames (it's measured from the top, so content arriving below leaves it alone), so any
+  change is a user scroll: upward scrolling past 24px stops following, scrolling back within 24px
+  of the bottom resumes it, and content growth never stops it. While following, it re-pins with
+  `ScrollHandle::scroll_to_bottom`, which GPUI applies after layout, so streaming text never shows a
+  frame off the bottom. The app only calls `jump_to_bottom` (thread opened or switched, message sent)
+  and `glide_to_bottom` (⌘↓; the glide runs on the animation clock). ⌘↓ is bound at the root and in
+  the composer's textarea (`Input && !ComposerMultiline`); a multi-line composer keeps it for
+  moving the caret to the end.
 - **Settings.** `space-app/src/settings.rs` loads `~/.space/settings.json` (`SPACE_SETTINGS` overrides;
   serde defaults, so partial or older files load; a corrupt file loads as defaults and is only replaced
   once the user changes something) and saves atomically on every change. The page (⌘,) is an in-window
