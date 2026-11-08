@@ -280,6 +280,10 @@ pub struct SpaceApp {
     pub(crate) field_checks: HashMap<(String, String), FieldCheck>,
     /// A mode that needs confirming before the thread switches to it: (thread, mode id).
     pub(crate) pending_confirm: Option<(u64, String)>,
+    /// When something last kept the agent busy (see `idle`), and whether it was stopped for
+    /// being idle (it starts again when you write).
+    pub(crate) agent_activity: std::time::Instant,
+    pub(crate) agent_asleep: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -304,8 +308,15 @@ impl SpaceApp {
             }
             match event {
                 InputEvent::PressEnter { shift: false, .. } => this.send(window, cx),
+                // Typing while the agent sleeps starts it, so it's up when you send.
+                InputEvent::Change => {
+                    if !this.input.read(cx).value().trim().is_empty() {
+                        this.wake_agent(cx);
+                    }
+                    cx.notify();
+                }
                 // Send button state and the card's focus border follow the input.
-                InputEvent::Change | InputEvent::Focus | InputEvent::Blur => cx.notify(),
+                InputEvent::Focus | InputEvent::Blur => cx.notify(),
                 _ => {}
             }
         });
@@ -428,8 +439,11 @@ impl SpaceApp {
             setting_inputs: HashMap::new(),
             field_checks: HashMap::new(),
             pending_confirm: None,
+            agent_activity: std::time::Instant::now(),
+            agent_asleep: false,
             _subscriptions: vec![sub, activation, quit],
         };
+        this.watch_agent_idle(cx);
         this.seed_threads(options.seed, options.select, window, cx);
         this.start_services(cx);
         this.load_saved_threads(cx);
@@ -531,6 +545,7 @@ impl SpaceApp {
             // The Trajectory tab isn't wired yet.
             HostEvent::TrajectoryChanged { thread_id, .. } => self.trajectory_changed(thread_id, cx),
             HostEvent::Session { session_id, event } => {
+                self.touch_agent();
                 let Some(&key) = self.session_threads.get(&session_id) else {
                     // Arrived before `new_session` returned; applied once the thread knows its id.
                     self.orphans.entry(session_id).or_default().push(event);
@@ -553,6 +568,7 @@ impl SpaceApp {
     }
 
     pub(crate) fn answer_permission(&mut self, request_id: u64, decision: PermissionDecision, cx: &mut Context<Self>) {
+        self.touch_agent();
         if let Some(session) = self.current().and_then(|t| t.session.clone())
             && let Err(e) = session.resolve_permission(request_id, decision)
         {
@@ -713,6 +729,24 @@ impl SpaceApp {
 
     /// Switch the selected thread's model and/or effort (new threads use Settings' defaults).
     pub(crate) fn configure(&mut self, request: ConfigureSession, cx: &mut Context<Self>) {
+        self.touch_agent();
+        // The agent sleeps: keep the choice on the thread (its session is switched to it when it's
+        // loaded again) and start the agent.
+        if self.agent_asleep && self.current().is_some_and(|t| t.live_session().is_none()) {
+            if let Some(t) = self.selected.and_then(|k| self.thread_mut(k)) {
+                let s = &mut t.state.status;
+                if request.model.is_some() {
+                    s.provider = request.provider.clone().or(s.provider.take());
+                    s.model = request.model.clone();
+                }
+                if request.thinking_level.is_some() {
+                    s.thinking_level = request.thinking_level.clone();
+                }
+            }
+            self.wake_agent(cx);
+            cx.notify();
+            return;
+        }
         let Some(session) = self.current().and_then(|t| t.live_session().cloned()) else { return };
         cx.spawn(async move |this, cx| {
             if let Err(e) = session.configure(request).await {
@@ -814,6 +848,7 @@ impl SpaceApp {
     /// Switch the selected thread to mode `id`. A mode that asks for confirmation (Full access)
     /// does so once per thread first. Applies from the agent's next tool call.
     pub(crate) fn set_mode(&mut self, id: String, cx: &mut Context<Self>) {
+        self.touch_agent();
         let Some(key) = self.selected else { return };
         let Some(entry) = self.permission_modes.iter().find(|e| e.id == id).cloned() else { return };
         let Some(thread) = self.thread(key) else { return };

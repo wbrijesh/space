@@ -223,7 +223,16 @@ impl SpaceApp {
                     Ok(agent) => {
                         this.agent = Some(agent);
                         this.agent_status = PluginStatus::Running;
+                        let woke = std::mem::take(&mut this.agent_asleep);
+                        this.touch_agent();
                         this.create_pending_sessions(cx);
+                        // Woken by writing: load the thread you're in now, not when you send.
+                        if woke
+                            && let Some(key) = this.selected
+                            && this.thread(key).is_some_and(|t| t.session.is_none() && !t.creating && t.resume.is_some())
+                        {
+                            this.create_session(key, cx);
+                        }
                     }
                     Err(e) => {
                         // The host's own status says whether it's waiting for something
@@ -411,6 +420,7 @@ impl SpaceApp {
 
     pub(crate) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected else { return };
+        self.touch_agent();
         let text = self.input.read(cx).value().trim().to_string();
         let Some(thread) = self.thread_mut(key) else { return };
         if text.is_empty() && thread.attachments.is_empty() && thread.images.is_empty() {

@@ -16,6 +16,7 @@
 
 mod app;
 mod attach;
+mod idle;
 mod images;
 #[cfg(feature = "dev")]
 mod dev;

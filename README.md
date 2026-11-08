@@ -84,6 +84,10 @@ After changing the icon, macOS may keep showing the old one (cached per bundle i
 
 The app starts the agent plugin in the background on launch and opens a new thread. Settings ▸ Plugins
 lists every plugin and its status; if the agent can't start or exits, the thread says so with Restart.
+After 30 minutes with nothing running or waiting on you, the agent goes to sleep (its process stops;
+Settings ▸ Plugins says "Asleep"). Typing in a thread starts it again in the background and loads
+that thread's session; model and effort can still be changed meanwhile (`SPACE_AGENT_IDLE_SECS`
+shortens the wait, for testing).
 
 - **Sidebar**: a plain list of thread titles, newest first. A thread shows the first line of your first
   message until the titles plugin names it (with the thread's model, or the one picked in Settings ▸
