@@ -16,6 +16,7 @@ plugins/permissions     permission modes: macOS sandbox, decision-model guardrai
 plugins/alerts          a notification or sound when an agent finishes or pauses
 plugins/session-store   saved threads in ~/.space/threads
 plugins/titles          thread titles from the thread's agent model
+plugins/trajectory      every thread's trace of model requests and tool calls (Trajectory tab)
 ```
 
 ## Prerequisites

@@ -16,6 +16,7 @@
 //!
 //! Times are Unix milliseconds. Requests are numbered per session from 1; turns and steps too.
 
+use agent_client_protocol::JsonRpcNotification;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +35,8 @@ pub const TRAJECTORY_STATS: &str = "trajectory/stats";
 pub const TRAJECTORY_CHANGED: &str = "trajectory/changed";
 
 /// `_space/trace` params.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcNotification)]
+#[notification(method = "_space/trace")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 #[serde(rename_all = "camelCase")]
 pub struct TraceBatch {

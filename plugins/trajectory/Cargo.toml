@@ -1,0 +1,19 @@
+[package]
+name = "space-trajectory"
+description = "Space trajectory plugin: keeps every thread's trace and answers the Trajectory tab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "space-trajectory"
+path = "src/main.rs"
+
+[dependencies]
+space-plugin.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+space-core.workspace = true
+tempfile.workspace = true

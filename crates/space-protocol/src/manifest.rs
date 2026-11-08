@@ -108,7 +108,8 @@ pub struct Manifest {
     #[serde(default)]
     pub description: String,
     /// Capabilities: `agent` (an ACP agent), or any of `sandbox`, `context`, `settings`,
-    /// `session-store`, `session-title` and `catalog:<name>` (a service plugin, spoken to over plain JSON-RPC).
+    /// `session-store`, `session-title`, `trajectory` and `catalog:<name>` (a service plugin,
+    /// spoken to over plain JSON-RPC).
     pub provides: Vec<String>,
     /// Events a service plugin listens to.
     #[serde(default)]
@@ -125,7 +126,7 @@ pub struct Manifest {
     #[serde(default)]
     pub observes: Vec<String>,
     /// What a service plugin may ask of the host: host services
-    /// ([`crate::service::HOST_SERVICES`]) and [`USE_READ_TRANSCRIPT`].
+    /// ([`crate::service::HOST_SERVICES`]), [`USE_READ_TRANSCRIPT`] and [`USE_READ_TRACE`].
     #[serde(default)]
     pub uses: Vec<String>,
     /// Variables of Space's environment the plugin gets, beyond the few every plugin gets.
@@ -194,7 +195,10 @@ impl Manifest {
             return Err("`provides` must name at least one capability".into());
         }
         for cap in &self.provides {
-            let known = matches!(cap.as_str(), CAP_AGENT | CAP_SANDBOX | CAP_CONTEXT | CAP_SETTINGS | CAP_SESSION_STORE | CAP_SESSION_TITLE)
+            let known = matches!(
+                cap.as_str(),
+                CAP_AGENT | CAP_SANDBOX | CAP_CONTEXT | CAP_SETTINGS | CAP_SESSION_STORE | CAP_SESSION_TITLE | CAP_TRAJECTORY
+            )
                 || cap.strip_prefix(CATALOG_PREFIX).is_some_and(is_kebab_case);
             if !known {
                 return Err(format!("unknown capability {cap:?} in `provides`"));
@@ -220,6 +224,12 @@ impl Manifest {
                 return Err(format!("a `{cap}` provider reads the transcript, so it must list `{USE_READ_TRANSCRIPT}` in `uses`"));
             }
         }
+        if self.observes(EVENT_TRACE) && !self.uses(USE_READ_TRACE) {
+            return Err(format!("observing `{EVENT_TRACE}` reads everything sent to the model, so it must list `{USE_READ_TRACE}` in `uses`"));
+        }
+        if self.provides(CAP_TRAJECTORY) && !self.observes(EVENT_TRACE) {
+            return Err(format!("a `{CAP_TRAJECTORY}` provider builds on traces, so it must observe `{EVENT_TRACE}`"));
+        }
         for hook in &self.hooks {
             if hook.event != HOOK_TOOLS_PRE_EXECUTE {
                 return Err(format!("unknown hook event {:?}", hook.event));
@@ -228,7 +238,8 @@ impl Manifest {
         if let Some(event) = self.observes.iter().find(|e| !EVENTS.contains(&e.as_str())) {
             return Err(format!("unknown event {event:?} in `observes`"));
         }
-        let known_use = |u: &String| u == USE_READ_TRANSCRIPT || crate::service::HOST_SERVICES.contains(&u.as_str());
+        let known_use =
+            |u: &String| u == USE_READ_TRANSCRIPT || u == USE_READ_TRACE || crate::service::HOST_SERVICES.contains(&u.as_str());
         if let Some(u) = self.uses.iter().find(|u| !known_use(u)) {
             return Err(format!("unknown host service {u:?} in `uses`"));
         }
@@ -477,5 +488,10 @@ FOO = "bar"
         assert!(parse("provides=['session-title']").is_err());
         assert!(parse("provides=['session-title']\nuses=['read:transcript', 'agent/complete']").unwrap().provides(CAP_SESSION_TITLE));
         assert!(parse("provides=['session-store']").unwrap_err().to_string().contains("read:transcript"));
+        // Traces need their own permission; a trajectory provider must observe them.
+        assert!(parse("provides=['context']\nobserves=['trace']").unwrap_err().to_string().contains("read:trace"));
+        assert!(parse("provides=['trajectory']\nuses=['read:trace']").unwrap_err().to_string().contains("observe `trace`"));
+        let t = parse("provides=['trajectory']\nobserves=['trace', 'thread/deleted']\nuses=['read:trace']").unwrap();
+        assert!(t.provides(CAP_TRAJECTORY) && t.observes(EVENT_TRACE) && t.uses(USE_READ_TRACE));
     }
 }

@@ -30,6 +30,7 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json::Value;
 use space_protocol::service::*;
+use space_protocol::trace::*;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 pub use rpc::{Peer, RpcError};
@@ -124,6 +125,31 @@ pub trait Plugin: Send + Sync + 'static {
         async { Err(RpcError::method_not_found(TITLE_GENERATE)) }
     }
 
+    /// `observes = ["trace"]` (with `read:trace`): a batch of what went to and came from the
+    /// model. Batches come one at a time, in order, and none is dropped.
+    fn trace_record(&self, record: TraceRecord) -> impl Future<Output = Result<(), RpcError>> + Send {
+        let _ = record;
+        async { Ok(()) }
+    }
+
+    /// `provides = ["trajectory"]`: a page of a thread's trajectory.
+    fn trajectory_read(&self, read: TrajectoryRead) -> impl Future<Output = Result<TrajectoryPage, RpcError>> + Send {
+        let _ = read;
+        async { Err(RpcError::method_not_found(TRAJECTORY_READ)) }
+    }
+
+    /// `provides = ["trajectory"]`: everything the inspector shows for a row or a request.
+    fn trajectory_detail(&self, request: TrajectoryDetailRequest) -> impl Future<Output = Result<TrajectoryDetail, RpcError>> + Send {
+        let _ = request;
+        async { Err(RpcError::method_not_found(TRAJECTORY_DETAIL)) }
+    }
+
+    /// `provides = ["trajectory"]`: a thread's totals.
+    fn trajectory_stats(&self, thread: ThreadRef) -> impl Future<Output = Result<TrajectoryStats, RpcError>> + Send {
+        let _ = thread;
+        async { Err(RpcError::method_not_found(TRAJECTORY_STATS)) }
+    }
+
     /// Hook `tools/pre-execute`: a verdict on the pending tool call.
     fn pre_execute(&self, call: HookCall) -> impl Future<Output = Result<HookDecision, RpcError>> + Send {
         let _ = call;
@@ -147,6 +173,12 @@ impl Host {
     /// runs the calls it held through the chain again.
     pub fn hooks_ready(&self) {
         self.peer.notify(HOOKS_READY, serde_json::json!({}));
+    }
+
+    /// `provides = ["trajectory"]`: tell the host a thread's trajectory changed (the app's
+    /// Trajectory tab reads it again).
+    pub fn trajectory_changed(&self, thread_id: &str, version: u64) {
+        self.peer.notify(TRAJECTORY_CHANGED, TrajectoryChanged { thread_id: thread_id.to_string(), version });
     }
 
     /// Call a host service (one the manifest lists in `uses`; others fail with
@@ -208,6 +240,10 @@ async fn handle<P: Plugin>(plugin: &P, host: &OnceLock<Host>, method: &str, para
         STORE_DELETE => rpc::result(plugin.store_delete(rpc::params(params)?).await?),
         STORE_DATA_DIR => rpc::result(plugin.store_data_dir(rpc::params(params)?).await?),
         TITLE_GENERATE => rpc::result(plugin.title(rpc::params(params)?).await?),
+        TRACE_RECORD => rpc::result(plugin.trace_record(rpc::params(params)?).await?),
+        TRAJECTORY_READ => rpc::result(plugin.trajectory_read(rpc::params(params)?).await?),
+        TRAJECTORY_DETAIL => rpc::result(plugin.trajectory_detail(rpc::params(params)?).await?),
+        TRAJECTORY_STATS => rpc::result(plugin.trajectory_stats(rpc::params(params)?).await?),
         EVENTS_OBSERVE => {
             plugin.observe(rpc::params(params)?).await;
             rpc::result(())

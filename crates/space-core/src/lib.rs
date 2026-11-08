@@ -33,3 +33,8 @@ pub use session::{
     SessionState, ToolCallInfo, ToolCallPatch, ToolStatus, TranscriptItem,
 };
 pub use space_protocol as protocol;
+
+/// Now, in Unix milliseconds (the times on messages, turn ends and traces).
+pub(crate) fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}

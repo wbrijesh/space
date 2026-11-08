@@ -12,13 +12,14 @@ use space_protocol::acp::{self, Agent, ByteStreams, Client};
 use space_protocol::acp_schema as schema;
 use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY, USAGE_META_KEY};
 use space_protocol::service::HistoryItem;
+use space_protocol::trace::{ContextFact, TraceBatch, TraceEvent};
 use space_protocol::{Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SpaceStatus};
 use tokio::sync::oneshot;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use super::pipeline::{SessionMeta, pre_execute};
 use super::{Host, HostEvent, HostInner, PluginStatus, Refused, check_protocol, exit_status, start_failure};
-use crate::convert;
+use crate::{convert, now_ms};
 use crate::discovery::DiscoveredPlugin;
 use crate::process::{self, PluginProcess};
 use crate::session::{ImageRef, PermissionDecision, PermissionOption, PermissionRequest, SessionEvent, SessionId, ToolCallPatch};
@@ -181,6 +182,16 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
                 async move |status: SpaceStatus, _cx| {
                     let session_id = status.session_id.clone();
                     shared.host.emit_session(&session_id, SessionEvent::Status(status));
+                    Ok(())
+                }
+            },
+            acp::on_receive_notification!(),
+        )
+        .on_receive_notification(
+            {
+                let shared = shared.clone();
+                async move |batch: TraceBatch, _cx| {
+                    shared.host.trace(&batch.session_id, batch.events);
                     Ok(())
                 }
             },
@@ -349,12 +360,13 @@ impl AgentHandle {
 
     /// `session/new` with `cwd`.
     pub async fn new_session(&self, cwd: impl Into<PathBuf>) -> Result<Session> {
-        self.new_session_in(cwd, None).await
+        self.new_session_in(cwd, None, None).await
     }
 
     /// `session/new` with `cwd`, telling the agent the folder it may keep the session's own
-    /// files in (to load it again later).
-    pub async fn new_session_in(&self, cwd: impl Into<PathBuf>, data_dir: Option<PathBuf>) -> Result<Session> {
+    /// files in (to load it again later). `thread_id`: the thread the session belongs to (its
+    /// traces are filed under it).
+    pub async fn new_session_in(&self, cwd: impl Into<PathBuf>, data_dir: Option<PathBuf>, thread_id: Option<&str>) -> Result<Session> {
         let cwd = cwd.into();
         let this = self.clone();
         let host = self.inner.shared.host.clone();
@@ -371,8 +383,9 @@ impl AgentHandle {
             })
             .await??;
         let id = response.session_id.0.to_string();
-        host.emit_session(&id, SessionEvent::Created { plugin_id: self.inner.plugin_id.clone(), cwd: cwd.clone() });
-        Ok(self.session(id, cwd))
+        let session = self.session(id.clone(), cwd.clone(), thread_id);
+        host.emit_session(&id, SessionEvent::Created { plugin_id: self.inner.plugin_id.clone(), cwd });
+        Ok(session)
     }
 
     /// Whether the agent can load a session again ([`AgentHandle::load_session`]).
@@ -387,7 +400,13 @@ impl AgentHandle {
 
     /// ACP `session/load`: continue session `session_id` (from an earlier run) in `cwd`. The
     /// history the agent replays while loading isn't reported; the thread already shows it.
-    pub async fn load_session(&self, session_id: &str, cwd: impl Into<PathBuf>, data_dir: Option<PathBuf>) -> Result<Session> {
+    pub async fn load_session(
+        &self,
+        session_id: &str,
+        cwd: impl Into<PathBuf>,
+        data_dir: Option<PathBuf>,
+        thread_id: Option<&str>,
+    ) -> Result<Session> {
         if !self.inner.can_load {
             bail!("{} can't load a saved session", self.agent_name().unwrap_or(&self.inner.plugin_id));
         }
@@ -409,11 +428,12 @@ impl AgentHandle {
             .await;
         self.inner.shared.loading.lock().unwrap().remove(&id);
         response??;
-        Ok(self.session(id, cwd))
+        Ok(self.session(id, cwd, thread_id))
     }
 
-    fn session(&self, id: SessionId, cwd: PathBuf) -> Session {
-        let meta = SessionMeta::new(cwd, self.inner.plugin_id.clone());
+    fn session(&self, id: SessionId, cwd: PathBuf, thread_id: Option<&str>) -> Session {
+        let mut meta = SessionMeta::new(cwd, self.inner.plugin_id.clone());
+        meta.thread_id = thread_id.map(str::to_string);
         self.inner.shared.host.sessions.lock().unwrap().insert(id.clone(), meta);
         let inner = SessionInner { id, agent: self.clone(), running: AtomicBool::new(false) };
         Session { inner: Arc::new(inner) }
@@ -511,6 +531,16 @@ impl Session {
         }
         let host = self.inner.agent.inner.shared.host.clone();
         let id = self.inner.id.clone();
+        if host.tracing() {
+            let path = |p: &PathBuf| p.display().to_string();
+            let prompt = TraceEvent::Prompt {
+                at: now_ms(),
+                text: text.clone(),
+                files: attachments.iter().map(path).collect(),
+                images: images.iter().map(|i| path(&i.path)).collect(),
+            };
+            host.trace(&id, vec![prompt]);
+        }
         host.emit_session(&id, SessionEvent::UserMessage { text: text.clone(), attachments: attachments.clone(), images, at_ms: Some(now_ms()) });
         host.emit_session(&id, SessionEvent::TurnStarted);
         host.record(&id, HistoryItem::User { text: text.clone() });
@@ -522,6 +552,14 @@ impl Session {
             .rt
             .spawn(async move {
                 let sections = task_host.context_sections(&task_id).await;
+                if !sections.is_empty() && task_host.tracing() {
+                    let facts = sections
+                        .iter()
+                        .map(|(plugin, s)| ContextFact { plugin: plugin.clone(), id: s.id.clone(), text: s.text.clone() })
+                        .collect();
+                    task_host.trace(&task_id, vec![TraceEvent::Context { at: now_ms(), sections: facts }]);
+                }
+                let sections: Vec<_> = sections.into_iter().map(|(_, s)| s).collect();
                 // Images first, then the text that refers to them.
                 let mut blocks = image_blocks;
                 blocks.push(schema::ContentBlock::Text(schema::TextContent::new(text)));
@@ -615,9 +653,4 @@ impl Session {
         host.emit_session(&self.inner.id, SessionEvent::Status(status.clone()));
         Ok(status)
     }
-}
-
-/// Now, in Unix milliseconds (the times on messages and turn ends).
-fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
