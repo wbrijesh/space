@@ -126,6 +126,7 @@ impl Gallery {
                 Area::Sidebar => "SIDEBAR",
                 Area::Composer => "COMPOSER",
                 Area::Transcript => "TRANSCRIPT",
+                Area::Trajectory => "TRAJECTORY",
                 Area::Settings => "SETTINGS",
                 Area::Indicators => "INDICATORS",
             }));

@@ -16,13 +16,14 @@ pub enum Area {
     Sidebar,
     Composer,
     Transcript,
+    Trajectory,
     Settings,
     Indicators,
 }
 
 impl Area {
-    pub const ALL: [Area; 6] =
-        [Area::Shell, Area::Sidebar, Area::Composer, Area::Transcript, Area::Settings, Area::Indicators];
+    pub const ALL: [Area; 7] =
+        [Area::Shell, Area::Sidebar, Area::Composer, Area::Transcript, Area::Trajectory, Area::Settings, Area::Indicators];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -30,6 +31,7 @@ impl Area {
             Area::Sidebar => "Sidebar",
             Area::Composer => "Composer",
             Area::Transcript => "Transcript",
+            Area::Trajectory => "Trajectory",
             Area::Settings => "Settings",
             Area::Indicators => "Indicators",
         }
@@ -109,6 +111,7 @@ pub fn registry() -> Vec<ComponentPreview> {
         transcript::previews(),
         images::previews(),
         message_actions::previews(),
+        trajectory::previews(),
         follow_scroll::previews(),
         loaders::previews(),
     ]
