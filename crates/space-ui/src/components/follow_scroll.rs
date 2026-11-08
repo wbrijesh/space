@@ -46,6 +46,9 @@ pub type FollowHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
 enum Request {
     Jump,
     Glide,
+    /// Something in the content was opened or closed: keep what's on screen where it is (stop
+    /// following if it now reaches past the bottom).
+    Hold,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -136,6 +139,16 @@ impl Follow {
         }
 
         match self.request.take() {
+            // The row opened above the bottom: stay put rather than pinning (which would pull
+            // the row up). Still at the bottom (it closed, or fits): keep following.
+            Some(Request::Hold) => {
+                self.glide = None;
+                if max - pos > self.slop {
+                    self.following = false;
+                    self.nudge = 0.;
+                    return (Scroll::Keep, false);
+                }
+            }
             Some(Request::Glide) if !time.reduce_motion && max - pos > EPS => {
                 self.glide = Some(Glide { from: pos, since: time.now });
                 self.following = false;
@@ -291,6 +304,15 @@ impl FollowScroll {
         let mut inner = self.0.borrow_mut();
         inner.follow.hold = None;
         inner.follow.request = Some(Request::Glide);
+    }
+
+    /// A row in the content is about to open or close: on the next frame, keep the view where it
+    /// is instead of pinning to the bottom, so the row stays under the pointer.
+    pub fn hold(&self) {
+        let mut inner = self.0.borrow_mut();
+        if inner.follow.request.is_none() {
+            inner.follow.request = Some(Request::Hold);
+        }
     }
 
     /// Stop following and hold the view `distance` above the bottom (at most at the top), as if
@@ -894,5 +916,24 @@ mod tests {
         a.follow.hold = Some(300.);
         a.frame();
         assert!(!a.follow.following && (a.max - a.pos - 300.).abs() < EPS);
+    }
+
+    #[test]
+    fn opening_a_row_while_following_keeps_it_in_place() {
+        let mut a = Area::new(1000.);
+        assert_eq!(a.pos, 1000.);
+        // A row near the bottom opens: the content grows by 300 below it; the view stays.
+        a.follow.request = Some(Request::Hold);
+        a.grow(300.);
+        assert_eq!(a.pos, 1000.);
+        assert!(!a.follow.following);
+        // Closing a row at the bottom (or anything that still fits) keeps following.
+        let mut b = Area::new(1000.);
+        b.follow.request = Some(Request::Hold);
+        b.grow(-200.);
+        assert_eq!(b.pos, 800.);
+        assert!(b.follow.following);
+        b.grow(50.);
+        assert_eq!(b.pos, 850., "still follows new content");
     }
 }

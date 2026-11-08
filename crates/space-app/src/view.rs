@@ -236,8 +236,12 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
         return div().flex_1().min_h_0().flex().flex_col().children(tabs).child(view).into_any_element();
     }
 
+    // The streaming reply (the last item of a running turn) shows at an even pace.
+    let streaming = streaming_reply(app, thread, window, cx);
+    #[cfg(feature = "dev")]
+    let built = std::time::Instant::now();
     let this = cx.entity().downgrade();
-    let (this2, this3) = (this.clone(), this.clone());
+    let (this2, this3, this4) = (this.clone(), this.clone(), this.clone());
     let items = transcript_items(TranscriptView {
         state: &thread.state,
         key: thread.key,
@@ -270,7 +274,14 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
                 })
             },
         },
-    });
+        open_turns: &thread.open_turns,
+        on_toggle_turn: Rc::new(move |ix, _, cx| {
+            let _ = this4.update(cx, |this, cx| this.toggle_turn(ix, cx));
+        }),
+        streaming,
+    }, window, cx);
+    #[cfg(feature = "dev")]
+    perf::frame(built.elapsed());
 
     let content =
         div().w_full().flex().justify_center().px_6().child(column().pt_6().pb(size::SCROLL_FADE_H).children(items));
@@ -286,6 +297,78 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
         });
 
     div().flex_1().min_h_0().flex().flex_col().children(tabs).child(transcript).child(bottom).into_any_element()
+}
+
+/// Dev: `SPACE_PERF=1` prints, every 2 s, how often the transcript was built (frame interval)
+/// and how long building its elements took.
+#[cfg(feature = "dev")]
+mod perf {
+    use std::cell::RefCell;
+    use std::time::{Duration, Instant};
+
+    #[derive(Default)]
+    struct Stats {
+        last: Option<Instant>,
+        since: Option<Instant>,
+        frames: u32,
+        max_gap: Duration,
+        build: Duration,
+        max_build: Duration,
+    }
+
+    thread_local!(static STATS: RefCell<Stats> = RefCell::default());
+
+    pub fn frame(build: Duration) {
+        if std::env::var_os("SPACE_PERF").is_none() {
+            return;
+        }
+        STATS.with(|s| {
+            let mut s = s.borrow_mut();
+            let now = Instant::now();
+            if let Some(last) = s.last {
+                s.max_gap = s.max_gap.max(now - last);
+            }
+            s.last = Some(now);
+            let since = *s.since.get_or_insert(now);
+            s.frames += 1;
+            s.build += build;
+            s.max_build = s.max_build.max(build);
+            if now - since >= Duration::from_secs(2) {
+                let n = s.frames.max(1);
+                eprintln!(
+                    "perf: {} frames in {:.1}s (avg {:.1} ms apart, max {:.1} ms); transcript build avg {:.2} ms, max {:.2} ms",
+                    s.frames,
+                    (now - since).as_secs_f64(),
+                    (now - since).as_secs_f64() * 1000. / n as f64,
+                    s.max_gap.as_secs_f64() * 1000.,
+                    s.build.as_secs_f64() * 1000. / n as f64,
+                    s.max_build.as_secs_f64() * 1000.,
+                );
+                *s = Stats { last: Some(now), ..Default::default() };
+            }
+        });
+    }
+}
+
+/// The streaming reply of `thread`, if a turn is running and its last item is a reply: its index
+/// and how much of it to show now (asking for the next frame while more is to come).
+fn streaming_reply(app: &SpaceApp, thread: &Thread, window: &mut Window, cx: &mut Context<SpaceApp>) -> Option<(usize, usize)> {
+    let mut reveal = app.stream_reveal.borrow_mut();
+    let last = thread.state.items.len().checked_sub(1);
+    let text = match (thread.state.running, last.and_then(|i| thread.state.items.get(i))) {
+        (true, Some(space_core::TranscriptItem::Agent(text))) => text,
+        _ => {
+            reveal.idle(thread.key);
+            return None;
+        }
+    };
+    let clock = space_ui::clock::AnimationClock::global(cx);
+    let instant = cx.reduce_motion() || clock.pinned().is_some();
+    let (shown, more) = reveal.advance(thread.key, last?, text, clock.now(), instant);
+    if more {
+        window.request_animation_frame();
+    }
+    Some((last?, shown))
 }
 
 /// The Trajectory tab's view of the selected thread (`None` until its state exists).
