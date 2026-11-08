@@ -283,12 +283,12 @@ impl SpaceApp {
             });
             let data_dir = dirs.data;
             let result = match &resume {
-                Some((_, session_id)) => agent.load_session(session_id, cwd, data_dir).await,
+                Some((_, session_id)) => agent.load_session(session_id, cwd, data_dir, Some(&id)).await,
                 // An agent that can't use the folder still gets a session (kept in memory).
-                None => match agent.new_session_in(cwd.clone(), data_dir.clone()).await {
+                None => match agent.new_session_in(cwd.clone(), data_dir.clone(), Some(&id)).await {
                     Err(e) if data_dir.is_some() => {
                         tracing::warn!("a session in {}: {e:#}; keeping it in memory", data_dir.unwrap_or_default().display());
-                        agent.new_session_in(cwd, None).await
+                        agent.new_session_in(cwd, None, Some(&id)).await
                     }
                     result => result,
                 },

@@ -36,6 +36,8 @@
 //!   memory only.
 //! * After a thread's first message the `session-title` provider may name it ([`titles`]); it
 //!   asks the thread's agent model through `agent/complete` (`_space/complete`).
+//! * Agents' `_space/trace` batches, with the host's own facts, go in order to the plugins that
+//!   observe `trace`; the `trajectory` provider answers the app's Trajectory tab ([`traces`]).
 //!
 //! Files: [`registry`] (who is discovered, turned off, provides what), [`services`] (service
 //! processes, settings, catalogs, seams, host services), [`pipeline`] (the hook chain and held
@@ -49,6 +51,7 @@ mod registry;
 mod services;
 mod store;
 mod titles;
+mod traces;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -112,6 +115,9 @@ pub enum HostEvent {
     Notify { plugin_id: String, notify: Notify },
     /// A plugin asked to open an `http(s)` URL in the browser (`host/open-url`).
     OpenUrl { plugin_id: String, url: String },
+    /// A thread's trajectory changed (`trajectory/changed` from the trajectory plugin): the
+    /// Trajectory tab reads it again.
+    TrajectoryChanged { thread_id: String, version: u64 },
 }
 
 /// One plugin setting as the Settings page shows it.

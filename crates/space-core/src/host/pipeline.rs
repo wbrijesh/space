@@ -5,9 +5,10 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use space_protocol::service::{self as svc, HistoryItem};
+use space_protocol::trace::{GuardVerdict, TraceEvent};
 use space_protocol::{
     CATALOG_PERMISSION_MODES, HOOK_TOOLS_PRE_EXECUTE, PreExecute, PreExecuteResult, USE_READ_TRANSCRIPT, Verdict,
 };
@@ -33,6 +34,8 @@ pub(super) struct SessionMeta {
     pub(super) agent: String,
     /// The permission mode chosen for the session (`None`: the catalog's default).
     pub(super) mode: Option<String>,
+    /// The thread it belongs to (its traces are filed under it).
+    pub(super) thread_id: Option<String>,
     history: VecDeque<HistoryItem>,
     pub(super) signals: HoldSignals,
 }
@@ -48,7 +51,7 @@ pub(super) struct HoldSignals {
 
 impl SessionMeta {
     pub(super) fn new(cwd: PathBuf, agent: String) -> Self {
-        Self { cwd, agent, mode: None, history: VecDeque::new(), signals: HoldSignals::default() }
+        Self { cwd, agent, mode: None, thread_id: None, history: VecDeque::new(), signals: HoldSignals::default() }
     }
 }
 
@@ -122,9 +125,10 @@ impl HostInner {
 /// One pass through the `tools/pre-execute` chain.
 enum Pass {
     Allow,
-    Deny(String),
-    /// Ask the user, with the listeners' reasons.
-    Ask(Vec<String>),
+    /// Denied, why, and by which plugin.
+    Deny(String, String),
+    /// Ask the user, with the listeners' reasons (and the first one that asked).
+    Ask(Vec<String>, String),
     /// A listener can't decide right now: wait.
     Hold(String),
 }
@@ -132,7 +136,7 @@ enum Pass {
 /// Every listener, in order. A deny wins over a hold, a hold over asks. Listeners without
 /// `read:transcript` get the history without what the user wrote.
 async fn run_chain(host: &Arc<HostInner>, hook: &svc::HookCall) -> Pass {
-    let (mut asks, mut hold) = (Vec::new(), None);
+    let (mut asks, mut hold, mut asker) = (Vec::new(), None, None);
     let stripped = without_transcript(hook);
     for plugin in host.hook_listeners(HOOK_TOOLS_PRE_EXECUTE) {
         let name = &plugin.manifest.name;
@@ -141,9 +145,12 @@ async fn run_chain(host: &Arc<HostInner>, hook: &svc::HookCall) -> Pass {
             Ok(d) => match d.decision {
                 svc::HookVerdict::Deny => {
                     tracing::info!("{} {}: denied by {}", hook.call.tool, hook.call.id, plugin.id());
-                    return Pass::Deny(d.reason.unwrap_or_else(|| format!("Blocked by {name}.")));
+                    return Pass::Deny(d.reason.unwrap_or_else(|| format!("Blocked by {name}.")), plugin.id().to_string());
                 }
-                svc::HookVerdict::Ask => asks.push(d.reason.unwrap_or_else(|| format!("{name} wants you to check this call."))),
+                svc::HookVerdict::Ask => {
+                    asker.get_or_insert_with(|| plugin.id().to_string());
+                    asks.push(d.reason.unwrap_or_else(|| format!("{name} wants you to check this call.")));
+                }
                 svc::HookVerdict::Unavailable => {
                     hold.get_or_insert(d.reason.unwrap_or_else(|| format!("{name} can't check tool calls right now.")));
                 }
@@ -162,7 +169,7 @@ async fn run_chain(host: &Arc<HostInner>, hook: &svc::HookCall) -> Pass {
     match hold {
         Some(reason) => Pass::Hold(reason),
         None if asks.is_empty() => Pass::Allow,
-        None => Pass::Ask(asks),
+        None => Pass::Ask(asks, asker.unwrap_or_default()),
     }
 }
 
@@ -179,6 +186,9 @@ pub(super) async fn pre_execute(shared: Arc<Shared>, req: PreExecute) -> PreExec
         host.emit_session(&session_id, SessionEvent::ToolCallHeld { id: req.tool_call_id.clone(), title: title.clone(), reason })
     };
     let mut held_for: Option<String> = None;
+    // For the trace: when the call was first held, and the mode it was last checked under.
+    let mut held_since: Option<Instant> = None;
+    let mut last_mode = String::new();
     let (pass, call) = loop {
         // Listen before running the chain, so a wake-up during it isn't lost.
         let wake = signals.wake.notified();
@@ -186,6 +196,7 @@ pub(super) async fn pre_execute(shared: Arc<Shared>, req: PreExecute) -> PreExec
         wake.as_mut().enable();
         // Facts are read on every pass: the mode may have changed while the call was held.
         let (mode, root, history) = host.session_facts(&session_id);
+        last_mode.clone_from(&mode);
         let call = svc::ToolCallFacts {
             id: req.tool_call_id.clone(),
             tool: req.tool.clone(),
@@ -199,6 +210,7 @@ pub(super) async fn pre_execute(shared: Arc<Shared>, req: PreExecute) -> PreExec
         if stopped() {
             break (Pass::Hold(reason), call);
         }
+        held_since.get_or_insert_with(Instant::now);
         if held_for.as_ref() != Some(&reason) {
             tracing::info!("{} {}: held: {reason}", req.tool, req.tool_call_id);
             held(Some(reason.clone()));
@@ -215,6 +227,21 @@ pub(super) async fn pre_execute(shared: Arc<Shared>, req: PreExecute) -> PreExec
     if held_for.is_some() {
         held(None);
     }
+    let held_ms = held_since.map_or(0, |t| t.elapsed().as_millis() as u64);
+    let guard = |verdict: GuardVerdict, plugin: Option<String>, reason: Option<String>| {
+        if host.tracing() {
+            let event = TraceEvent::Guard {
+                call_id: req.tool_call_id.clone(),
+                at: crate::now_ms(),
+                plugin: plugin.filter(|p| !p.is_empty()),
+                mode: last_mode.clone(),
+                verdict,
+                reason,
+                held_ms,
+            };
+            host.trace(&session_id, vec![event]);
+        }
+    };
     let record = |allowed: bool| {
         host.record(
             &session_id,
@@ -225,18 +252,23 @@ pub(super) async fn pre_execute(shared: Arc<Shared>, req: PreExecute) -> PreExec
         host.emit_session(&session_id, SessionEvent::ToolCallBlocked { id: req.tool_call_id.clone(), reason: reason.clone() });
         PreExecuteResult { decision: Verdict::Deny, reason: Some(reason) }
     };
-    let asks = match pass {
+    let (asks, asker) = match pass {
         Pass::Allow => {
             record(true);
+            guard(GuardVerdict::Allow, None, None);
             return PreExecuteResult { decision: Verdict::Allow, reason: None };
         }
-        Pass::Deny(reason) => {
+        Pass::Deny(reason, plugin) => {
             record(false);
+            guard(GuardVerdict::Deny, Some(plugin), Some(reason.clone()));
             return block(reason);
         }
         // Only when the user stopped the turn while the call was held.
-        Pass::Hold(_) => return PreExecuteResult { decision: Verdict::Deny, reason: Some("The turn was stopped.".into()) },
-        Pass::Ask(asks) => asks,
+        Pass::Hold(reason) => {
+            guard(GuardVerdict::Held, None, Some(reason).filter(|r| !r.is_empty()));
+            return PreExecuteResult { decision: Verdict::Deny, reason: Some("The turn was stopped.".into()) };
+        }
+        Pass::Ask(asks, asker) => (asks, asker),
     };
     let options = vec![
         PermissionOption { id: ASK_ALLOW.into(), name: "Allow once".into(), kind: PermissionKind::AllowOnce },
@@ -246,6 +278,8 @@ pub(super) async fn pre_execute(shared: Arc<Shared>, req: PreExecute) -> PreExec
     let rx = shared.request_permission(&session_id, patch, options, Some(asks.join(" ")));
     let allowed = matches!(rx.await, Ok(PermissionDecision::Selected(id)) if id == ASK_ALLOW);
     record(allowed);
+    let answer = if allowed { "You allowed it." } else { "You didn't allow it." };
+    guard(if allowed { GuardVerdict::Allow } else { GuardVerdict::Deny }, Some(asker), Some(format!("{} {answer}", asks.join(" "))));
     if allowed { PreExecuteResult { decision: Verdict::Allow, reason: None } } else { block("The user didn't allow this call.".into()) }
 }
 

@@ -1,0 +1,12 @@
+id = "trajectory"
+name = "Trajectory"
+version = "0.1.0"
+description = "Keeps a trace of every model request and tool call, and shows it in each thread's Trajectory tab."
+provides = ["trajectory", "settings"]
+observes = ["trace", "thread/deleted"]
+# A trace is everything sent to and from the model, file contents included. It stays on this Mac.
+uses = ["read:trace"]
+
+[run]
+# Built with the workspace (`cargo build --workspace`); ${target} is the profile dir Space runs from.
+command = "${target}/space-trajectory"

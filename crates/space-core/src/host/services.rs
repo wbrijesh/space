@@ -10,9 +10,12 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use space_plugin::rpc::{self, Peer, RpcError};
 use space_protocol::service::{self as svc, SettingField, SettingKind, SettingValues};
-use space_protocol::{CAP_CONTEXT, CAP_SANDBOX, CAP_SETTINGS, Confine, ContextSection};
+use space_protocol::manifest::EVENT_TRACE;
+use space_protocol::trace::{TRAJECTORY_CHANGED, TrajectoryChanged};
+use space_protocol::{CAP_CONTEXT, CAP_SANDBOX, CAP_SETTINGS, CAP_TRAJECTORY, Confine, ContextSection, USE_READ_TRACE};
 
 use super::observers::Observer;
+use super::traces::TraceSink;
 use super::{Host, HostEvent, HostInner, PluginStatus, SettingError, SettingState, check_protocol, exit_status, start_failure};
 use crate::discovery::DiscoveredPlugin;
 use crate::process::{self, PluginProcess};
@@ -36,6 +39,8 @@ pub(super) struct Service {
     fields: Vec<SettingField>,
     /// The plugin's event queue, when it `observes` anything.
     pub(super) observer: Option<Observer>,
+    /// Its trace queue, when it observes `trace` (with `read:trace`).
+    pub(super) tracer: Option<TraceSink>,
 }
 
 impl Service {
@@ -358,7 +363,7 @@ impl HostInner {
         };
         let on_notification: rpc::NotificationHandler = {
             let (weak, plugin) = (Arc::downgrade(self), plugin.clone());
-            Arc::new(move |method: String, _params| {
+            Arc::new(move |method: String, params| {
                 let Some(host) = weak.upgrade() else { return };
                 // Only about what the manifest declares.
                 match method.as_str() {
@@ -367,6 +372,12 @@ impl HostInner {
                         host.rt.clone().spawn(async move { host.refresh_catalogs(&id).await });
                     }
                     svc::HOOKS_READY if !plugin.manifest.hooks.is_empty() => host.wake_held(),
+                    TRAJECTORY_CHANGED if plugin.manifest.provides(CAP_TRAJECTORY) => {
+                        match rpc::params::<TrajectoryChanged>(params) {
+                            Ok(c) => host.emit(HostEvent::TrajectoryChanged { thread_id: c.thread_id, version: c.version }),
+                            Err(e) => tracing::warn!("bad {TRAJECTORY_CHANGED} from `{}`: {e}", plugin.id()),
+                        }
+                    }
                     _ => {}
                 }
             })
@@ -388,7 +399,9 @@ impl HostInner {
             Vec::new()
         };
         let observer = (!plugin.manifest.observes.is_empty()).then(|| Observer::start(&self.rt, peer.clone(), plugin_id.clone()));
-        let mut service = Service { plugin, peer, _process: process, dead, fields, observer };
+        let tracer = (plugin.manifest.observes(EVENT_TRACE) && plugin.manifest.uses(USE_READ_TRACE))
+            .then(|| TraceSink::start(&self.rt, peer.clone(), plugin_id.clone()));
+        let mut service = Service { plugin, peer, _process: process, dead, fields, observer, tracer };
         let (settings, unreadable) = self.setting_values(&service).await;
         let space_dir = self.options.space_dir.as_ref().map(|d| d.display().to_string());
         let init = svc::Initialize { protocol_version: svc::PROTOCOL_VERSION, settings, unreadable, space_dir };
@@ -533,14 +546,15 @@ impl HostInner {
     }
 
     /// Hidden sections from every `context` provider (a failing one is skipped).
-    pub(super) async fn context_sections(self: &Arc<Self>, session_id: &str) -> Vec<ContextSection> {
+    /// Every `context` provider's sections for the next prompt, with the plugin each came from.
+    pub(super) async fn context_sections(self: &Arc<Self>, session_id: &str) -> Vec<(String, ContextSection)> {
         let (mode, root, _) = self.session_facts(session_id);
         let request = svc::ContextRequest { session_id: session_id.to_string(), mode, project_root: root };
         let mut sections = Vec::new();
         for plugin in self.providers(CAP_CONTEXT) {
             match self.call_service::<_, svc::ContextSections>(plugin.id(), svc::CONTEXT_GET, &request, SERVICE_TIMEOUT).await
             {
-                Ok(s) => sections.extend(s.sections),
+                Ok(s) => sections.extend(s.sections.into_iter().map(|section| (plugin.id().to_string(), section))),
                 Err(e) => tracing::warn!("context from `{}`: {e}", plugin.id()),
             }
         }

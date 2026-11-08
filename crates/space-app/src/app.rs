@@ -514,6 +514,8 @@ impl SpaceApp {
                 notify::post(thread.map(|t| t.key), &n.title, &body, n.banner, n.sound);
             }
             HostEvent::OpenUrl { url, .. } => open_url(url),
+            // The Trajectory tab isn't wired yet.
+            HostEvent::TrajectoryChanged { .. } => {}
             HostEvent::Session { session_id, event } => {
                 let Some(&key) = self.session_threads.get(&session_id) else {
                     // Arrived before `new_session` returned; applied once the thread knows its id.

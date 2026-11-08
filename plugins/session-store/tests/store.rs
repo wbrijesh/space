@@ -86,7 +86,7 @@ async fn a_saved_thread_comes_back_after_a_restart_and_continues() {
     let data_dir = dirs.data.expect("a data folder");
     assert!(data_dir.starts_with(root.path().join("space/threads/t1")));
     assert_eq!(dirs.attachments, root.path().join("space/threads/t1/attachments"));
-    let session = agent.new_session_in(root.path(), Some(data_dir.clone())).await.unwrap();
+    let session = agent.new_session_in(root.path(), Some(data_dir.clone()), Some("t1")).await.unwrap();
     assert_eq!(session.prompt("hello").await.unwrap(), "end_turn");
     let live = drain(&mut events).await;
     let mut shown = SessionState::default();
@@ -116,7 +116,7 @@ async fn a_saved_thread_comes_back_after_a_restart_and_continues() {
     assert_eq!(host.load_thread("t1").await.unwrap().1, saved);
     let agent = host.start_agent("stub").await.unwrap();
     assert!(agent.can_load_session());
-    let session = agent.load_session(&session_id, root.path(), host.thread_dirs("t1").await.data).await.unwrap();
+    let session = agent.load_session(&session_id, root.path(), host.thread_dirs("t1").await.data, Some("t1")).await.unwrap();
     assert_eq!(session.id(), session_id);
     // What the agent replays while loading isn't reported (the thread shows it already).
     let replay = drain(&mut events).await;
@@ -141,7 +141,7 @@ async fn a_store_that_cant_write_doesnt_stop_the_conversation() {
     let (host, mut events) = host(root.path());
     host.start_services().await;
     let agent = host.start_agent("stub").await.unwrap();
-    let session = agent.new_session_in(root.path(), host.thread_dirs("t1").await.data).await.unwrap();
+    let session = agent.new_session_in(root.path(), host.thread_dirs("t1").await.data, Some("t1")).await.unwrap();
     assert_eq!(session.prompt("hello").await.unwrap(), "end_turn");
     let live = drain(&mut events).await;
     let err = host.save_thread("t1", Some(meta("t1", session.id(), root.path())), 0, &live).await.unwrap_err();

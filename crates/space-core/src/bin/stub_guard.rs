@@ -29,6 +29,9 @@
 //! * `catalog` — the entries of `permission-modes`; ids listed in `needsSecret` are not ready
 //!   until the secret setting named by `secret` is set.
 //! * `invalid`, `unverifiable` — `settings/validate` answers so for these values (else ok).
+//! * Every `trace/record` batch is logged as `space-stub-guard: traced <record JSON>`; with
+//!   `trajectory` set, it then says `trajectory/changed` for the batch's thread, and
+//!   `trajectory/read` answers one row whose preview is the thread id.
 
 use std::sync::{Mutex, OnceLock};
 
@@ -61,6 +64,8 @@ struct Config {
     observe_delay_ms: Option<u64>,
     #[serde(default)]
     print_env: Vec<String>,
+    #[serde(default)]
+    trajectory: bool,
 }
 
 struct Guard {
@@ -180,6 +185,25 @@ impl Plugin for Guard {
         if let Some(ms) = self.config.observe_delay_ms {
             tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
         }
+    }
+
+    async fn trace_record(&self, record: space_plugin::protocol::trace::TraceRecord) -> Result<(), RpcError> {
+        eprintln!("space-stub-guard: traced {}", serde_json::to_string(&record).unwrap_or_default());
+        if self.config.trajectory
+            && let Some(host) = self.host.get()
+        {
+            host.trajectory_changed(&record.thread_id, record.events.len() as u64);
+        }
+        Ok(())
+    }
+
+    async fn trajectory_read(
+        &self,
+        read: space_plugin::protocol::trace::TrajectoryRead,
+    ) -> Result<space_plugin::protocol::trace::TrajectoryPage, RpcError> {
+        use space_plugin::protocol::trace::{TrajectoryPage, TrajectoryRow};
+        let row = TrajectoryRow { id: "r1".into(), preview: read.thread_id, ..Default::default() };
+        Ok(TrajectoryPage { rows: vec![row], version: 1, ..Default::default() })
     }
 
     async fn pre_execute(&self, call: HookCall) -> Result<HookDecision, RpcError> {
