@@ -70,6 +70,8 @@ pub mod color {
         red = 0xf85149ff;
         /// Status: new output (unread).
         blue = 0x2f7cf6ff;
+        /// Assistant records (Trajectory).
+        violet = 0xa371f7ff;
         red_bg = 0xf851491a;
         red_border = 0xf8514955;
         yellow_bg = 0xd299221a;
