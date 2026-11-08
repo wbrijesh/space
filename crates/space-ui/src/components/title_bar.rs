@@ -85,6 +85,13 @@ impl TitleBarNav {
             ))
     }
 
+    /// Sidebar toggle and back/forward, fixed beside the traffic lights whether the sidebar is
+    /// shown, hidden or moving (as macOS keeps toolbar items put while a sidebar slides). The
+    /// root draws it over both title bars, which leave room for it.
+    pub fn overlay(&self) -> Div {
+        div().absolute().top_0().left(size::TRAFFIC_LIGHTS_W).h(size::TITLE_BAR_H).flex().items_center().child(self.buttons())
+    }
+
     fn new_thread(&self) -> Stateful<Div> {
         let f = self.on_new_thread.clone();
         icon_button("new-thread", Lucide::SquarePen, true, false)
@@ -93,15 +100,30 @@ impl TitleBarNav {
     }
 }
 
-/// Title bar segment over the sidebar column.
+/// Width of [`TitleBarNav::overlay`]: three icon buttons and their gaps.
+const NAV_W: f32 = 3. * 28. + 2. * 2.;
+/// With the sidebar hidden, where the main title bar's new-thread button and title start
+/// (window x): after the overlay.
+const HIDDEN_NEW_THREAD_X: f32 = 92. + NAV_W + 8.;
+const HIDDEN_TITLE_X: f32 = HIDDEN_NEW_THREAD_X + 28. + 16.;
+
+/// Title bar segment over the sidebar column (the nav overlay sits on its left).
 #[derive(IntoElement)]
 pub struct SidebarTitleBar {
     nav: TitleBarNav,
+    shown: f32,
 }
 
 impl SidebarTitleBar {
     pub fn new(nav: TitleBarNav) -> Self {
-        Self { nav }
+        Self { nav, shown: 1. }
+    }
+
+    /// How far the sidebar is shown (0 hidden … 1 shown). While it slides, the new-thread
+    /// button fades in only once it's clear of the nav overlay it passes under.
+    pub fn shown(mut self, shown: f32) -> Self {
+        self.shown = shown.clamp(0., 1.);
+        self
     }
 }
 
@@ -112,46 +134,68 @@ impl RenderOnce for SidebarTitleBar {
             .flex_none()
             .flex()
             .items_center()
-            .pl(size::TRAFFIC_LIGHTS_W)
+            .justify_end()
             .pr_2()
-            .child(self.nav.buttons())
-            .child(div().flex_1())
-            .child(self.nav.new_thread())
+            .child(div().opacity(((self.shown - 0.7) / 0.3).clamp(0., 1.)).child(self.nav.new_thread()))
     }
 }
 
-/// Title bar over the main column. With the sidebar collapsed it also carries the nav.
+/// Title bar over the main column. While the sidebar is hidden it also carries a new-thread
+/// button after the nav overlay; as the sidebar slides in, the button tucks under its edge and
+/// the title glides to its place beside it.
 #[derive(IntoElement)]
 pub struct MainTitleBar {
     title: SharedString,
     nav: Option<TitleBarNav>,
+    /// How far the sidebar is shown (0 hidden, 1 shown).
+    sidebar: f32,
 }
 
 impl MainTitleBar {
     pub fn new(title: impl Into<SharedString>) -> Self {
-        Self { title: title.into(), nav: None }
+        Self { title: title.into(), nav: None, sidebar: 1. }
     }
 
-    /// Show the navigation here (sidebar collapsed).
-    pub fn nav(mut self, nav: Option<TitleBarNav>) -> Self {
-        self.nav = nav;
+    /// The sidebar's shown fraction (0 hidden … 1 shown) and the nav, for the new-thread button.
+    pub fn sidebar(mut self, shown: f32, nav: TitleBarNav) -> Self {
+        self.sidebar = shown.clamp(0., 1.);
+        self.nav = Some(nav);
         self
     }
 }
 
 impl RenderOnce for MainTitleBar {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        // Positions in window x, made relative to this bar's left edge (the sidebar's width).
+        let edge = f32::from(size::SIDEBAR_W) * self.sidebar;
+        let shown_title_x = f32::from(size::SIDEBAR_W) + 16.;
+        let title_x = HIDDEN_TITLE_X + (shown_title_x - HIDDEN_TITLE_X) * self.sidebar;
         drag_region(div().id("titlebar-main"), "main", window, cx)
+            .relative()
+            .overflow_hidden()
             .h(size::TITLE_BAR_H)
             .flex_none()
             .flex()
             .items_center()
-            .gap_2()
-            .px_4()
+            .pl(px(title_x - edge))
+            .pr_4()
             .border_b_1()
             .border_color(color::border())
-            .when_some(self.nav, |d, nav| {
-                d.pl(size::TRAFFIC_LIGHTS_W).child(nav.buttons()).child(nav.new_thread()).child(div().w_2())
+            .when_some(self.nav.filter(|_| self.sidebar < 0.4), |d, nav| {
+                // Gone before the sidebar's own new-thread button reaches it, so the two never
+                // show side by side.
+                let opacity = (1. - self.sidebar * 2.5).clamp(0., 1.);
+                d.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .left(px(HIDDEN_NEW_THREAD_X - edge))
+                        .opacity(opacity)
+                        .child(nav.new_thread()),
+                )
             })
             .child(
                 div()
@@ -174,7 +218,9 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             .stacked()
             .example(
                 Example::new("with sidebar", move |_, _| {
+                    let nav = TitleBarNav::inert(true, true, false);
                     div()
+                        .relative()
                         .flex()
                         .child(
                             div()
@@ -182,16 +228,18 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                                 .bg(color::bg_sidebar())
                                 .border_r_1()
                                 .border_color(color::border())
-                                .child(SidebarTitleBar::new(TitleBarNav::inert(true, true, false))),
+                                .child(SidebarTitleBar::new(nav.clone())),
                         )
-                        .child(div().flex_1().child(MainTitleBar::new(title)))
+                        .child(div().flex_1().child(MainTitleBar::new(title).sidebar(1., nav.clone())))
+                        .child(nav.overlay())
                         .into_any_element()
                 })
                 .width(px(900.)),
             )
             .example(
                 Example::new("sidebar collapsed", move |_, _| {
-                    MainTitleBar::new(title).nav(Some(TitleBarNav::inert(false, true, true))).into_any_element()
+                    let nav = TitleBarNav::inert(false, true, true);
+                    div().relative().child(MainTitleBar::new(title).sidebar(0., nav.clone())).child(nav.overlay()).into_any_element()
                 })
                 .width(px(900.)),
             ),

@@ -242,6 +242,8 @@ pub struct SpaceApp {
     pub(crate) transcript_scroll: FollowScroll,
     pub(crate) log_scroll: FollowScroll,
     pub(crate) sidebar_open: bool,
+    /// The sidebar's shown fraction, sliding toward `sidebar_open`.
+    pub(crate) sidebar_shown: space_ui::theme::motion::Spring,
     pub(crate) show_logs: bool,
     pub(crate) banner: Option<String>,
     /// Threads deleted while a save of theirs was in flight (by key): their saved folder is
@@ -397,6 +399,7 @@ impl SpaceApp {
             transcript_scroll: FollowScroll::new(),
             log_scroll: FollowScroll::new(),
             sidebar_open: true,
+            sidebar_shown: space_ui::theme::motion::Spring::new(1., space_ui::theme::motion::SIDEBAR_RESPONSE),
             show_logs: false,
             banner,
             deleted_while_saving: HashMap::new(),
@@ -914,6 +917,14 @@ impl SpaceApp {
 
     pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_open = !self.sidebar_open;
+        let target = if self.sidebar_open { 1. } else { 0. };
+        if cx.reduce_motion() {
+            self.sidebar_shown.snap(target);
+        } else {
+            let clock = space_ui::clock::AnimationClock::global(cx);
+            let (now, pinned) = (clock.now(), clock.pinned());
+            self.sidebar_shown.set(target, now, pinned);
+        }
         cx.notify();
     }
 

@@ -46,6 +46,11 @@ fn handler(cx: &mut Context<SpaceApp>, f: impl Fn(&mut SpaceApp, &mut Window, &m
 }
 
 pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> impl IntoElement {
+    let clock = space_ui::clock::AnimationClock::global(cx);
+    let (shown, moving) = app.sidebar_shown.at(clock.now(), clock.pinned());
+    if moving && clock.is_running() {
+        window.request_animation_frame();
+    }
     let nav = TitleBarNav {
         sidebar_open: app.sidebar_open,
         // On the Settings page, Back returns to the current thread.
@@ -70,7 +75,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
             } else {
                 app.current().map(|t| t.title()).unwrap_or_default()
             })
-            .nav((!app.sidebar_open).then(|| nav.clone())),
+            .sidebar(shown, nav.clone()),
         )
         .child(if app.show_settings { settings(app, window, cx) } else { body(app, window, cx) })
         .when(app.show_logs, |d| d.child(logs(app, cx)));
@@ -99,11 +104,25 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .text_color(color::text())
         .font_family(text::UI_FONT)
         .text_size(text::MD)
-        .when(app.sidebar_open, |d| d.child(sidebar(app, nav, cx)))
+        .relative()
+        // The sidebar slides in from the left at full width, revealed by its column growing,
+        // while the main column narrows beside it.
+        .when(shown > 0., |d| {
+            d.child(
+                div()
+                    .relative()
+                    .flex_none()
+                    .h_full()
+                    .overflow_hidden()
+                    .w(size::SIDEBAR_W * shown)
+                    .child(div().absolute().top_0().right_0().h_full().child(sidebar(app, nav.clone(), shown, cx))),
+            )
+        })
         .child(main)
+        .child(nav.overlay())
 }
 
-fn sidebar(app: &SpaceApp, nav: TitleBarNav, cx: &mut Context<SpaceApp>) -> impl IntoElement {
+fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceApp>) -> impl IntoElement {
     let rows = app
         .threads
         .iter()
@@ -141,7 +160,7 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, cx: &mut Context<SpaceApp>) -> impl
         .on_toggle_logs(cx.listener(|this, _, _, cx| this.toggle_logs(cx)))
         .when(app.agent_id.is_some(), |f| f.on_restart(cx.listener(|this, _, _, cx| this.restart_agent(cx))));
 
-    sidebar_column(SidebarTitleBar::new(nav), rows, footer)
+    sidebar_column(SidebarTitleBar::new(nav).shown(shown), rows, footer)
 }
 
 fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
