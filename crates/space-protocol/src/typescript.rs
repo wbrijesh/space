@@ -30,6 +30,7 @@ fn generate() -> String {
         ("CONTEXT_META_KEY", format!("{CONTEXT_META_KEY:?}")),
         ("DATA_DIR_META_KEY", format!("{DATA_DIR_META_KEY:?}")),
         ("USAGE_META_KEY", format!("{USAGE_META_KEY:?}")),
+        ("TRACE_METHOD", format!("{:?}", crate::trace::TRACE_METHOD)),
     ];
     for (name, value) in consts {
         out.push_str(&format!("export const {name} = {value};\n"));
@@ -47,6 +48,14 @@ fn generate() -> String {
         item::<CompleteResult>(&cfg),
         item::<ContextSection>(&cfg),
         item::<TurnUsage>(&cfg),
+        item::<crate::trace::TraceBatch>(&cfg),
+        item::<crate::trace::TraceEvent>(&cfg),
+        item::<crate::trace::HeaderReason>(&cfg),
+        item::<crate::trace::ChunkKind>(&cfg),
+        item::<crate::trace::GuardVerdict>(&cfg),
+        item::<crate::trace::ToolDef>(&cfg),
+        item::<crate::trace::RequestOptions>(&cfg),
+        item::<crate::trace::ContextFact>(&cfg),
         item::<serde_json::Value>(&cfg),
     ] {
         out.push('\n');

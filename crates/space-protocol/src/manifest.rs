@@ -23,6 +23,9 @@ pub const CAP_SESSION_STORE: &str = "session-store";
 /// Names threads after their first message (`title/generate`). One provider at a time; it gets
 /// what the user wrote, so it must also use `read:transcript`.
 pub const CAP_SESSION_TITLE: &str = "session-title";
+/// Shows threads' trajectories (`trajectory/read`, `trajectory/detail`, `trajectory/stats`):
+/// the app's Trajectory tab. One provider at a time; it must also observe `trace`.
+pub const CAP_TRAJECTORY: &str = "trajectory";
 /// Prefix of catalog capabilities: `catalog:<name>` publishes the named list (`catalog/get`).
 pub const CATALOG_PREFIX: &str = "catalog:";
 /// The catalog of permission modes the composer's mode menu shows.
@@ -37,6 +40,11 @@ pub const EVENT_TURN_ENDED: &str = "turn/ended";
 pub const EVENT_TOOL_HELD: &str = "tool/held";
 pub const EVENT_TOOL_RESULT: &str = "tool/result";
 pub const EVENT_THREAD_TITLED: &str = "thread/titled";
+/// A thread was deleted (a plugin that keeps files per thread removes them).
+pub const EVENT_THREAD_DELETED: &str = "thread/deleted";
+/// Every trace batch (`trace/record`): what went to and came from the model, in full. Needs
+/// `read:trace`; batches are never dropped.
+pub const EVENT_TRACE: &str = "trace";
 pub const EVENTS: &[&str] = &[
     EVENT_SESSION_CREATED,
     EVENT_TURN_STARTED,
@@ -44,9 +52,14 @@ pub const EVENTS: &[&str] = &[
     EVENT_TOOL_HELD,
     EVENT_TOOL_RESULT,
     EVENT_THREAD_TITLED,
+    EVENT_THREAD_DELETED,
+    EVENT_TRACE,
 ];
 /// In `uses`: payloads include what the user and the agent wrote (else ids and metadata only).
 pub const USE_READ_TRANSCRIPT: &str = "read:transcript";
+/// In `uses`: may observe `trace`: everything sent to and from the model, including file
+/// contents.
+pub const USE_READ_TRACE: &str = "read:trace";
 
 /// `[[hooks]]`: an event the plugin listens to, and its place in the chain (lower runs first).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

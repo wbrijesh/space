@@ -3,6 +3,7 @@
 //! * [`manifest`] — the `space-plugin.toml` plugin manifest.
 //! * [`ext`] — Space-specific ACP extension methods (`_space/*`) and payloads.
 //! * [`service`] — the JSON-RPC protocol between the host and service plugins.
+//! * [`trace`] — traces of every model request and the trajectory seam built on them.
 //!
 //! These Rust types are the only definition of the protocol. TypeScript plugins use bindings
 //! generated from them (`plugins/pi-agent/src/generated/protocol.ts`; `just protocol`
@@ -13,12 +14,13 @@
 pub mod ext;
 pub mod manifest;
 pub mod service;
+pub mod trace;
 mod typescript;
 
 /// Version of Space's own protocol: the `_space/*` ACP extensions and the service-plugin
 /// protocol. Plugins report the version they were built for when they start, and a plugin on
 /// another version is refused. Bump it on any incompatible change to either.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Re-export of the Agent Client Protocol SDK.
 pub use agent_client_protocol as acp;
@@ -30,6 +32,6 @@ pub use ext::{
     TurnUsage, Verdict,
 };
 pub use manifest::{
-    CAP_AGENT, CAP_CONTEXT, CAP_SANDBOX, CAP_SESSION_STORE, CAP_SESSION_TITLE, CAP_SETTINGS, CATALOG_PERMISSION_MODES, CATALOG_PREFIX, EVENTS,
-    HOOK_TOOLS_PRE_EXECUTE, HookSpec, MANIFEST_FILE, Manifest, ManifestError, RunConfig, RunCwd, USE_READ_TRANSCRIPT,
+    CAP_AGENT, CAP_CONTEXT, CAP_SANDBOX, CAP_SESSION_STORE, CAP_SESSION_TITLE, CAP_SETTINGS, CAP_TRAJECTORY, CATALOG_PERMISSION_MODES, CATALOG_PREFIX, EVENTS,
+    HOOK_TOOLS_PRE_EXECUTE, HookSpec, MANIFEST_FILE, Manifest, ManifestError, RunConfig, RunCwd, USE_READ_TRACE, USE_READ_TRANSCRIPT,
 };

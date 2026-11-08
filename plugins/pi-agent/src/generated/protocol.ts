@@ -1,6 +1,6 @@
 // Generated from crates/space-protocol by `just protocol`. Do not edit: change the Rust types.
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 export const PROTOCOL_VERSION_META_KEY = "space/protocolVersion";
 export const STATUS_METHOD = "_space/status";
 export const CONFIGURE_METHOD = "_space/session/configure";
@@ -10,6 +10,7 @@ export const COMPLETE_METHOD = "_space/complete";
 export const CONTEXT_META_KEY = "space/context";
 export const DATA_DIR_META_KEY = "space/dataDir";
 export const USAGE_META_KEY = "space/usage";
+export const TRACE_METHOD = "_space/trace";
 
 /**
  * A model the agent can switch a session to.
@@ -137,5 +138,87 @@ reasoning?: number,
  * The models that answered (`provider/model`), in order, without repeats.
  */
 models: Array<string>, };
+
+/**
+ * `_space/trace` params.
+ */
+export type TraceBatch = { sessionId: string, events: Array<TraceEvent>, };
+
+/**
+ * One thing that happened. Agents send all but `Prompt`, `Context` and `Guard`, which the host
+ * adds.
+ */
+export type TraceEvent = { "kind": "turnStart", turn: number, at: number, } | { "kind": "turnEnd", turn: number, at: number, 
+/**
+ * The ACP stop reason (`end_turn`, `cancelled`, ...) or `error`.
+ */
+reason: string, } | { "kind": "header", headerId: number, reason: HeaderReason, systemPrompt: string, tools: Array<ToolDef>, options: RequestOptions, } | { "kind": "request", request: number, turn: number, step: number, at: number, headerId: number, 
+/**
+ * The messages added since the previous request (Anthropic message JSON). A tool
+ * result's content is `{"toolResultRef": <call id>}` (the output is in its
+ * [`TraceEvent::ToolEnd`]); an image is `{"image": <sha256>, "mime": …, "path": …}`.
+ */
+messages: Array<JsonValue>, 
+/**
+ * The history was rewritten (e.g. compacted): `messages` holds all of it.
+ */
+rewritten: boolean, } | { "kind": "firstToken", request: number, at: number, } | { "kind": "chunks", request: number, stream: ChunkKind, t0: number, dt: Array<number>, } | { "kind": "response", request: number, at: number, durationMs: number, usage?: TurnUsage, 
+/**
+ * The provider's stop reason (`stop`, `toolUse`, `length`, `error`, `aborted`, ...).
+ */
+stopReason: string, responseId?: string, 
+/**
+ * `provider/model` that answered.
+ */
+model?: string, 
+/**
+ * The reply's text and thinking (what the transcript shows for it).
+ */
+text: string, thinking: string, error?: string, } | { "kind": "retry", request: number, at: number, attempt: number, max: number, delayMs: number, error: string, } | { "kind": "toolStart", request: number, callId: string, name: string, input: JsonValue, at: number, } | { "kind": "toolEnd", request: number, callId: string, at: number, durationMs: number, 
+/**
+ * At most 256 KB (`truncated` when it was longer).
+ */
+output: string, isError: boolean, truncated: boolean, } | { "kind": "prompt", at: number, text: string, files: Array<string>, 
+/**
+ * Paths of the attached images.
+ */
+images: Array<string>, } | { "kind": "context", at: number, sections: Array<ContextFact>, } | { "kind": "guard", callId: string, at: number, 
+/**
+ * The guard plugin that decided (none: every guard passed).
+ */
+plugin?: string, 
+/**
+ * The session's permission mode.
+ */
+mode: string, verdict: GuardVerdict, reason?: string, heldMs: number, };
+
+export type HeaderReason = "initial" | "change" | "resume";
+
+export type ChunkKind = "text" | "thinking" | "toolInput";
+
+export type GuardVerdict = "allow" | "deny" | "held";
+
+/**
+ * A tool as the model was told about it.
+ */
+export type ToolDef = { name: string, description: string, 
+/**
+ * JSON schema of its input.
+ */
+parameters: JsonValue, };
+
+/**
+ * A request's options (what the provider was asked for besides messages and tools).
+ */
+export type RequestOptions = { provider: string, model: string, maxTokens?: number, 
+/**
+ * The `thinking` setting as sent (e.g. `{"type":"enabled","budget_tokens":…}`).
+ */
+thinking?: JsonValue, effort?: string, toolChoice?: JsonValue, temperature?: number, };
+
+/**
+ * One hidden context section and the plugin it came from.
+ */
+export type ContextFact = { plugin: string, id: string, text: string, };
 
 export type JsonValue = number | string | boolean | Array<JsonValue> | { [key in string]: JsonValue } | null;

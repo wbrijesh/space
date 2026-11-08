@@ -21,6 +21,9 @@
 //! | `events/observe` | host → plugin | `observes` the event ([`Observed`]) |
 //! | `store/list`, `store/load`, `store/write`, `store/delete`, `store/data-dir` | host → plugin | `provides` `session-store` |
 //! | `title/generate` | host → plugin | `provides` `session-title`, after a thread's first message |
+//! | `trace/record` | host → plugin | `observes` `trace` (and `uses` `read:trace`): every trace batch, in order |
+//! | `trajectory/read`, `trajectory/detail`, `trajectory/stats` | host → plugin | `provides` `trajectory` |
+//! | `trajectory/changed` (notification) | plugin → host | `provides` `trajectory`: a thread's trajectory changed |
 //!
 //! A plugin may call the host's services ([`HOST_SERVICES`]) that its manifest lists in `uses`;
 //! any other call is answered [`NOT_PERMITTED`]. Notifications a plugin sends about something
@@ -217,6 +220,9 @@ pub enum Observed {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
     },
+    /// A thread was deleted.
+    #[serde(rename = "thread/deleted")]
+    ThreadDeleted { thread_id: String },
     /// A thread got its title.
     #[serde(rename = "thread/titled")]
     ThreadTitled {
@@ -237,6 +243,7 @@ impl Observed {
             Observed::ToolHeld { .. } => EVENT_TOOL_HELD,
             Observed::ToolResult { .. } => EVENT_TOOL_RESULT,
             Observed::ThreadTitled { .. } => EVENT_THREAD_TITLED,
+            Observed::ThreadDeleted { .. } => EVENT_THREAD_DELETED,
         }
     }
 
