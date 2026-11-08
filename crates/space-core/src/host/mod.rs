@@ -197,6 +197,9 @@ struct HostInner {
     grants: Grants,
     /// Running service plugins by id.
     services: Mutex<HashMap<String, Arc<Service>>>,
+    /// Trace batches kept until the plugins are started (`None` after): a trace plugin that
+    /// starts after an agent began working still gets its whole trace.
+    trace_backlog: Mutex<Option<Vec<space_protocol::trace::TraceRecord>>>,
     /// When each service was last (re)started, for the restart backoff.
     started_at: Mutex<HashMap<String, Instant>>,
     /// One start at a time per service: concurrent callers wait for it instead of failing.
@@ -234,6 +237,7 @@ impl Host {
                 disabled: Mutex::new(HashSet::new()),
                 grants,
                 services: Mutex::new(HashMap::new()),
+                trace_backlog: Mutex::new(Some(Vec::new())),
                 started_at: Mutex::new(HashMap::new()),
                 start_locks: Mutex::new(HashMap::new()),
                 text_settings: Mutex::new(HashMap::new()),

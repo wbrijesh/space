@@ -30,6 +30,8 @@ use super::{Host, HostInner};
 
 /// How long one batch may take before the next is sent anyway.
 const RECORD_TIMEOUT: Duration = Duration::from_secs(30);
+/// At most this many batches are kept for plugins that haven't started yet.
+const BACKLOG_MAX: usize = 50_000;
 /// The app's trajectory calls (a long thread's page is built on the first read).
 const TRAJECTORY_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -57,18 +59,23 @@ impl TraceSink {
 }
 
 impl HostInner {
-    /// Hand `events` of `session_id` to every plugin that observes traces.
+    /// Hand `events` of `session_id` to every plugin that observes traces (and keep them for
+    /// the ones still starting).
     pub(super) fn trace(&self, session_id: &str, events: Vec<TraceEvent>) {
-        if events.is_empty() {
-            return;
-        }
-        let services: Vec<_> =
-            self.services.lock().unwrap().values().filter(|s| s.tracer.is_some() && s.alive()).cloned().collect();
-        if services.is_empty() {
+        if events.is_empty() || !self.tracing() {
             return;
         }
         let thread_id = self.sessions.lock().unwrap().get(session_id).and_then(|m| m.thread_id.clone()).unwrap_or_default();
         let record = TraceRecord { thread_id, session_id: session_id.to_string(), events };
+        // Held while sending, so a plugin that starts now gets each batch once (see `start_tracer`).
+        let mut backlog = self.trace_backlog.lock().unwrap();
+        if let Some(backlog) = backlog.as_mut()
+            && backlog.len() < BACKLOG_MAX
+        {
+            backlog.push(record.clone());
+        }
+        let services: Vec<_> =
+            self.services.lock().unwrap().values().filter(|s| s.tracer.is_some() && s.alive()).cloned().collect();
         for service in services {
             if let Some(sink) = &service.tracer {
                 let _ = sink.tx.send(record.clone());
@@ -76,9 +83,24 @@ impl HostInner {
         }
     }
 
-    /// Whether any plugin would get a trace (so the host can skip building its facts).
+    /// A plugin that observes traces is now running: it gets the batches sent before.
+    pub(super) fn start_tracer(&self, sink: &TraceSink, insert: impl FnOnce()) {
+        let backlog = self.trace_backlog.lock().unwrap();
+        insert();
+        for record in backlog.iter().flatten() {
+            let _ = sink.tx.send(record.clone());
+        }
+    }
+
+    /// Every plugin was started (or failed to): stop keeping batches for late ones.
+    pub(super) fn end_trace_backlog(&self) {
+        *self.trace_backlog.lock().unwrap() = None;
+    }
+
+    /// Whether any plugin would get a trace (so the host can skip building its facts): one is
+    /// running, or the plugins are still starting.
     pub(super) fn tracing(&self) -> bool {
-        self.services.lock().unwrap().values().any(|s| s.tracer.is_some() && s.alive())
+        self.trace_backlog.lock().unwrap().is_some() || self.services.lock().unwrap().values().any(|s| s.tracer.is_some() && s.alive())
     }
 
     async fn trajectory_call<P: Serialize, R: DeserializeOwned>(self: &Arc<Self>, method: &str, params: &P) -> Result<R> {

@@ -64,6 +64,7 @@ impl Host {
                 let ids: Vec<String> =
                     plugins.iter().filter(|p| !p.manifest.is_agent() && !disabled.contains(p.id())).map(|p| p.id().to_string()).collect();
                 futures::future::join_all(ids.iter().map(|id| inner.service(id))).await;
+                inner.end_trace_backlog();
             })
             .await;
     }
@@ -413,7 +414,15 @@ impl HostInner {
         check_protocol(initialized.protocol_version)?;
         service.fields.retain(|f| !f.key.is_empty());
         let service = Arc::new(service);
-        self.services.lock().unwrap().insert(plugin_id.clone(), service.clone());
+        match &service.tracer {
+            // It gets the trace batches sent while it was starting.
+            Some(sink) => self.start_tracer(sink, || {
+                self.services.lock().unwrap().insert(plugin_id.clone(), service.clone());
+            }),
+            None => {
+                self.services.lock().unwrap().insert(plugin_id.clone(), service.clone());
+            }
+        }
         self.refresh_catalogs(&plugin_id).await;
         if !service.fields.is_empty() {
             self.emit(HostEvent::PluginSettings { plugin_id, settings: self.setting_states(&service) });

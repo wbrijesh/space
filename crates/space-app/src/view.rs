@@ -216,12 +216,9 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
     let has_trajectory = app.host.has_trajectory();
     let tabs = has_trajectory.then(|| {
         let this = cx.entity().downgrade();
-        div()
-            .flex_none()
-            .px_4()
-            .child(view_tabs(app.view_tab(), Rc::new(move |tab, w, cx| {
-                let _ = this.update(cx, |this, cx| this.show_tab(tab, w, cx));
-            })))
+        view_tabs(app.view_tab(), Rc::new(move |tab, w, cx| {
+            let _ = this.update(cx, |this, cx| this.show_tab(tab, w, cx));
+        }))
     });
     let stats = has_trajectory
         .then(|| app.trajectories.stats.get(&thread.id).filter(|s| s.steps > 0).map(stats_line))

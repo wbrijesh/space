@@ -16,24 +16,23 @@ use crate::theme::{color, radius, size, text};
 
 /// Every ledger item is this tall.
 pub const ROW_H: Pixels = px(30.);
-const GUTTER_W: f32 = 64.;
-const CHIP_W: f32 = 84.;
+const GUTTER_W: f32 = 52.;
+const CHIP_W: f32 = 82.;
 
 /// What one line of the ledger shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LedgerItem {
     /// "Load earlier" (the page has older rows).
     LoadEarlier,
-    /// A record: its index in the page's rows, and whether it opens its turn.
-    Row { ix: usize, first_of_turn: bool },
-    /// A step's header: the request separator (status dot) before its model reply.
-    Step { turn: u32, step: u32, request: Option<u32>, first_of_turn: bool },
+    /// A record: its index in the page's rows, whether it opens its turn, and, on the first row
+    /// of a step, the step's request (a status dot in the gutter).
+    Row { ix: usize, first_of_turn: bool, request: Option<u32> },
     /// A folded turn: one line for all of it.
     Turn { turn: u32, rows: usize, first: usize },
 }
 
-/// The ledger's lines for `page`: rows passing `keep`, a header before each step's first
-/// model or tool row, folded turns as one line, folded steps without their tool rows.
+/// The ledger's lines for `page`: rows passing `keep` (a step's first model or tool row carries
+/// its request's dot), folded turns as one line, folded steps without their tool rows.
 pub fn ledger_items(page: &TrajectoryPage, folds: &HashSet<FoldKey>, keep: impl Fn(&TrajectoryRow) -> bool) -> Vec<LedgerItem> {
     let mut out = Vec::new();
     if page.older.is_some() {
@@ -61,21 +60,17 @@ pub fn ledger_items(page: &TrajectoryPage, folds: &HashSet<FoldKey>, keep: impl 
             }
             continue;
         }
-        let mut first_of_turn = turn_started.insert(row.turn);
+        let first_of_turn = turn_started.insert(row.turn);
         let model_or_tool = matches!(row.kind, RecordKind::Assistant | RecordKind::Tool);
-        if let (Some(step), true) = (row.step, model_or_tool)
-            && headed.insert((row.turn, step))
-        {
-            out.push(LedgerItem::Step { turn: row.turn, step, request: row.request, first_of_turn });
-            first_of_turn = false;
-        }
+        let starts_step = matches!((row.step, model_or_tool), (Some(step), true) if headed.insert((row.turn, step)));
+        let request = row.request.filter(|_| starts_step);
         if row.kind == RecordKind::Tool
             && let Some(step) = row.step
             && folds.contains(&FoldKey::Step(row.turn, step))
         {
             continue;
         }
-        out.push(LedgerItem::Row { ix, first_of_turn });
+        out.push(LedgerItem::Row { ix, first_of_turn, request });
     }
     out
 }
@@ -155,17 +150,16 @@ pub(super) fn ledger(data: LedgerData, scroll: &LedgerScroll, h: LedgerHandlers)
         range
             .map(|i| match &items[i] {
                 LedgerItem::LoadEarlier => load_earlier(h.on_load_earlier.clone()).into_any_element(),
-                LedgerItem::Row { ix, first_of_turn } => {
+                LedgerItem::Row { ix, first_of_turn, request } => {
                     let row = &page.rows[*ix];
                     let is_selected = selected.as_ref().is_some_and(|s| s.as_ref() == row.id);
-                    row_line(row, *first_of_turn, is_selected, selected_turn == Some(row.turn), now_ms, &h).into_any_element()
-                }
-                LedgerItem::Step { turn, step, request, first_of_turn } => {
-                    let req = request.and_then(|n| requests.get(&n));
-                    let is_selected = selected.as_ref().is_some_and(|s| request.is_some_and(|n| s.as_ref() == format!("request:{n}")));
-                    let tools = step_tools(&page.rows, *turn, *step);
-                    step_line(*turn, *step, req, &tools, *first_of_turn, is_selected, selected_turn == Some(*turn), now_ms, &h)
-                        .into_any_element()
+                    let dot = request.map(|n| {
+                        let req = requests.get(&n);
+                        let tools = row.step.map(|step| step_tools(&page.rows, row.turn, step)).unwrap_or_default();
+                        let dot_selected = selected.as_ref().is_some_and(|s| s.as_ref() == format!("request:{n}"));
+                        step_dot(n, row.step, req, &tools, dot_selected, now_ms)
+                    });
+                    row_line(row, *first_of_turn, dot, is_selected, selected_turn == Some(row.turn), now_ms, &h).into_any_element()
                 }
                 LedgerItem::Turn { turn, rows, first } => {
                     let duration = turn_duration(&page.rows, *turn, now_ms);
@@ -250,30 +244,75 @@ pub fn status_color(status: RecordStatus, retries: u32) -> Hsla {
     }
 }
 
-/// The gutter: the turn's label on its first line, the active turn's rail, the selection rail.
-fn gutter(turn: u32, first_of_turn: bool, active_turn: bool, selected: bool) -> Div {
+/// A step's request in the gutter: its status dot, the step in a tooltip; a click selects it.
+pub struct StepDot {
+    number: u32,
+    color: Hsla,
+    tip: String,
+    selected: bool,
+}
+
+fn step_dot(number: u32, step: Option<u32>, req: Option<&RequestSummary>, tools: &[(String, usize)], selected: bool, now_ms: u64) -> StepDot {
+    let mut parts: Vec<String> = step.map(|s| format!("Step {s}")).into_iter().collect();
+    parts.push(format!("Request #{number}"));
+    if let Some(r) = req {
+        let end = r.ended_ms.unwrap_or(if r.status == RecordStatus::Running { now_ms } else { r.started_ms });
+        parts.push(duration_label(end.saturating_sub(r.started_ms)));
+        if r.retries > 0 {
+            parts.push(format!("{} retr{}", r.retries, if r.retries == 1 { "y" } else { "ies" }));
+        }
+    }
+    if !tools.is_empty() {
+        parts.push(tools.iter().map(|(n, c)| if *c > 1 { format!("{n}×{c}") } else { n.clone() }).collect::<Vec<_>>().join(", "));
+    }
+    let color = req.map_or(color::text_3(), |r| status_color(r.status, r.retries));
+    StepDot { number, color, tip: parts.join(" · "), selected }
+}
+
+/// The gutter: the turn's label at the top of its first line, the step's request dot, the active
+/// turn's rail, the selection rail.
+fn gutter(turn: u32, first_of_turn: bool, dot: Option<StepDot>, active_turn: bool, selected: bool, on_select: IdHandler) -> Div {
     div()
         .relative()
         .w(px(GUTTER_W))
         .h_full()
         .flex_none()
-        .flex()
-        .items_center()
-        .pl_2()
         .when(selected, |d| d.child(div().absolute().left_0().top_0().bottom_0().w(px(2.)).bg(color::accent())))
-        .when(active_turn, |d| d.child(div().absolute().right(px(6.)).top_0().bottom_0().w(px(2.)).bg(color::border_strong())))
+        .when(active_turn, |d| d.child(div().absolute().right(px(4.)).top_0().bottom_0().w(px(2.)).bg(color::border_strong())))
         .when(first_of_turn && turn > 0, |d| {
             d.child(
                 div()
-                    .px_1()
-                    .rounded(radius::XS)
-                    .bg(color::pressed())
-                    .text_size(px(10.))
+                    .absolute()
+                    .top(px(2.))
+                    .left(px(6.))
+                    .text_size(px(9.))
+                    .line_height(px(11.))
                     .font_family(text::MONO_FONT)
-                    .text_color(color::text_2())
+                    .text_color(color::text_3())
                     .child(format!("Turn {turn}")),
             )
         })
+        .children(dot.map(|dot| {
+            let id: SharedString = format!("request:{}", dot.number).into();
+            div()
+                .id(ElementId::Name(format!("ledger-dot-{}", dot.number).into()))
+                .absolute()
+                .left(px(GUTTER_W - 18.))
+                .top((ROW_H - px(8.)) / 2.)
+                .size(px(8.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .cursor_pointer()
+                .when(dot.selected, |d| d.border_1().border_color(color::text()))
+                .child(div().size(px(6.)).rounded_full().bg(dot.color))
+                .tooltip(super::super::widgets::tip(dot.tip))
+                .on_click(move |_, w, cx| {
+                    cx.stop_propagation();
+                    on_select(id.clone(), w, cx);
+                })
+        }))
 }
 
 fn line_base(id: ElementId, selected: bool) -> Stateful<Div> {
@@ -284,14 +323,14 @@ fn line_base(id: ElementId, selected: bool) -> Stateful<Div> {
         .flex()
         .items_center()
         .border_b_1()
-        .border_color(color::border().opacity(0.5))
+        .border_color(color::border().opacity(0.35))
         .text_size(text::SM)
         .when(selected, |d| d.bg(color::pressed()))
         .when(!selected, |d| d.hover(|s| s.bg(color::surface())))
         .cursor_pointer()
 }
 
-fn row_line(row: &TrajectoryRow, first_of_turn: bool, selected: bool, active_turn: bool, now_ms: u64, h: &Rc<LedgerHandlers>) -> Stateful<Div> {
+fn row_line(row: &TrajectoryRow, first_of_turn: bool, dot: Option<StepDot>, selected: bool, active_turn: bool, now_ms: u64, h: &Rc<LedgerHandlers>) -> Stateful<Div> {
     let id: SharedString = row.id.clone().into();
     let (on_select, on_fold) = (h.on_select.clone(), h.on_toggle_fold.clone());
     let fold = fold_key_of(row);
@@ -299,7 +338,9 @@ fn row_line(row: &TrajectoryRow, first_of_turn: bool, selected: bool, active_tur
     let preview = row.preview.clone();
     let meta = row_meta(row, now_ms);
     line_base(ElementId::Name(format!("ledger-{}", row.id).into()), selected)
-        .child(gutter(row.turn, first_of_turn, active_turn, selected))
+        // A line between turns.
+        .when(first_of_turn && row.turn > 1, |d| d.border_t_1().border_color(color::border()))
+        .child(gutter(row.turn, first_of_turn, dot, active_turn, selected, h.on_select.clone()))
         .child(div().w(px(CHIP_W)).flex_none().flex().justify_end().pr_3().child(kind_chip(row.kind)))
         .child(
             div()
@@ -368,64 +409,6 @@ fn row_meta(row: &TrajectoryRow, now_ms: u64) -> Div {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn step_line(
-    turn: u32,
-    step: u32,
-    req: Option<&RequestSummary>,
-    tools: &[(String, usize)],
-    first_of_turn: bool,
-    selected: bool,
-    active_turn: bool,
-    now_ms: u64,
-    h: &Rc<LedgerHandlers>,
-) -> Stateful<Div> {
-    let dot = req.map_or(color::text_3(), |r| status_color(r.status, r.retries));
-    let (on_select, on_fold) = (h.on_select.clone(), h.on_toggle_fold.clone());
-    let number = req.map(|r| r.number);
-    let mut parts = vec![format!("Step {step}")];
-    if let Some(r) = req {
-        parts.push(format!("Request #{}", r.number));
-        let end = r.ended_ms.unwrap_or(if r.status == RecordStatus::Running { now_ms } else { r.started_ms });
-        parts.push(duration_label(end.saturating_sub(r.started_ms)));
-        if r.retries > 0 {
-            parts.push(format!("{} retr{}", r.retries, if r.retries == 1 { "y" } else { "ies" }));
-        }
-    }
-    if !tools.is_empty() {
-        parts.push(tools.iter().map(|(n, c)| if *c > 1 { format!("{n}×{c}") } else { n.clone() }).collect::<Vec<_>>().join(", "));
-    }
-    line_base(ElementId::Name(format!("ledger-step-{turn}-{step}").into()), selected)
-        .h(ROW_H)
-        .child(gutter(turn, first_of_turn, active_turn, selected))
-        .child(
-            div()
-                .w(px(CHIP_W))
-                .flex_none()
-                .flex()
-                .justify_end()
-                .pr(px(CHIP_W / 2. - 4.))
-                .child(div().size(px(8.)).rounded_full().bg(dot).when(req.is_some_and(|r| r.status == RecordStatus::Running), |d| d.opacity(0.7))),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_ellipsis()
-                .text_size(text::XS)
-                .text_color(color::text_3())
-                .child(parts.join(" · ")),
-        )
-        .on_click(move |e, w, cx| {
-            if e.click_count() >= 2 {
-                on_fold(FoldKey::Step(turn, step), w, cx);
-            } else if let Some(n) = number {
-                on_select(format!("request:{n}").into(), w, cx);
-            }
-        })
-}
-
 fn turn_line(turn: u32, rows: usize, duration: Option<u64>, first: &TrajectoryRow, h: &Rc<LedgerHandlers>) -> Stateful<Div> {
     let on_fold = h.on_toggle_fold.clone();
     let mut parts = vec![format!("{rows} record{}", if rows == 1 { "" } else { "s" })];
@@ -433,7 +416,7 @@ fn turn_line(turn: u32, rows: usize, duration: Option<u64>, first: &TrajectoryRo
         parts.push(duration_label(d));
     }
     line_base(ElementId::Name(format!("ledger-turn-{turn}").into()), false)
-        .child(gutter(turn, true, false, false))
+        .child(gutter(turn, true, None, false, false, h.on_select.clone()))
         .child(div().w(px(CHIP_W)).flex_none().flex().justify_end().pr_3().text_color(color::text_3()).child("▸"))
         .child(
             div()
@@ -500,18 +483,22 @@ mod tests {
             .iter()
             .map(|i| match i {
                 LedgerItem::LoadEarlier => "earlier".into(),
-                LedgerItem::Row { ix, first_of_turn } => format!("{}{}", page.rows[*ix].id, if *first_of_turn { "*" } else { "" }),
-                LedgerItem::Step { step, first_of_turn, .. } => format!("step{step}{}", if *first_of_turn { "*" } else { "" }),
+                LedgerItem::Row { ix, first_of_turn, request } => format!(
+                    "{}{}{}",
+                    page.rows[*ix].id,
+                    if *first_of_turn { "*" } else { "" },
+                    request.map(|n| format!("#{n}")).unwrap_or_default()
+                ),
                 LedgerItem::Turn { turn, rows, .. } => format!("turn{turn}({rows})"),
             })
             .collect()
     }
 
     #[test]
-    fn steps_get_a_header_before_their_model_row() {
+    fn a_steps_first_model_row_carries_its_request() {
         let p = page();
         let items = ledger_items(&p, &HashSet::new(), |_| true);
-        assert_eq!(ids(&p, &items), ["s*", "u1*", "c1", "step1", "a1", "t1", "t2", "step2", "a2", "u2*", "step3", "a3"]);
+        assert_eq!(ids(&p, &items), ["s*", "u1*", "c1", "a1#1", "t1", "t2", "a2#2", "u2*", "a3#3"]);
     }
 
     #[test]
@@ -520,10 +507,10 @@ mod tests {
         p.older = Some("cursor".into());
         let folds = HashSet::from([FoldKey::Step(1, 1), FoldKey::Turn(2)]);
         let items = ledger_items(&p, &folds, |_| true);
-        assert_eq!(ids(&p, &items), ["earlier", "s*", "u1*", "c1", "step1", "a1", "step2", "a2", "turn2(2)"]);
-        // A filter keeps the headers of the steps whose rows pass.
+        assert_eq!(ids(&p, &items), ["earlier", "s*", "u1*", "c1", "a1#1", "a2#2", "turn2(2)"]);
+        // A filter: the first passing row of a step carries its request.
         let items = ledger_items(&p, &HashSet::new(), |r| r.id.starts_with('t'));
-        assert_eq!(ids(&p, &items), ["earlier", "step1*", "t1", "t2"]);
+        assert_eq!(ids(&p, &items), ["earlier", "t1*#1", "t2"]);
         assert_eq!(fold_key_of(&p.rows[4]), FoldKey::Step(1, 1));
         assert_eq!(fold_key_of(&p.rows[1]), FoldKey::Turn(1));
     }

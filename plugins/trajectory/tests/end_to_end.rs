@@ -17,8 +17,7 @@ fn stub_agent() -> PathBuf {
     path
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_turn_shows_up_in_the_trajectory() {
+fn setup() -> (tempfile::TempDir, Host, space_core::EventReceiver) {
     let tmp = tempfile::tempdir().unwrap();
     let write = |dir: &str, manifest: String| {
         let d = tmp.path().join("plugins").join(dir);
@@ -39,7 +38,13 @@ async fn a_turn_shows_up_in_the_trajectory() {
         held_recheck: Duration::from_secs(60),
         space_dir: Some(tmp.path().join("space")),
     };
-    let (host, mut events) = Host::new(tokio::runtime::Handle::current(), options);
+    let (host, events) = Host::new(tokio::runtime::Handle::current(), options);
+    (tmp, host, events)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_turn_shows_up_in_the_trajectory() {
+    let (tmp, host, mut events) = setup();
     host.start_services().await;
     assert!(host.has_trajectory());
 
@@ -86,4 +91,27 @@ async fn a_turn_shows_up_in_the_trajectory() {
     host.delete_thread("t1").await.ok();
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(read().await.map(|p| p.rows.is_empty()).unwrap_or(true));
+}
+
+/// An agent that works before the plugins are up (a queued first message): the trajectory
+/// plugin still gets the whole turn once it starts.
+#[tokio::test(flavor = "multi_thread")]
+async fn traces_sent_before_the_plugin_started_arrive() {
+    let (tmp, host, _events) = setup();
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.new_session_in(tmp.path(), None, Some("t2")).await.unwrap();
+    assert_eq!(session.prompt("early bird").await.unwrap(), "end_turn");
+    host.start_services().await;
+    let page = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let page = host.trajectory_read(TrajectoryRead { thread_id: "t2".into(), before: None, limit: 50, query: None }).await.unwrap();
+            if page.stats.turns == 1 && page.stats.steps == 2 {
+                return page;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("the early turn reaches the trajectory");
+    assert!(page.rows.iter().any(|r| r.kind == RecordKind::User && r.preview == "early bird"), "{:?}", page.rows);
 }

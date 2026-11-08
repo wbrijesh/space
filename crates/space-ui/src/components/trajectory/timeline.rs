@@ -23,10 +23,10 @@ pub const MIN_SPAN: f64 = 4.;
 /// Hovering this long shows a span's details.
 pub const HOVER_DELAY: Duration = Duration::from_millis(500);
 
-const LANE_H: f32 = 14.;
+const LANE_H: f32 = 12.;
 const LANE_GAP: f32 = 2.;
-const PAD_Y: f32 = 6.;
-const LABEL_W: f32 = 52.;
+const PAD_Y: f32 = 4.;
+const LABEL_W: f32 = 46.;
 /// A zero-width span (an input in Duration mode) is drawn this wide.
 const MARKER_W: f32 = 3.;
 
