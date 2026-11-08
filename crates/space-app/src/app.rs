@@ -75,6 +75,9 @@ pub struct SeedThread {
     pub mode: Option<String>,
     /// Dev scenarios: hold the transcript this far above the bottom, as if scrolled up.
     pub scrolled_up: Option<f32>,
+    /// Dev scenarios: images sent with `prompt`, and images in the draft.
+    pub images: Vec<PathBuf>,
+    pub draft_images: Vec<PathBuf>,
 }
 
 /// What the process opens.
@@ -239,6 +242,11 @@ pub struct SpaceApp {
     /// The sidebar's shown fraction, sliding toward `sidebar_open`.
     pub(crate) sidebar_shown: space_ui::theme::motion::Spring,
     pub(crate) banner: Option<String>,
+    /// The image viewer: a message's pictures and the one shown.
+    pub(crate) viewer: Option<(Vec<space_ui::components::images::Pic>, usize)>,
+    pub(crate) viewer_focus: FocusHandle,
+    /// Draft images are told apart by this (they're prepared in the background).
+    pub(crate) next_image_id: u64,
     /// Threads deleted while a save of theirs was in flight (by key): their saved folder is
     /// removed once it lands.
     pub(crate) deleted_while_saving: HashMap<u64, String>,
@@ -387,6 +395,9 @@ impl SpaceApp {
             orphans: HashMap::new(),
             input,
             focus: cx.focus_handle(),
+            viewer: None,
+            viewer_focus: cx.focus_handle(),
+            next_image_id: 0,
             transcript_scroll: FollowScroll::new(),
             sidebar_open: true,
             sidebar_shown: space_ui::theme::motion::Spring::new(1., space_ui::theme::motion::SIDEBAR_SLIDE),
@@ -654,7 +665,6 @@ impl SpaceApp {
     }
 
     pub(crate) fn attach_files(&mut self, cx: &mut Context<Self>) {
-        let Some(key) = self.selected else { return };
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: true,
@@ -663,16 +673,7 @@ impl SpaceApp {
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = paths.await {
-                let _ = this.update(cx, |this, cx| {
-                    if let Some(t) = this.thread_mut(key) {
-                        for p in paths {
-                            if !t.attachments.contains(&p) {
-                                t.attachments.push(p);
-                            }
-                        }
-                    }
-                    cx.notify();
-                });
+                let _ = this.update(cx, |this, cx| this.add_files(paths, cx));
             }
         })
         .detach();
@@ -740,6 +741,13 @@ impl SpaceApp {
         }
         if let Some(blocker) = self.resume_blocker(thread) {
             return Some(blocker);
+        }
+        if !thread.images.is_empty()
+            && let Some(agent) = self.agent.as_ref().filter(|a| a.is_running() && !a.accepts_images())
+        {
+            let name = self.host.plugin(agent.plugin_id()).map_or_else(|| agent.plugin_id().to_string(), |p| p.manifest.name);
+            let text = format!("{name} can't read images. Remove them to send.");
+            return Some(space_core::protocol::service::Blocker { text, ..Default::default() });
         }
         let entry = self.mode_entry(thread).filter(|e| !e.ready)?;
         Some(entry.blocker.clone().unwrap_or_else(|| space_core::protocol::service::Blocker {

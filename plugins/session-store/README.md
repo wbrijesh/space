@@ -8,6 +8,7 @@ restarts. It provides `session-store` and uses `read:transcript`.
   meta.json      the summary the sidebar lists (title, project, mode, model, agent and session, times)
   events.jsonl   the thread's session events, appended as Space saves them
   agent/         the agent's own files for the session, so it can be loaded again (`session/load`)
+  attachments/   images sent in the thread (`<sha256>.jpg|png`), named by their bytes
 ```
 
 - Space decides what to save and when (see [architecture.md](../../docs/architecture.md#service-protocol));

@@ -13,6 +13,8 @@ use space_core::{AgentHandle, PluginStatus, Session, SessionEvent, SessionState,
 use space_ui::format;
 
 use crate::app::{SeedThread, SpaceApp};
+use crate::attach::{DraftImage, thread_attachments_dir};
+use crate::images::Prepared;
 use crate::settings::ModelRef;
 
 /// One conversation with the agent (an ACP session once it has been created).
@@ -52,8 +54,13 @@ pub struct Thread {
     pub unread: usize,
     pub draft: String,
     pub attachments: Vec<PathBuf>,
+    /// Images in the draft, in order.
+    pub images: Vec<DraftImage>,
+    /// Where the thread's sent images are kept (from the session store; known once a session
+    /// was created).
+    pub attachments_dir: Option<PathBuf>,
     /// Message sent before the session existed; sent once it does.
-    pub queued: Option<(String, Vec<PathBuf>)>,
+    pub queued: Option<Queued>,
     /// Permission mode picked for this thread (a `permission-modes` id); `None`: the default
     /// for new threads. Applied to every session the thread gets.
     pub mode: Option<String>,
@@ -65,6 +72,13 @@ pub struct Thread {
     pub expanded: HashSet<usize>,
     thought_started: HashMap<usize, Instant>,
     pub thought_secs: HashMap<usize, u64>,
+}
+
+/// A message waiting for the session to start.
+pub struct Queued {
+    pub text: String,
+    pub attachments: Vec<PathBuf>,
+    pub images: Vec<Prepared>,
 }
 
 impl Thread {
@@ -92,6 +106,8 @@ impl Thread {
             unread: 0,
             draft: String::new(),
             attachments: Vec::new(),
+            images: Vec::new(),
+            attachments_dir: None,
             queued: None,
             mode: None,
             confirmed: HashSet::new(),
@@ -111,7 +127,7 @@ impl Thread {
             .clone()
             .or_else(|| format::thread_title(&self.state))
             .or_else(|| self.meta.as_ref().map(|m| m.title.clone()))
-            .or_else(|| self.queued.as_ref().map(|(t, _)| format::truncate_chars(&format::one_line(t), 120)))
+            .or_else(|| self.queued.as_ref().map(|q| format::truncate_chars(&format::one_line(&q.text), 120)))
             .unwrap_or_else(|| "New thread".into())
     }
 
@@ -259,7 +275,13 @@ impl SpaceApp {
         }
         let (cwd, id) = (thread.cwd.clone(), thread.id.clone());
         cx.spawn(async move |this, cx| {
-            let data_dir = host.thread_data_dir(&id).await;
+            let dirs = host.thread_dirs(&id).await;
+            let _ = this.update(cx, |this, _| {
+                if let Some(t) = this.thread_mut(key) {
+                    t.attachments_dir = Some(dirs.attachments.clone());
+                }
+            });
+            let data_dir = dirs.data;
             let result = match &resume {
                 Some((_, session_id)) => agent.load_session(session_id, cwd, data_dir).await,
                 // An agent that can't use the folder still gets a session (kept in memory).
@@ -304,8 +326,8 @@ impl SpaceApp {
             let _ = this.update(cx, |this, cx| {
                 if let Some(t) = this.thread_mut(key) {
                     t.creating = false;
-                    if let Some((text, attachments)) = t.queued.take() {
-                        this.prompt(key, text, attachments, cx);
+                    if let Some(q) = t.queued.take() {
+                        this.prompt(key, q.text, q.attachments, q.images, cx);
                     }
                 }
                 cx.notify();
@@ -361,8 +383,15 @@ impl SpaceApp {
         let mut scrolled_up = Vec::new();
         for s in seed {
             let key = self.add_thread(s.cwd.unwrap_or_else(|| self.project_dir.clone()));
+            let prepare = |paths: Vec<PathBuf>| -> Vec<Prepared> {
+                paths.iter().filter_map(|p| crate::images::prepare_file(p).map_err(|e| tracing::warn!("{}: {e}", p.display())).ok()).collect()
+            };
+            let (images, drafts) = (prepare(s.images), prepare(s.draft_images));
+            let first_id = self.next_image_id;
+            self.next_image_id += drafts.len() as u64;
             if let Some(t) = self.thread_mut(key) {
-                t.queued = s.prompt.map(|p| (p, Vec::new()));
+                t.queued = s.prompt.map(|text| Queued { text, attachments: Vec::new(), images });
+                t.images = drafts.into_iter().zip(first_id..).map(|(p, id)| DraftImage::ready(id, p)).collect();
                 t.draft = s.draft.unwrap_or_default();
                 t.mode = s.mode;
             }
@@ -384,7 +413,11 @@ impl SpaceApp {
         let Some(key) = self.selected else { return };
         let text = self.input.read(cx).value().trim().to_string();
         let Some(thread) = self.thread_mut(key) else { return };
-        if text.is_empty() && thread.attachments.is_empty() {
+        if text.is_empty() && thread.attachments.is_empty() && thread.images.is_empty() {
+            return;
+        }
+        // Images still being prepared: the send button waits for them.
+        if thread.images.iter().any(|i| i.prepared.is_none()) {
             return;
         }
         // Not into a saved thread that isn't open (it didn't load).
@@ -399,19 +432,20 @@ impl SpaceApp {
         }
         let Some(thread) = self.thread_mut(key) else { return };
         let attachments = std::mem::take(&mut thread.attachments);
+        let images: Vec<Prepared> = std::mem::take(&mut thread.images).into_iter().filter_map(|i| i.prepared).collect();
         thread.draft.clear();
         self.input.update(cx, |s, cx| s.clean(window, cx));
 
         let thread = self.thread_mut(key).expect("thread exists");
         if thread.live_session().is_some() {
-            self.prompt(key, text, attachments, cx);
+            self.prompt(key, text, attachments, images, cx);
         } else {
             // No session yet (agent starting) or its agent exited: send once there is one (the
             // old session is loaded again if the agent can).
             if let Some(old) = thread.session.take() {
                 thread.resume = Some((old.agent().plugin_id().to_string(), old.id().to_string()));
             }
-            thread.queued = Some((text, attachments));
+            thread.queued = Some(Queued { text, attachments, images });
             thread.error = None;
             if !thread.creating {
                 self.create_session(key, cx);
@@ -421,7 +455,9 @@ impl SpaceApp {
         cx.notify();
     }
 
-    pub(crate) fn prompt(&mut self, key: u64, text: String, attachments: Vec<PathBuf>, cx: &mut Context<Self>) {
+    /// Send a message: its images are saved in the thread's attachments folder first (an image
+    /// that can't be saved stops the send and says why), then the prompt goes out.
+    pub(crate) fn prompt(&mut self, key: u64, text: String, attachments: Vec<PathBuf>, images: Vec<Prepared>, cx: &mut Context<Self>) {
         let Some(thread) = self.thread(key) else { return };
         let Some(session) = thread.session.clone() else { return };
         // A thread that was saved already had its first message.
@@ -431,9 +467,23 @@ impl SpaceApp {
         if first && !text.trim().is_empty() {
             self.request_title(key, session.id().to_string(), text.clone(), cx);
         }
-        cx.spawn(async move |_, _| {
+        let dir = thread_attachments_dir(self.thread(key));
+        cx.spawn(async move |this, cx| {
+            let saved = cx
+                .background_spawn(async move { images.iter().map(|i| crate::images::save(i, &dir)).collect::<std::io::Result<Vec<_>>>() })
+                .await;
+            let images = match saved {
+                Ok(images) => images,
+                Err(e) => {
+                    let _ = this.update(cx, |this, cx| {
+                        this.banner = Some(format!("Couldn't save an image for this message: {e}"));
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
             // Failures are reported as session events (Error + TurnEnded).
-            let _ = session.prompt_with(text, attachments).await;
+            let _ = session.prompt_with(text, attachments, images).await;
         })
         .detach();
     }
@@ -485,7 +535,7 @@ mod tests {
     fn a_generated_title_replaces_the_first_line() {
         let mut thread = Thread::new(1, PathBuf::from("/nonexistent"));
         assert_eq!(thread.title(), "New thread");
-        thread.apply(&SessionEvent::UserMessage { text: "please fix the login page\nit redirects".into(), attachments: vec![] });
+        thread.apply(&SessionEvent::UserMessage { text: "please fix the login page\nit redirects".into(), attachments: vec![], images: vec![] });
         // Until a title arrives (or if none does): the first line.
         assert_eq!(thread.title(), "please fix the login page");
         thread.name = Some("Fix login redirect".into());

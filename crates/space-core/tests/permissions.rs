@@ -126,7 +126,7 @@ async fn a_loaded_session_starts_with_what_the_thread_shows() {
         blocked: None,
         held: None,
     };
-    let shown = [TranscriptItem::User { text: "earlier".into(), attachments: vec![] }, TranscriptItem::Agent("ok".into()), TranscriptItem::Tool(call)];
+    let shown = [TranscriptItem::User { text: "earlier".into(), attachments: vec![], images: vec![] }, TranscriptItem::Agent("ok".into()), TranscriptItem::Tool(call)];
     session.seed_history(&shown);
     let turn = tokio::spawn(async move { session.prompt("hello").await });
     let e = next(&mut events, |e| matches!(e, HostEvent::Session { event: SessionEvent::PermissionRequested(_), .. })).await;

@@ -4,6 +4,7 @@
 
 pub mod composer;
 pub mod follow_scroll;
+pub mod images;
 pub mod loaders;
 pub mod settings;
 pub mod shell;

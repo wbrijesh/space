@@ -280,7 +280,7 @@ mod tests {
     fn titles_and_previews() {
         let mut s = SessionState::new("s");
         assert_eq!(thread_preview(&s), Preview::Empty);
-        s.apply(&SessionEvent::UserMessage { text: "\n  Fix the tests\nplease".into(), attachments: vec![] });
+        s.apply(&SessionEvent::UserMessage { text: "\n  Fix the tests\nplease".into(), attachments: vec![], images: vec![] });
         s.apply(&SessionEvent::TurnStarted);
         assert_eq!(thread_title(&s).as_deref(), Some("Fix the tests"));
         assert_eq!(thread_preview(&s), Preview::Working(None));

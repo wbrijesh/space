@@ -107,6 +107,7 @@ pub fn registry() -> Vec<ComponentPreview> {
         thread_row::previews(),
         composer::previews(),
         transcript::previews(),
+        images::previews(),
         follow_scroll::previews(),
         loaders::previews(),
     ]

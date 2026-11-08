@@ -12,6 +12,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::{PermissionDecision, PermissionRequest, PlanEntry, SessionState, ToolCallInfo, ToolStatus, TranscriptItem};
 
+use super::images::{OpenPicsHandler, Pic, message_images};
 use super::loaders::Spinner;
 use super::widgets::{pill_button, status_dot};
 use crate::format;
@@ -25,6 +26,18 @@ const GAP: Pixels = px(18.);
 const GAP_TIGHT: Pixels = px(2.);
 /// Max tool-output lines shown when a tool row is expanded.
 const TOOL_MAX_LINES: usize = 40;
+
+/// A user message: its pictures (right-aligned, above), then the bubble with any file chips and
+/// the text. `id` is unique in the thread (element ids of the pictures).
+pub fn user_message(id: impl Into<SharedString>, text_: &str, attachments: &[PathBuf], pics: Vec<Pic>, on_open: Option<OpenPicsHandler>) -> Div {
+    let has_bubble = !text_.trim().is_empty() || !attachments.is_empty();
+    div()
+        .flex()
+        .flex_col()
+        .gap_1p5()
+        .when(!pics.is_empty(), |d| d.child(message_images(id, pics, on_open)))
+        .when(has_bubble, |d| d.child(user_bubble(text_, attachments)))
+}
 
 pub fn user_bubble(text_: &str, attachments: &[PathBuf]) -> Div {
     let mut bubble = div()
@@ -425,15 +438,17 @@ pub struct TranscriptView<'a> {
     pub key: u64,
     pub expanded: &'a HashSet<usize>,
     pub thought_secs: &'a HashMap<usize, u64>,
-    /// A message waiting for the session to start.
-    pub queued: Option<(&'a str, &'a [PathBuf])>,
+    /// A message waiting for the session to start (its text, files and pictures).
+    pub queued: Option<(&'a str, &'a [PathBuf], Vec<Pic>)>,
     pub on_toggle: ToggleHandler,
     pub on_answer: AnswerHandler,
+    /// A message's picture was clicked.
+    pub on_open_image: Option<OpenPicsHandler>,
 }
 
 /// The transcript's elements, spaced, with a trailing working row while a turn runs.
 pub fn transcript_items(view: TranscriptView<'_>) -> Vec<AnyElement> {
-    let TranscriptView { state, key, expanded, thought_secs, queued, on_toggle, on_answer } = view;
+    let TranscriptView { state, key, expanded, thought_secs, queued, on_toggle, on_answer, on_open_image } = view;
     let items = &state.items;
     let compact = |i: &TranscriptItem| matches!(i, TranscriptItem::Tool(_) | TranscriptItem::Thought(_));
     let mut out = Vec::new();
@@ -449,7 +464,13 @@ pub fn transcript_items(view: TranscriptView<'_>) -> Vec<AnyElement> {
         };
         let last = ix + 1 == items.len();
         let el = match item {
-            TranscriptItem::User { text, attachments } => user_bubble(text, attachments),
+            TranscriptItem::User { text, attachments, images } => user_message(
+                format!("pics-{key}-{ix}"),
+                text,
+                attachments,
+                images.iter().map(Pic::file).collect(),
+                on_open_image.clone(),
+            ),
             TranscriptItem::Agent(md) => agent_message(SharedString::from(format!("md-{key}-{ix}")), md),
             TranscriptItem::Thought(t) => thought_row(
                 ix,
@@ -468,8 +489,8 @@ pub fn transcript_items(view: TranscriptView<'_>) -> Vec<AnyElement> {
         out.push(div().mt(gap).child(el).into_any_element());
         prev = Some(item);
     }
-    if let Some((text_, attachments)) = queued {
-        out.push(div().mt(GAP).child(user_bubble(text_, attachments)).into_any_element());
+    if let Some((text_, attachments, pics)) = queued {
+        out.push(div().mt(GAP).child(user_message(format!("pics-{key}-queued"), text_, attachments, pics, None)).into_any_element());
         out.push(div().mt(GAP).child(working_row("Starting agent…")).into_any_element());
     } else if state.running
         && state.pending_permission().is_none()
@@ -592,7 +613,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         Example::new("tool turn, working", move |_, _| {
             let mut s = SessionState::new("preview");
             for e in [
-                SessionEvent::UserMessage { text: "Run the tests and fix what fails".into(), attachments: vec![] },
+                SessionEvent::UserMessage { text: "Run the tests and fix what fails".into(), attachments: vec![], images: vec![] },
                 SessionEvent::TurnStarted,
                 SessionEvent::AgentThought { text: "Run the suite first.".into() },
                 SessionEvent::ToolCall(tool(ToolStatus::Completed, TEST_OUTPUT)),
@@ -608,6 +629,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 queued: None,
                 on_toggle: toggle.clone(),
                 on_answer: answer.clone(),
+                on_open_image: None,
             };
             div().flex().flex_col().children(transcript_items(view)).into_any_element()
         })
@@ -623,6 +645,13 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             ex(
                 "user with attachments",
                 Rc::new(|| user_bubble("Review these", &[PathBuf::from("Cargo.toml"), PathBuf::from("crates")])),
+            ),
+            ex(
+                "user with images",
+                Rc::new(|| {
+                    let pics = vec![super::images::sample(1600, 900), super::images::sample(1024, 1024)];
+                    user_message("preview-pics", "Why does the sidebar look like this?", &[], pics, None)
+                }),
             ),
             ex("assistant markdown", Rc::new(|| agent_message("preview-md", MARKDOWN))),
         ]),

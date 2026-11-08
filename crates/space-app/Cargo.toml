@@ -36,7 +36,14 @@ objc2 = "0.6"
 block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSBundle", "NSData", "NSError", "NSString"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSEvent", "NSImage", "NSSound", "NSResponder"] }
+objc2-core-foundation = { version = "0.3", features = ["CFData", "CFDictionary", "CFNumber", "CFString", "CFCGTypes"] }
+objc2-core-graphics = { version = "0.3", features = ["CGBitmapContext", "CGColorSpace", "CGContext", "CGImage"] }
+objc2-image-io = { version = "0.3", features = ["CGImageSource", "CGImageDestination", "CGImageProperties", "objc2-core-graphics"] }
+sha2 = "0.10"
 objc2-user-notifications = { version = "0.3", features = [
     "block2", "UNUserNotificationCenter", "UNNotification", "UNNotificationContent", "UNNotificationRequest",
     "UNNotificationResponse", "UNNotificationSettings", "UNNotificationSound", "UNNotificationTrigger",
 ] }
+
+[dev-dependencies]
+tempfile.workspace = true

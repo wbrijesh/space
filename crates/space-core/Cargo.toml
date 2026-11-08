@@ -17,6 +17,7 @@ tokio-util.workspace = true
 futures.workspace = true
 tracing.workspace = true
 dirs.workspace = true
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile.workspace = true

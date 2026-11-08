@@ -17,6 +17,7 @@ use gpui::*;
 use space_core::protocol::service::CatalogEntry;
 use space_core::protocol::{ConfigureSession, ModelInfo, SpaceStatus};
 
+use super::images::draft_thumb;
 use super::loaders::ContextRing;
 use super::transcript::attachment_chip;
 use super::widgets::{icon_button, menu_trigger, tip};
@@ -56,6 +57,9 @@ pub type PathHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 pub type ConfigureHandler = Rc<dyn Fn(ConfigureSession, &mut Window, &mut App)>;
 pub type BoolHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
 pub type StringHandler = Rc<dyn Fn(String, &mut Window, &mut App)>;
+pub type PathsHandler = Rc<dyn Fn(Vec<PathBuf>, &mut Window, &mut App)>;
+/// Gets a paste first: `true` took it (images, copied files), `false` lets the text go in.
+pub type PasteHandler = Rc<dyn Fn(&ClipboardItem, &mut Window, &mut App) -> bool>;
 
 /// Callbacks; every one defaults to a no-op.
 #[derive(Clone)]
@@ -72,6 +76,10 @@ pub struct ComposerHandlers {
     pub on_mode: StringHandler,
     /// One of the blocker's links was clicked (its action string).
     pub on_blocker_action: StringHandler,
+    pub on_remove_image: IndexHandler,
+    /// Files dropped on the card.
+    pub on_drop: PathsHandler,
+    pub on_paste: PasteHandler,
 }
 
 impl Default for ComposerHandlers {
@@ -88,6 +96,9 @@ impl Default for ComposerHandlers {
             on_configure: Rc::new(|_, _, _| {}),
             on_mode: Rc::new(|_, _, _| {}),
             on_blocker_action: Rc::new(|_, _, _| {}),
+            on_remove_image: Rc::new(|_, _, _| {}),
+            on_drop: Rc::new(|_, _, _| {}),
+            on_paste: Rc::new(|_, _, _| false),
         }
     }
 }
@@ -141,6 +152,8 @@ pub struct Composer {
     /// A message is waiting for the session; sending is blocked.
     queued: bool,
     attachments: Vec<PathBuf>,
+    /// Draft images' thumbnails (`None`: still being prepared; sending waits for it).
+    images: Vec<Option<ImageSource>>,
     controls: Option<ComposerControls>,
     handlers: ComposerHandlers,
 }
@@ -153,6 +166,7 @@ impl Composer {
             running: false,
             queued: false,
             attachments: Vec::new(),
+            images: Vec::new(),
             controls: None,
             handlers: ComposerHandlers::default(),
         }
@@ -173,6 +187,11 @@ impl Composer {
         self
     }
 
+    pub fn images(mut self, images: Vec<Option<ImageSource>>) -> Self {
+        self.images = images;
+        self
+    }
+
     pub fn controls(mut self, controls: ComposerControls) -> Self {
         self.controls = Some(controls);
         self
@@ -186,16 +205,30 @@ impl Composer {
 
 impl RenderOnce for Composer {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let Self { id, input, running, queued, attachments, controls, handlers: h } = self;
+        let Self { id, input, running, queued, attachments, images, controls, handlers: h } = self;
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
         let has_text = !input.read(cx).value().trim().is_empty();
         let blocker = controls.as_ref().and_then(|c| c.blocker.clone());
-        let can_send = (has_text || !attachments.is_empty()) && !running && !queued && blocker.is_none();
+        let preparing = images.iter().any(Option::is_none);
+        let can_send = (has_text || !attachments.is_empty() || !images.is_empty())
+            && !running
+            && !queued
+            && !preparing
+            && blocker.is_none();
 
         let expanded_state = window.use_keyed_state((id.clone(), "expanded"), cx, |_, _| false);
         let expanded = is_expanded(&input, *expanded_state.read(cx), window, cx);
         expanded_state.update(cx, |e, _| *e = expanded);
 
+        let thumbs = (!images.is_empty()).then(|| {
+            let remove = h.on_remove_image.clone();
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1p5()
+                .px_1()
+                .children(images.into_iter().enumerate().map(|(ix, src)| draft_thumb(ix, src, remove.clone())))
+        });
         let chips = (!attachments.is_empty()).then(|| {
             let remove = h.on_remove_attachment.clone();
             div().flex().flex_wrap().gap_1p5().px_1().children(attachments.iter().enumerate().map(|(ix, p)| {
@@ -253,6 +286,7 @@ impl RenderOnce for Composer {
                 .child(Icon::new(IconName::ArrowUp).size(size::ICON_MD))
                 .when(can_send, |d| d.tooltip(tip("Send  ⏎")).on_click(move |_, w, cx| send(w, cx)))
                 .when(blocker.is_some(), |d| d.tooltip(tip("Can't send right now")))
+                .when(preparing && blocker.is_none(), |d| d.tooltip(tip("Preparing images…")))
                 .into_any_element()
         };
 
@@ -260,13 +294,18 @@ impl RenderOnce for Composer {
         let attach = icon_button("attach", IconName::Plus, true, false)
             .size(px(BUTTON))
             .rounded_full()
-            .tooltip(tip("Attach files or folders"))
+            .tooltip(tip("Attach images, files or folders"))
             .on_click(move |_, w, cx| {
                 focus_fn(w, cx);
                 attach_fn(w, cx);
             });
         // XSmall: no vertical editor padding, 4px horizontal.
-        let textarea = Textarea::new(&input).appearance(false).xsmall().text_size(text::BODY);
+        let paste = h.on_paste.clone();
+        let textarea = Textarea::new(&input)
+            .appearance(false)
+            .xsmall()
+            .text_size(text::BODY)
+            .on_paste(move |item, w, cx| paste(item, w, cx));
 
         let body = if expanded {
             // Two zones: text across the full width (its first column lines up with the "+"
@@ -304,6 +343,13 @@ impl RenderOnce for Composer {
             .cursor_text()
             // Clicking the card's padding focuses the input, like a real text field.
             .on_click(move |_, w, cx| focus(w, cx))
+            // Files dragged over it: images become draft images, other files are attached.
+            .drag_over::<ExternalPaths>(|s, _, _, _| s.border_color(color::accent()))
+            .on_drop({
+                let drop = h.on_drop.clone();
+                move |paths: &ExternalPaths, w, cx| drop(paths.paths().to_vec(), w, cx)
+            })
+            .children(thumbs)
             .children(chips)
             .child(body);
 

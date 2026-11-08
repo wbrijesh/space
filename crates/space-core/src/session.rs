@@ -109,13 +109,32 @@ pub struct PlanEntry {
     pub status: String,
 }
 
+/// An image sent with a user message: a file in the thread's attachments folder (named by the
+/// sha256 of its bytes), already normalized (oriented, sRGB, scaled down, metadata stripped).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ImageRef {
+    pub path: PathBuf,
+    /// `image/jpeg` or `image/png`.
+    pub mime: String,
+    pub width: u32,
+    pub height: u32,
+    /// The name it had when attached (a file name; `None` for a pasted image).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
 /// Everything that can happen in a session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SessionEvent {
     Created { plugin_id: String, cwd: PathBuf },
     /// The user sent a prompt (emitted by the harness, not the agent). `attachments` are
-    /// the file paths sent along as ACP `resource_link` blocks.
-    UserMessage { text: String, attachments: Vec<PathBuf> },
+    /// the file paths sent along as ACP `resource_link` blocks; `images` went as ACP image blocks.
+    UserMessage {
+        text: String,
+        attachments: Vec<PathBuf>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<ImageRef>,
+    },
     TurnStarted,
     AgentText { text: String },
     AgentThought { text: String },
@@ -139,7 +158,7 @@ pub enum SessionEvent {
 /// One entry in the rendered transcript.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TranscriptItem {
-    User { text: String, attachments: Vec<PathBuf> },
+    User { text: String, attachments: Vec<PathBuf>, images: Vec<ImageRef> },
     Agent(String),
     Thought(String),
     Tool(ToolCallInfo),
@@ -174,9 +193,11 @@ impl SessionState {
                 self.plugin_id.clone_from(plugin_id);
                 self.cwd.clone_from(cwd);
             }
-            SessionEvent::UserMessage { text, attachments } => self
-                .items
-                .push(TranscriptItem::User { text: text.clone(), attachments: attachments.clone() }),
+            SessionEvent::UserMessage { text, attachments, images } => self.items.push(TranscriptItem::User {
+                text: text.clone(),
+                attachments: attachments.clone(),
+                images: images.clone(),
+            }),
             SessionEvent::TurnStarted => self.running = true,
             SessionEvent::AgentText { text } => match self.items.last_mut() {
                 Some(TranscriptItem::Agent(buf)) => buf.push_str(text),
@@ -338,7 +359,7 @@ mod tests {
         let mut s = SessionState::new("s1");
         let ev = |e: SessionEvent| e;
         for e in [
-            ev(SessionEvent::UserMessage { text: "hi".into(), attachments: vec![] }),
+            ev(SessionEvent::UserMessage { text: "hi".into(), attachments: vec![], images: vec![] }),
             ev(SessionEvent::TurnStarted),
             ev(SessionEvent::AgentThought { text: "think".into() }),
             ev(SessionEvent::AgentThought { text: "ing".into() }),

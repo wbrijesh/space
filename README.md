@@ -95,7 +95,10 @@ lists every plugin and its status; if the agent can't start or exits, the thread
   switches the card to two zones: the text across the full width (growing upward to ten lines,
   then scrolling) and **+** / send in a row below; it collapses again when the text fits. Enter
   sends, Shift+Enter adds a newline. While the agent works, send
-  becomes Stop (`session/cancel`). **+** attaches files or folders (sent as ACP `resource_link`s).
+  becomes Stop (`session/cancel`). **+** attaches files or folders (sent as ACP `resource_link`s);
+  images (PNG, JPEG, GIF, WebP, HEIC, TIFF, BMP) from **+**, a drop on the card or ⌘V become thumbnails
+  above the text instead and go to the agent as images (up to 20 per message; each is scaled to at most
+  1568 px on its long side and stripped of metadata such as location first).
   Below the card: the project folder (switch it while the thread is empty, otherwise pick a folder
   to start a new thread there), the model and thinking effort (both switch the session through
   `_space/session/configure`; new threads start with the defaults from Settings), and a context ring
@@ -104,11 +107,12 @@ lists every plugin and its status; if the agent can't start or exits, the thread
   once per thread). The modes come from the permissions plugin ([plugins/permissions](plugins/permissions/README.md)):
   in Workspace Write and Full access every tool call is first checked by a decision model (OpenAI; add the
   key in Settings, where it's checked before it's saved). Until the key works, a yellow pill above the input
-  says why, with links (Open Settings, Retry now, Use Read Only) and when it last tried and tries next, and
+  says why, with links (Open Settings, Retry now) and when it last tried and tries next, and
   sending is blocked. If the check stops working mid-turn, the tool call waits (**Paused**, never run
   unchecked), the thread shows a pause icon in the sidebar, and it goes on by itself once the check works
   again, the key changes, or you switch the thread to Read Only.
-- **Transcript**: your messages as bubbles, replies as markdown, thinking collapsed as
+- **Transcript**: your messages as bubbles (their images above them: one shown whole, several as
+  tiles; click one to view it large, ← / → for the others, Esc closes), replies as markdown, thinking collapsed as
   "Thought for Ns", tool calls as compact rows that expand to their output, permission cards
   (Allow/Reject). It follows new output while you're at the bottom; scroll up to read and it stays
   put while the agent keeps working, with a round ↓ button above the composer. The button, ⌘↓ or

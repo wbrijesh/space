@@ -2,6 +2,7 @@
 //! wires component callbacks back to [`SpaceApp`] methods. No styling lives here.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -15,6 +16,7 @@ use space_ui::components::settings::{
     Catalog, FieldView, ModelChoice, PluginApproval, PluginRow, PluginSettingsView, SettingsHandlers, SettingsPage,
 };
 use space_ui::components::follow_scroll::FollowScrollArea;
+use space_ui::components::images::{Pic, ViewerHandlers, viewer};
 use space_ui::components::shell::{
     banner, confirm_card, empty_heading, problem_card, sidebar_column,
 };
@@ -118,6 +120,22 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         })
         .child(main)
         .child(nav.overlay())
+        .children(app.viewer.as_ref().map(|(pics, ix)| {
+            viewer(pics, *ix, &app.viewer_focus, ViewerHandlers {
+                on_close: handler(cx, |this, w, cx| this.close_viewer(w, cx)),
+                on_step: {
+                    let this = cx.entity().downgrade();
+                    Rc::new(move |by, _: &mut Window, cx: &mut App| {
+                        let _ = this.update(cx, |this, cx| this.step_viewer(by, cx));
+                    })
+                },
+            })
+        }))
+}
+
+/// A queued message's picture (prepared, not saved yet).
+fn queued_pic(p: &crate::images::Prepared) -> Pic {
+    Pic { src: Arc::new(Image::from_bytes(p.gpui_format(), p.bytes.to_vec())).into(), width: p.width, height: p.height }
 }
 
 fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceApp>) -> impl IntoElement {
@@ -184,19 +202,22 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
     }
 
     let this = cx.entity().downgrade();
-    let this2 = this.clone();
+    let (this2, this3) = (this.clone(), this.clone());
     let items = transcript_items(TranscriptView {
         state: &thread.state,
         key: thread.key,
         expanded: &thread.expanded,
         thought_secs: &thread.thought_secs,
-        queued: thread.queued.as_ref().map(|(t, a)| (t.as_str(), a.as_slice())),
+        queued: thread.queued.as_ref().map(|q| (q.text.as_str(), q.attachments.as_slice(), q.images.iter().map(queued_pic).collect())),
         on_toggle: Rc::new(move |ix, _, cx| {
             let _ = this.update(cx, |this, cx| this.toggle_expanded(ix, cx));
         }),
         on_answer: Rc::new(move |rid, decision, _, cx| {
             let _ = this2.update(cx, |this, cx| this.answer_permission(rid, decision, cx));
         }),
+        on_open_image: Some(Rc::new(move |pics, ix, w, cx| {
+            let _ = this3.update(cx, |this, cx| this.open_viewer(pics, ix, w, cx));
+        })),
     });
 
     let content =
@@ -486,6 +507,22 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
                 let _ = this.update(cx, |this, cx| this.blocker_action(&action, w, cx));
             })
         },
+        on_remove_image: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |ix, _: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| this.remove_image(ix, cx));
+            })
+        },
+        on_drop: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |paths, _: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| this.add_files(paths, cx));
+            })
+        },
+        on_paste: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |item: &ClipboardItem, _: &mut Window, cx: &mut App| this.update(cx, |this, cx| this.paste(item, cx)).unwrap_or(false))
+        },
     };
     let mode = app
         .effective_mode(thread)
@@ -499,6 +536,7 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         .running(thread.state.running)
         .queued(thread.queued.is_some())
         .attachments(thread.attachments.clone())
+        .images(thread.images.iter().map(|i| i.pic().map(|p| p.src)).collect())
         .controls(ComposerControls {
             cwd: thread.cwd.clone(),
             dirs: app.recent_dirs(),

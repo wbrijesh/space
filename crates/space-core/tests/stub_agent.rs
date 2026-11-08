@@ -266,3 +266,51 @@ async fn an_agent_on_another_protocol_version_is_refused() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn images_go_as_image_blocks_after_the_message_event() {
+    let root = stub_root();
+    let (host, mut events) = host(root.path());
+    let agent = host.start_agent("stub").await.unwrap();
+    assert!(agent.accepts_images());
+    let session = agent.new_session(PathBuf::from(root.path())).await.unwrap();
+    let mut state = SessionState::new(session.id());
+    let mut seen = Vec::new();
+
+    let path = root.path().join("abc.png");
+    std::fs::write(&path, b"12345").unwrap();
+    let image = space_core::ImageRef { path: path.clone(), mime: "image/png".into(), width: 2, height: 1, name: Some("shot.png".into()) };
+    let stop = session.prompt_with("what is this", vec![], vec![image.clone()]).await.unwrap();
+    assert_eq!(stop, "end_turn");
+    until(&mut events, &mut state, &mut seen, turn_ended).await;
+
+    assert_eq!(state.items[0], TranscriptItem::User { text: "what is this".into(), attachments: vec![], images: vec![image] });
+    let reply: String = state.items.iter().filter_map(|i| if let TranscriptItem::Agent(t) = i { Some(t.as_str()) } else { None }).collect();
+    assert!(reply.starts_with(&format!("Saw 1 image (image/png 5 bytes file://{}). ", path.display())), "{reply}");
+
+    // A missing file fails the send before anything is shown.
+    let gone = space_core::ImageRef { path: root.path().join("gone.png"), mime: "image/png".into(), width: 1, height: 1, name: None };
+    assert!(session.prompt_with("again", vec![], vec![gone]).await.is_err());
+    assert!(!session.is_running());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_without_images_refuses_them() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("stub");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("space-plugin.toml"),
+        format!(
+            "id = 'stub'\nname = 'Stub'\nversion = '0.1.0'\nprovides = ['agent']\n[run]\ncommand = '/usr/bin/env'\nargs = ['SPACE_STUB_NO_IMAGES=1', '{STUB}']\n"
+        ),
+    )
+    .unwrap();
+    let (host, _events) = host(tmp.path());
+    let agent = host.start_agent("stub").await.unwrap();
+    assert!(!agent.accepts_images());
+    let session = agent.new_session(PathBuf::from(tmp.path())).await.unwrap();
+    let image = space_core::ImageRef { path: tmp.path().join("a.png"), mime: "image/png".into(), width: 1, height: 1, name: None };
+    let err = session.prompt_with("look", vec![], vec![image]).await.unwrap_err();
+    assert!(err.to_string().contains("can't read images"), "{err}");
+}

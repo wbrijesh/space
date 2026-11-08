@@ -74,9 +74,33 @@ export function textToolContent(text: string): ToolCallContent[] {
 	return [{ type: "content", content: { type: "text", text: truncate(text) } }];
 }
 
-/** Flatten ACP prompt content blocks into the single text prompt pi takes. */
-export function promptText(blocks: ContentBlock[]): string {
+/** An image for pi (`ImageContent`). */
+export interface PromptImage {
+	type: "image";
+	data: string;
+	mimeType: string;
+}
+
+/** The local file an image block was saved to (`file://` uri), if any. */
+function imagePath(uri: string | null | undefined): string | undefined {
+	if (!uri?.startsWith("file://")) return undefined;
+	try {
+		return decodeURIComponent(new URL(uri).pathname);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Flatten ACP prompt content blocks into the text and images pi takes. Each image gets a line
+ * in the text where it was ("[Attached image 1: <path>]"), so the model can tell them apart and
+ * re-read the file later. With `images: false` (a text-only model) images are left out and the
+ * line says so; the path still lets the model read the file with a tool.
+ */
+export function promptInput(blocks: ContentBlock[], images = true): { text: string; images: PromptImage[] } {
 	const parts: string[] = [];
+	const out: PromptImage[] = [];
+	let n = 0;
 	for (const block of blocks) {
 		switch (block.type) {
 			case "text":
@@ -91,9 +115,18 @@ export function promptText(blocks: ContentBlock[]): string {
 				else parts.push(`[Binary resource ${r.uri} omitted]`);
 				break;
 			}
-			case "image":
-				parts.push(`[Image (${block.mimeType}) omitted: images are not supported yet]`);
+			case "image": {
+				n += 1;
+				const path = imagePath(block.uri);
+				const at = path ? `: ${path}` : "";
+				if (images) {
+					parts.push(`[Attached image ${n}${at}]`);
+					out.push({ type: "image", data: block.data, mimeType: block.mimeType });
+				} else {
+					parts.push(`[Attached image ${n} omitted because this model accepts text only${at}]`);
+				}
 				break;
+			}
 			case "audio":
 				parts.push(`[Audio (${block.mimeType}) omitted: audio is not supported]`);
 				break;
@@ -101,5 +134,5 @@ export function promptText(blocks: ContentBlock[]): string {
 				parts.push(`[Unsupported content block omitted]`);
 		}
 	}
-	return parts.join("\n\n");
+	return { text: parts.join("\n\n"), images: out };
 }

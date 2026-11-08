@@ -603,10 +603,15 @@ pub struct StoredThread {
     pub events: Vec<serde_json::Value>,
 }
 
-/// `store/data-dir` result: the folder the thread's agent may keep the session's own files in
-/// (deleted with the thread). It may not exist yet.
+/// `store/data-dir` result: the folder the thread's agent may keep the session's own files in,
+/// and the one Space keeps the thread's attached images in (both deleted with the thread).
+/// They may not exist yet.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DataDir {
     pub data_dir: String,
+    /// `None` from a store that doesn't keep attachments (Space then keeps them in a temporary
+    /// folder).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments_dir: Option<String>,
 }

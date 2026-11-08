@@ -15,6 +15,8 @@
 //! replays input commands (see `devscript`).
 
 mod app;
+mod attach;
+mod images;
 #[cfg(feature = "dev")]
 mod dev;
 #[cfg(feature = "dev")]

@@ -45,7 +45,13 @@ pub struct ScenarioThread {
     pub mode: Option<&'static str>,
     /// Hold the transcript this many px above the bottom (as if scrolled up) once it's that long.
     pub scrolled_up: Option<f32>,
+    /// Repo-relative images sent with `prompt`, and in the draft.
+    pub images: &'static [&'static str],
+    pub draft_images: &'static [&'static str],
 }
+
+const ICON: &str = "crates/space-app/resources/AppIcon.png";
+const ICON_S: &str = "crates/space-app/resources/AppIcon.icon/Assets/s.png";
 
 // ----- step helpers -------------------------------------------------------------------------
 
@@ -218,6 +224,17 @@ pub fn all() -> Vec<Scenario> {
                 explain_thread(),
             ],
             select: Some(8),
+            ..Default::default()
+        },
+        Scenario {
+            name: "images",
+            description: "A message with two images and its reply, and an image in the draft.",
+            threads: vec![ScenarioThread {
+                images: &[ICON, ICON_S],
+                draft_images: &[ICON],
+                draft: Some("And this one?".into()),
+                ..done_thread("What's in these images?", "Both show the Space app icon: an S on an apricot tile.")
+            }],
             ..Default::default()
         },
         Scenario {
@@ -440,6 +457,7 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         held_recheck: space_core::HELD_RECHECK,
         space_dir: None,
     };
+    let repo = space_core::discovery::find_repo_root(&Path::new(env!("CARGO_MANIFEST_DIR")).join("x")).unwrap_or_default();
     let seed = scenario
         .threads
         .iter()
@@ -449,6 +467,8 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
             draft: t.draft.clone(),
             mode: t.mode.map(Into::into),
             scrolled_up: t.scrolled_up,
+            images: t.images.iter().map(|p| repo.join(p)).collect(),
+            draft_images: t.draft_images.iter().map(|p| repo.join(p)).collect(),
         })
         .collect();
     let options = Options {

@@ -8,6 +8,9 @@
 //! * `crash` — exit with code 3 mid-turn.
 //! * `recall` — answer how many earlier prompts of the session it remembers.
 //!
+//! Images in a prompt are answered first: "Saw 2 images (image/png 132 bytes <uri>, …). ".
+//! `SPACE_STUB_NO_IMAGES=1` makes it say it takes no images.
+//!
 //! `_space/complete` answers `"Title by <model>."` (quoted, as models sometimes do), with the
 //! requested model or else the session's; a prompt with `titlefail` fails and one with
 //! `titlehang` never answers.
@@ -67,6 +70,8 @@ impl StubSession {
 
 /// Overrides the Space protocol version the stub reports.
 const PROTOCOL_ENV: &str = "SPACE_STUB_PROTOCOL";
+/// Set: the stub says it takes no images.
+const NO_IMAGES_ENV: &str = "SPACE_STUB_NO_IMAGES";
 const MODELS: [(&str, &str); 2] = [("stub-model", "Stub Model"), ("stub-fast", "Stub Fast")];
 const LEVELS: [&str; 4] = ["low", "medium", "high", "max"];
 impl State {
@@ -119,7 +124,11 @@ async fn main() -> acp::Result<()> {
                 meta.insert(PROTOCOL_VERSION_META_KEY.into(), version.into());
                 responder.respond(
                     InitializeResponse::new(req.protocol_version)
-                        .agent_capabilities(AgentCapabilities::new().load_session(true))
+                        .agent_capabilities(
+                            AgentCapabilities::new()
+                                .load_session(true)
+                                .prompt_capabilities(PromptCapabilities::new().image(std::env::var_os(NO_IMAGES_ENV).is_none())),
+                        )
                         .agent_info(Implementation::new("space-stub-agent", env!("CARGO_PKG_VERSION")))
                         .meta(meta),
                 )
@@ -259,6 +268,22 @@ async fn run_turn(
     let chunk = |s: &str| ContentChunk::new(ContentBlock::Text(TextContent::new(s)));
 
     cx.send_notification(state.status(&sid.0))?;
+    let images: Vec<String> = req
+        .prompt
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Image(i) => {
+                use base64::Engine as _;
+                let bytes = base64::engine::general_purpose::STANDARD.decode(&i.data).map_or(0, |b| b.len());
+                Some(format!("{} {bytes} bytes {}", i.mime_type, i.uri.as_deref().unwrap_or("-")))
+            }
+            _ => None,
+        })
+        .collect();
+    if !images.is_empty() {
+        let s = if images.len() == 1 { "" } else { "s" };
+        send(SessionUpdate::AgentMessageChunk(chunk(&format!("Saw {} image{s} ({}). ", images.len(), images.join(", ")))))?;
+    }
     send(SessionUpdate::AgentThoughtChunk(chunk("Thinking about ")))?;
     send(SessionUpdate::AgentThoughtChunk(chunk("the request.")))?;
 

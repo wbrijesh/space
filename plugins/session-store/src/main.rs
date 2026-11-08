@@ -5,6 +5,7 @@
 //!   meta.json      the summary the sidebar lists (with the format version)
 //!   events.jsonl   the thread's events, appended one per line
 //!   agent/         the agent's own files for the session (to load it again)
+//!   attachments/   images sent in the thread, named by the sha256 of their bytes
 //! ```
 //!
 //! Events are kept as they are; Space decides what they mean. A line cut short (Space quit
@@ -28,6 +29,7 @@ const FORMAT_VERSION: u64 = 1;
 const META: &str = "meta.json";
 const EVENTS: &str = "events.jsonl";
 const AGENT: &str = "agent";
+const ATTACHMENTS: &str = "attachments";
 /// A thread folder without a summary (its agent's files for a thread you never wrote in) is
 /// removed once it's this old.
 const ORPHAN_AGE: Duration = Duration::from_secs(24 * 3600);
@@ -159,7 +161,10 @@ impl Plugin for Store {
 
     async fn store_data_dir(&self, thread: ThreadRef) -> Result<DataDir, RpcError> {
         let dir = self.dir(&thread.thread_id)?.ok_or_else(|| RpcError::unavailable("nothing is kept on disk"))?;
-        Ok(DataDir { data_dir: dir.join(AGENT).display().to_string() })
+        Ok(DataDir {
+            data_dir: dir.join(AGENT).display().to_string(),
+            attachments_dir: Some(dir.join(ATTACHMENTS).display().to_string()),
+        })
     }
 }
 

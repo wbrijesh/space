@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context as _, Result, anyhow, bail};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use space_protocol::acp::{self, Agent, ByteStreams, Client};
 use space_protocol::acp_schema as schema;
 use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY};
@@ -19,7 +21,7 @@ use super::{Host, HostEvent, HostInner, PluginStatus, Refused, check_protocol, e
 use crate::convert;
 use crate::discovery::DiscoveredPlugin;
 use crate::process::{self, PluginProcess};
-use crate::session::{PermissionDecision, PermissionOption, PermissionRequest, SessionEvent, SessionId, ToolCallPatch};
+use crate::session::{ImageRef, PermissionDecision, PermissionOption, PermissionRequest, SessionEvent, SessionId, ToolCallPatch};
 
 type Conn = acp::v1::ConnectionTo<Agent>;
 
@@ -264,8 +266,9 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
     }
     let agent_name = init.agent_info.as_ref().map(|i| i.title.clone().unwrap_or_else(|| i.name.clone()));
     let can_load = init.agent_capabilities.load_session;
+    let images = init.agent_capabilities.prompt_capabilities.image;
 
-    let inner = Arc::new(AgentInner { plugin_id: plugin_id.clone(), conn, process, shared, agent_name, can_load });
+    let inner = Arc::new(AgentInner { plugin_id: plugin_id.clone(), conn, process, shared, agent_name, can_load, images });
     host.agents.lock().unwrap().insert(plugin_id, Arc::downgrade(&inner));
     Ok(AgentHandle { inner })
 }
@@ -316,6 +319,8 @@ pub(super) struct AgentInner {
     agent_name: Option<String>,
     /// The agent can load a session again (ACP `loadSession`).
     can_load: bool,
+    /// The agent takes images in prompts (ACP `promptCapabilities.image`).
+    images: bool,
 }
 
 impl AgentHandle {
@@ -373,6 +378,11 @@ impl AgentHandle {
     /// Whether the agent can load a session again ([`AgentHandle::load_session`]).
     pub fn can_load_session(&self) -> bool {
         self.inner.can_load
+    }
+
+    /// Whether the agent takes images in prompts (ACP `promptCapabilities.image`).
+    pub fn accepts_images(&self) -> bool {
+        self.inner.images
     }
 
     /// ACP `session/load`: continue session `session_id` (from an earlier run) in `cwd`. The
@@ -474,19 +484,34 @@ impl Session {
     /// Send a text prompt and wait for the turn to end. Streams progress as
     /// [`HostEvent::Session`] events. Returns the ACP stop reason (`end_turn`, `cancelled`, ...).
     pub async fn prompt(&self, text: impl Into<String>) -> Result<String> {
-        self.prompt_with(text, Vec::new()).await
+        self.prompt_with(text, Vec::new(), Vec::new()).await
     }
 
     /// Like [`Session::prompt`], with files attached as ACP `resource_link` content blocks
-    /// (`file://` URIs; the agent decides whether and how to read them).
-    pub async fn prompt_with(&self, text: impl Into<String>, attachments: Vec<PathBuf>) -> Result<String> {
+    /// (`file://` URIs; the agent decides whether and how to read them) and images as ACP
+    /// image blocks (the saved file's bytes, and its `file://` URI). Images need an agent that
+    /// takes them ([`AgentHandle::accepts_images`]).
+    pub async fn prompt_with(&self, text: impl Into<String>, attachments: Vec<PathBuf>, images: Vec<ImageRef>) -> Result<String> {
         let text = text.into();
+        if !images.is_empty() && !self.inner.agent.accepts_images() {
+            bail!("this agent can't read images");
+        }
+        // Read before anything is shown: an image that can't be read fails the send, not the turn.
+        let image_blocks = images
+            .iter()
+            .map(|image| {
+                let bytes = std::fs::read(&image.path).map_err(|e| anyhow!("reading {}: {e}", image.path.display()))?;
+                Ok(schema::ContentBlock::Image(
+                    schema::ImageContent::new(BASE64.encode(bytes), image.mime.clone()).uri(format!("file://{}", image.path.display())),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         if self.inner.running.swap(true, Ordering::SeqCst) {
             bail!("a prompt is already running in this session");
         }
         let host = self.inner.agent.inner.shared.host.clone();
         let id = self.inner.id.clone();
-        host.emit_session(&id, SessionEvent::UserMessage { text: text.clone(), attachments: attachments.clone() });
+        host.emit_session(&id, SessionEvent::UserMessage { text: text.clone(), attachments: attachments.clone(), images });
         host.emit_session(&id, SessionEvent::TurnStarted);
         host.record(&id, HistoryItem::User { text: text.clone() });
 
@@ -497,7 +522,9 @@ impl Session {
             .rt
             .spawn(async move {
                 let sections = task_host.context_sections(&task_id).await;
-                let mut blocks = vec![schema::ContentBlock::Text(schema::TextContent::new(text))];
+                // Images first, then the text that refers to them.
+                let mut blocks = image_blocks;
+                blocks.push(schema::ContentBlock::Text(schema::TextContent::new(text)));
                 for path in &attachments {
                     let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
                     blocks.push(schema::ContentBlock::ResourceLink(schema::ResourceLink::new(

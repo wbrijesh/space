@@ -67,7 +67,7 @@ use crate::secrets::Secrets;
 use crate::session::{SessionEvent, SessionId};
 
 pub use agents::{AgentHandle, Session};
-pub use store::ThreadSave;
+pub use store::{ThreadDirs, ThreadSave};
 pub use titles::TITLE_TIMEOUT;
 use agents::AgentInner;
 use pipeline::SessionMeta;

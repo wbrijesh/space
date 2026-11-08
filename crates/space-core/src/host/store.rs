@@ -27,6 +27,13 @@ pub struct ThreadSave {
     pub events: Vec<SessionEvent>,
 }
 
+/// A thread's folders ([`Host::thread_dirs`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThreadDirs {
+    pub data: Option<PathBuf>,
+    pub attachments: PathBuf,
+}
+
 impl Host {
     /// Whether a session store is installed (on and approved).
     pub fn has_session_store(&self) -> bool {
@@ -91,17 +98,19 @@ impl Host {
         Ok(())
     }
 
-    /// The folder the thread's agent may keep the session's own files in (`None`: no store, or
-    /// it couldn't say; the agent then keeps the session in memory).
-    pub async fn thread_data_dir(&self, thread_id: &str) -> Option<PathBuf> {
+    /// The thread's folders: the one its agent may keep the session's own files in (`None`: no
+    /// store, or it couldn't say; the agent then keeps the session in memory), and the one its
+    /// attached images are kept in (a temporary folder when the store keeps none).
+    pub async fn thread_dirs(&self, thread_id: &str) -> ThreadDirs {
+        let temp = || std::env::temp_dir().join("space-attachments").join(thread_id);
         if !self.has_session_store() {
-            return None;
+            return ThreadDirs { data: None, attachments: temp() };
         }
         match self.store_call::<_, svc::DataDir>(svc::STORE_DATA_DIR, thread_ref(thread_id)).await {
-            Ok(d) => Some(PathBuf::from(d.data_dir)),
+            Ok(d) => ThreadDirs { data: Some(PathBuf::from(d.data_dir)), attachments: d.attachments_dir.map_or_else(temp, PathBuf::from) },
             Err(e) => {
                 tracing::debug!("{e:#}");
-                None
+                ThreadDirs { data: None, attachments: temp() }
             }
         }
     }

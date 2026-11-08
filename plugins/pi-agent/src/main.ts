@@ -23,7 +23,7 @@ import {
 import { contextFromMeta, type HostLink } from "./host.js";
 import { createPiSession, type PiSession } from "./pi.js";
 import { completeOnce, configureSession, parseCompleteParams, parseConfigureParams, sessionStatus } from "./status.js";
-import { promptText, textToolContent, toolKind, toolResultText, toolTitle } from "./translate.js";
+import { promptInput, textToolContent, toolKind, toolResultText, toolTitle } from "./translate.js";
 
 const VERSION: string = (() => {
 	try {
@@ -116,7 +116,7 @@ const app = acp
 			agentCapabilities: {
 				// Sessions given a data folder are kept there and can be loaded again.
 				loadSession: true,
-				promptCapabilities: { image: false, audio: false, embeddedContext: true },
+				promptCapabilities: { image: true, audio: false, embeddedContext: true },
 			},
 			agentInfo: { name: "pi-agent", title: "Pi Agent", version: VERSION },
 			authMethods: [],
@@ -190,10 +190,11 @@ const app = acp
 
 		// Hidden context from the host's plugins, for this run's system prompt.
 		state.pi.host.context = contextFromMeta(params._meta);
-		const text = promptText(params.prompt);
+		// A text-only model gets each image's path instead of the image.
+		const input = promptInput(params.prompt, session.model?.input?.includes("image") ?? true);
 		let failure: unknown;
 		try {
-			await session.prompt(text);
+			await session.prompt(input.text, input.images.length ? { images: input.images } : undefined);
 		} catch (error) {
 			failure = error;
 		} finally {
