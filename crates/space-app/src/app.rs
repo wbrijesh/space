@@ -399,7 +399,7 @@ impl SpaceApp {
             transcript_scroll: FollowScroll::new(),
             log_scroll: FollowScroll::new(),
             sidebar_open: true,
-            sidebar_shown: space_ui::theme::motion::Spring::new(1., space_ui::theme::motion::SIDEBAR_RESPONSE),
+            sidebar_shown: space_ui::theme::motion::Spring::new(1., space_ui::theme::motion::SIDEBAR_SLIDE),
             show_logs: false,
             banner,
             deleted_while_saving: HashMap::new(),

@@ -30,10 +30,10 @@ pub const SCROLL_GLIDE: Duration = Duration::from_millis(200);
 pub const POP: Duration = Duration::from_millis(160);
 pub const POP_SCALE: f32 = 0.92;
 
-/// Sidebar show/hide: a critically damped spring (no overshoot) with this response, like the
-/// spring macOS and SwiftUI use for split views. Most of the travel happens in the first
-/// ~250ms; it then settles softly. See [`Spring`].
-pub const SIDEBAR_RESPONSE: Duration = Duration::from_millis(350);
+/// Sidebar show/hide, start to settled: a critically damped spring (no overshoot), like the
+/// spring macOS and SwiftUI use for split views. Most of the travel happens in the first half;
+/// the rest settles softly. See [`Spring`].
+pub const SIDEBAR_SLIDE: Duration = Duration::from_millis(250);
 
 /// Fast start, gentle stop (cubic). Used for the toggle knob.
 pub fn ease_out(t: f32) -> f32 {
@@ -50,12 +50,15 @@ pub fn pulse(t: f32) -> f32 {
     (std::f32::consts::PI * t.clamp(0., 1.)).sin().powi(2)
 }
 
+/// ωt at which a critically damped move from rest is within 0.1% of its target (settled).
+const SETTLE: f64 = 9.3;
+
 /// A value (usually 0..1) moving toward a target on a critically damped spring, timed on the
 /// animation clock. Retargeting mid-flight keeps the current position and velocity, so a
 /// reversal turns smoothly instead of jumping.
 #[derive(Debug, Clone, Copy)]
 pub struct Spring {
-    response: Duration,
+    duration: Duration,
     target: f32,
     /// Position and velocity when the current motion began, and when it began (clock time);
     /// `None` once settled at `target`.
@@ -63,9 +66,9 @@ pub struct Spring {
 }
 
 impl Spring {
-    /// Settled at `value`.
-    pub fn new(value: f32, response: Duration) -> Self {
-        Self { response, target: value, start: None }
+    /// Settled at `value`; a move takes `duration` from start to settled.
+    pub fn new(value: f32, duration: Duration) -> Self {
+        Self { duration, target: value, start: None }
     }
 
     pub fn target(&self) -> f32 {
@@ -73,7 +76,7 @@ impl Spring {
     }
 
     fn omega(&self) -> f64 {
-        std::f64::consts::TAU / self.response.as_secs_f64().max(1e-3)
+        SETTLE / self.duration.as_secs_f64().max(1e-3)
     }
 
     /// Position and velocity at clock time `now` (`pinned`: the dev clock's pinned phase, read
@@ -82,8 +85,7 @@ impl Spring {
         let Some((x0, v0, since)) = self.start else { return (self.target, 0.) };
         let w = self.omega();
         let t = match pinned {
-            // ωt ≈ 9.2 is within 0.1% of the target.
-            Some(p) => p.clamp(0., 1.) as f64 * 9.2 / w,
+            Some(p) => p.clamp(0., 1.) as f64 * SETTLE / w,
             None => (now - since).max(0.),
         };
         let c1 = (x0 - self.target) as f64;
@@ -95,7 +97,7 @@ impl Spring {
     /// The value at clock time `now`, and whether it's still moving.
     pub fn at(&self, now: f64, pinned: Option<f32>) -> (f32, bool) {
         let (x, v) = self.state(now, pinned);
-        let moving = self.start.is_some() && ((x - self.target).abs() > 1e-3 || v.abs() > 1e-2);
+        let moving = self.start.is_some() && ((x - self.target).abs() > 1e-3 || v.abs() > 5e-2);
         (if moving { x } else { self.target }, moving)
     }
 
@@ -119,7 +121,7 @@ pub const ALL: &[(&str, Duration, &str)] = &[
     ("DOTS_CYCLE", DOTS_CYCLE, "sin² pulse, 16% stagger, 50% pulse window"),
     ("SCROLL_GLIDE", SCROLL_GLIDE, "ease_out glide to the bottom (scroll-to-bottom button, ⌘↓)"),
     ("POP", POP, "ease_out fade + scale from 0.92 (scroll-to-bottom button)"),
-    ("SIDEBAR_RESPONSE", SIDEBAR_RESPONSE, "critically damped spring: sidebar slides in/out, content resizes"),
+    ("SIDEBAR_SLIDE", SIDEBAR_SLIDE, "critically damped spring, start to settled: sidebar slides in/out, content resizes"),
 ];
 
 #[cfg(test)]
@@ -128,16 +130,16 @@ mod tests {
 
     #[test]
     fn spring_settles_without_overshoot_and_reverses_smoothly() {
-        let mut s = Spring::new(0., SIDEBAR_RESPONSE);
+        let mut s = Spring::new(0., SIDEBAR_SLIDE);
         s.set(1., 0., None);
         let mut last = 0.;
-        for i in 1..=60 {
+        for i in 1..=30 {
             let (x, _) = s.at(i as f64 * 0.01, None);
             assert!(x >= last && x <= 1., "monotonic, no overshoot: {x} after {last}");
             last = x;
         }
-        assert!(s.at(0.25, None).0 > 0.9, "most of the way by 250ms");
-        assert_eq!(s.at(1.0, None), (1., false));
+        assert!(s.at(0.125, None).0 > 0.9, "most of the way in the first half");
+        assert_eq!(s.at(0.25, None), (1., false), "settled at 250ms");
 
         // Reverse at 100ms: no jump in position.
         let (x, _) = s.at(0.1, None);
