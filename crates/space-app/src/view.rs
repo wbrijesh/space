@@ -16,7 +16,7 @@ use space_ui::components::settings::{
 };
 use space_ui::components::follow_scroll::FollowScrollArea;
 use space_ui::components::shell::{
-    AgentFooter, AgentState, banner, confirm_card, empty_heading, problem_card, sidebar_column,
+    banner, confirm_card, empty_heading, problem_card, sidebar_column,
 };
 use space_ui::components::thread_row::{RowIndicator, ThreadRow};
 use space_ui::components::title_bar::{MainTitleBar, SidebarTitleBar, TitleBarNav};
@@ -147,16 +147,7 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
         })
         .collect();
 
-    let state = match &app.agent_status {
-        PluginStatus::Running => AgentState::Running,
-        PluginStatus::Starting => AgentState::Starting,
-        PluginStatus::Stopped => AgentState::Stopped,
-        PluginStatus::Crashed(msg) | PluginStatus::NotStarted(msg) => AgentState::Exited(msg.clone()),
-    };
-    let footer = AgentFooter::new(app.agent_title.clone(), state)
-        .when(app.agent_id.is_some(), |f| f.on_restart(cx.listener(|this, _, _, cx| this.restart_agent(cx))));
-
-    sidebar_column(SidebarTitleBar::new(nav).shown(shown), rows, footer)
+    sidebar_column(SidebarTitleBar::new(nav).shown(shown), rows)
 }
 
 fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {

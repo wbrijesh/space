@@ -113,7 +113,6 @@ pub mod size {
     use super::*;
     pub const TITLE_BAR_H: Pixels = px(48.);
     pub const SIDEBAR_W: Pixels = px(316.);
-    pub const SIDEBAR_FOOTER_H: Pixels = px(44.);
     /// Width reserved for the macOS traffic lights (at x=18, ~52px wide) plus a gap before
     /// the first title-bar button.
     pub const TRAFFIC_LIGHTS_W: Pixels = px(92.);

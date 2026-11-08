@@ -205,9 +205,6 @@ impl SpaceApp {
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(agent) => {
-                        if let Some(name) = agent.agent_name() {
-                            this.agent_title = name.to_string();
-                        }
                         this.agent = Some(agent);
                         this.agent_status = PluginStatus::Running;
                         this.create_pending_sessions(cx);

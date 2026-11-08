@@ -1,18 +1,16 @@
-//! Shell pieces: sidebar column and footer, banners, empty-state heading.
-
-use std::rc::Rc;
+//! Shell pieces: sidebar column, banners, empty-state heading.
 
 use gpui::assets::IconName as Lucide;
 use gpui::component::{Icon, IconName};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
-use super::widgets::{icon_button, pill_button, status_dot, tip};
+use super::widgets::{icon_button, pill_button};
 use crate::ClickHandler;
 use crate::theme::{color, radius, size, text};
 
-/// Sidebar column: title bar segment, scrolling list, footer.
-pub fn sidebar_column(title_bar: impl IntoElement, rows: Vec<AnyElement>, footer: impl IntoElement) -> Div {
+/// Sidebar column: title bar segment and the scrolling thread list.
+pub fn sidebar_column(title_bar: impl IntoElement, rows: Vec<AnyElement>) -> Div {
     div()
         .flex()
         .flex_col()
@@ -31,79 +29,6 @@ pub fn sidebar_column(title_bar: impl IntoElement, rows: Vec<AnyElement>, footer
                 .overflow_y_scroll()
                 .child(div().flex().flex_col().gap_0p5().px_2().pt_1().pb_4().children(rows)),
         )
-        .child(footer)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AgentState {
-    Starting,
-    Running,
-    Stopped,
-    Exited(String),
-}
-
-/// Sidebar footer: agent status, and restart while it's stopped.
-#[derive(IntoElement)]
-pub struct AgentFooter {
-    title: SharedString,
-    state: AgentState,
-    on_restart: Option<ClickHandler>,
-}
-
-impl AgentFooter {
-    pub fn new(title: impl Into<SharedString>, state: AgentState) -> Self {
-        Self { title: title.into(), state, on_restart: None }
-    }
-
-    /// Shown only while the agent is stopped or exited.
-    pub fn on_restart(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
-        self.on_restart = Some(Rc::new(f));
-        self
-    }
-}
-
-impl RenderOnce for AgentFooter {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let (dot, label) = match &self.state {
-            AgentState::Running => (color::green(), "running"),
-            AgentState::Starting => (color::yellow(), "starting…"),
-            AgentState::Stopped => (color::text_3(), "stopped"),
-            AgentState::Exited(_) => (color::red(), "exited"),
-        };
-        let detail = match &self.state {
-            AgentState::Exited(msg) => msg.clone(),
-            _ => format!("{} · {label}", self.title),
-        };
-        let stopped = matches!(self.state, AgentState::Stopped | AgentState::Exited(_));
-        div()
-            .flex_none()
-            .h(size::SIDEBAR_FOOTER_H)
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_3()
-            .border_t_1()
-            .border_color(color::border())
-            .child(
-                div()
-                    .id("agent-status")
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .flex_1()
-                    .min_w_0()
-                    .child(status_dot(dot))
-                    .child(div().min_w_0().truncate().text_size(text::SM).text_color(color::text_2()).child(self.title))
-                    .tooltip(tip(detail)),
-            )
-            .when_some(self.on_restart.filter(|_| stopped), |d, f| {
-                d.child(
-                    icon_button("restart-agent", IconName::RefreshCw, true, false)
-                        .tooltip(tip("Restart agent"))
-                        .on_click(move |e, w, cx| f(e, w, cx)),
-                )
-            })
-    }
 }
 
 /// Quiet info banner with a dismiss button.
@@ -179,18 +104,8 @@ pub fn empty_heading() -> Div {
 #[cfg(feature = "dev")]
 pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     use crate::preview::{Area, ComponentPreview, Example};
-    let noop: ClickHandler = Rc::new(|_, _, _| {});
-    let footer = |name: &'static str, state: AgentState| {
-        Example::new(name, move |_, _| AgentFooter::new("Pi Agent", state.clone()).on_restart(|_, _, _| {}).into_any_element())
-        .width(size::SIDEBAR_W)
-    };
-
+    let noop: ClickHandler = std::rc::Rc::new(|_, _, _| {});
     vec![
-        ComponentPreview::new(Area::Sidebar, "Agent footer", "Agent status, and restart while it's stopped.").stacked().examples([
-            footer("running", AgentState::Running),
-            footer("starting", AgentState::Starting),
-            footer("exited", AgentState::Exited("exited with code 3".into())),
-        ]),
         ComponentPreview::new(Area::Shell, "Banners", "Problems and notices above the composer.").stacked().examples([
             Example::new("agent problem", move |_, _| {
                 problem_card("The agent exited: exited with code 3: model request failed", Some(noop.clone()))

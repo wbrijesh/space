@@ -223,7 +223,6 @@ pub struct SpaceApp {
     pub(crate) agent_id: Option<String>,
     pub(crate) agent: Option<AgentHandle>,
     pub(crate) agent_status: PluginStatus,
-    pub(crate) agent_title: String,
     pub(crate) notify: bool,
     pub(crate) threads: Vec<Thread>,
     pub(crate) next_key: u64,
@@ -374,7 +373,6 @@ impl SpaceApp {
 
         let mut this = Self {
             agent_id: agent_plugin.map(|p| p.id().to_string()),
-            agent_title: agent_plugin.map(|p| p.manifest.name.clone()).unwrap_or_else(|| "No agent".into()),
             notify: options.notify,
             host,
             project_dir: options.project_dir.clone(),

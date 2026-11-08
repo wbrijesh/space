@@ -81,8 +81,8 @@ After changing the icon, macOS may keep showing the old one (cached per bundle i
 
 ## Using the app
 
-The app starts the agent plugin in the background on launch and opens a new thread. The agent's status
-sits in the sidebar footer; Settings ▸ Plugins lists every plugin.
+The app starts the agent plugin in the background on launch and opens a new thread. Settings ▸ Plugins
+lists every plugin and its status; if the agent can't start or exits, the thread says so with Restart.
 
 - **Sidebar**: a plain list of thread titles, newest first. A thread shows the first line of your first
   message until the titles plugin names it (with the thread's model, or the one picked in Settings ▸
