@@ -5,7 +5,6 @@
 //!
 //! * [`view_tabs`]: "Chat | Trajectory" under the title bar.
 //! * [`TrajectoryView`]: toolbar, overview ([`timeline`]), ledger ([`ledger`]), inspector.
-//! * [`stats_line`]: the thread's totals under the composer.
 
 pub mod inspector;
 pub mod json_tree;
@@ -23,7 +22,7 @@ use gpui::component::{Icon, Sizable as _};
 use gpui::component::input::{Input, InputState};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use space_core::protocol::trace::{RecordKind, TrajectoryDetail, TrajectoryPage, TrajectoryRow, TrajectoryStats};
+use space_core::protocol::trace::{RecordKind, TrajectoryDetail, TrajectoryPage, TrajectoryRow};
 
 pub use inspector::INSPECTOR_W;
 pub use ledger::{LedgerItem, LedgerScroll, ledger_items};
@@ -156,42 +155,6 @@ fn tool_button(id: &'static str, icon: Lucide, label: &'static str, on: bool, f:
         .child(Icon::new(icon).size(size::ICON_SM))
         .child(label)
         .on_click(move |_, w, cx| f(w, cx))
-}
-
-/// "2 turns · 5 steps · 70 tok/s · 18.2k tok · cache hit 86%", with the breakdown on hover.
-pub fn stats_line(stats: &TrajectoryStats) -> Stateful<Div> {
-    let s = |n: u32, one: &str| format!("{n} {one}{}", if n == 1 { "" } else { "s" });
-    let mut parts = vec![s(stats.turns, "turn"), s(stats.steps, "step")];
-    if let Some(tps) = stats.tokens_per_second() {
-        parts.push(format!("{tps:.0} tok/s"));
-    }
-    parts.push(format!("{} tok", format::compact_tokens(stats.usage.total())));
-    if let Some(hit) = stats.usage.cache_hit_percent() {
-        parts.push(format!("cache hit {hit}%"));
-    }
-    let u = &stats.usage;
-    let tok = |n: u64| format!("{} tok", format::thousands(n));
-    let mut breakdown = vec![format!("Uncached input {}", tok(u.input))];
-    if let Some(r) = u.cache_read {
-        breakdown.push(format!("Cached input {}", tok(r)));
-    }
-    if let Some(w) = u.cache_write {
-        breakdown.push(format!("Cache write {}", tok(w)));
-    }
-    breakdown.push(format!("Output {}", tok(u.output)));
-    if stats.generation_ms > 0 {
-        breakdown.push(format!("Generating {} for {}", duration_label(stats.generation_ms), tok(stats.generated_tokens)));
-    }
-    div()
-        .id("trajectory-stats")
-        .flex()
-        .items_center()
-        .gap_1p5()
-        .text_size(text::XS)
-        .text_color(color::text_3())
-        .child(Icon::new(Lucide::Database).size(size::ICON_SM))
-        .child(parts.join(" · "))
-        .tooltip(tip(breakdown.join(" · ")))
 }
 
 // ----- the view -------------------------------------------------------------------------------
@@ -404,7 +367,7 @@ impl RenderOnce for TrajectoryView {
             .size_full()
             .flex()
             .flex_col()
-            .bg(color::bg())
+            .bg(color::trajectory_bg())
             .on_key_down(move |e, w, cx| {
                 if e.keystroke.key == "escape" && range.is_some() {
                     close_range(None, w, cx);

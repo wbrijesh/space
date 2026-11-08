@@ -435,7 +435,7 @@ pub fn timeline(
         .w_full()
         .h(px(height))
         .flex_none()
-        .bg(color::bg_sidebar())
+        .bg(color::trajectory_bg())
         .border_b_1()
         .border_color(color::border())
         .cursor_crosshair()

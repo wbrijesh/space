@@ -15,6 +15,9 @@ path = "src/main.rs"
 # controls, input scripts. On by default; ship with `--no-default-features` (`just release`).
 default = ["dev"]
 dev = ["space-ui/dev", "dep:schemars"]
+# Live Rust edits under `dx serve --hot-patch` (`just hot`): turns on gpui-pre's `hot-reload`,
+# which gpui-kit doesn't forward. GPUI also requires a debug build, so it can't reach a release.
+hot = ["dep:gpui-hot-reload"]
 
 [dependencies]
 space-core.workspace = true
@@ -31,6 +34,8 @@ tracing-subscriber.workspace = true
 # GPUI via gpui-kit 0.9.0: re-exports gpui-pre 0.3.11 (crates.io snapshot of Zed's GPUI),
 # its macOS platform, and gpui-component. Renamed to `gpui` so GPUI macro output resolves.
 gpui = { package = "gpui-kit", version = "0.9.0" }
+# The same gpui-pre gpui-kit pins, named again only to switch on `hot-reload` (feature `hot`).
+gpui-hot-reload = { package = "gpui-pre", version = "=0.3.11", features = ["hot-reload"], optional = true }
 # macOS: "agent finished" notifications, sounds, Dock icon (src/notify.rs). Same versions GPUI uses.
 objc2 = "0.6"
 block2 = "0.6"

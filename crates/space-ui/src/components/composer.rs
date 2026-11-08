@@ -1,5 +1,6 @@
 //! Composer: the input card (+ · text · send/stop) and the control row below it (project
-//! folder, permission mode, model, effort, context ring). A mode that isn't set up yet blocks
+//! folder, permission mode, model, effort, context ring; a click on the ring opens the context
+//! and the thread's totals above it). A mode that isn't set up yet blocks
 //! sending and says why, with a link to fix it.
 //!
 //! One visual line: a single row. More (a newline, or text wider than the single-row text
@@ -15,10 +16,12 @@ use gpui::component::{Disableable as _, Icon, IconName, Sizable as _};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::protocol::service::CatalogEntry;
+use space_core::protocol::trace::TrajectoryStats;
 use space_core::protocol::{ConfigureSession, ModelInfo, SpaceStatus};
 
 use super::images::draft_thumb;
 use super::loaders::ContextRing;
+use super::trajectory::duration_label;
 use super::transcript::attachment_chip;
 use super::widgets::{icon_button, menu_trigger, tip};
 use crate::format;
@@ -80,6 +83,8 @@ pub struct ComposerHandlers {
     /// Files dropped on the card.
     pub on_drop: PathsHandler,
     pub on_paste: PasteHandler,
+    /// Open (`true`) or close the context panel.
+    pub on_context: BoolHandler,
 }
 
 impl Default for ComposerHandlers {
@@ -99,6 +104,7 @@ impl Default for ComposerHandlers {
             on_remove_image: Rc::new(|_, _, _| {}),
             on_drop: Rc::new(|_, _, _| {}),
             on_paste: Rc::new(|_, _, _| false),
+            on_context: Rc::new(|_, _, _| {}),
         }
     }
 }
@@ -118,6 +124,10 @@ pub struct ComposerControls {
     pub mode: Option<ModeChoice>,
     /// Sending is blocked until this is resolved (e.g. a mode that needs setting up).
     pub blocker: Option<ComposerBlocker>,
+    /// The thread's totals (from the trajectory plugin), shown in the context panel.
+    pub stats: Option<TrajectoryStats>,
+    /// The context panel is open.
+    pub context_open: bool,
 }
 
 /// The thread's permission mode and the modes it can switch to (the `permission-modes` catalog).
@@ -513,12 +523,35 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers, window: &Window) -> Di
     }
     let tokens = status.context_tokens.unwrap_or(0);
     let window_size = status.context_window.filter(|w| *w > 0);
+    let open = c.context_open;
+    let (toggle, close) = (h.on_context.clone(), h.on_context.clone());
+    let stats = c.stats.clone();
     right = right.child(
         div()
             .id("context-ring")
-            .ml_2()
+            .relative()
+            .ml_1()
+            .size(px(24.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(radius::MD)
+            .cursor_pointer()
+            .when(open, |d| d.bg(color::hover()))
+            .hover(|s| s.bg(color::hover()))
             .child(ContextRing::new(window_size.map_or(0., |w| tokens as f32 / w as f32)))
-            .tooltip(tip(format::context_usage(tokens, window_size))),
+            .when(!open, |d| d.tooltip(tip(format::context_usage(tokens, window_size))))
+            .on_click(move |_, w, cx| toggle(!open, w, cx))
+            .when(open, |d| {
+                // Above the ring, kept inside the window.
+                d.child(div().absolute().top_0().right_0().child(deferred(
+                    anchored().anchor(Anchor::BottomRight).snap_to_window_with_margin(px(8.)).child(
+                        div()
+                            .pb_1()
+                            .child(context_panel(tokens, window_size, stats.as_ref()).on_mouse_down_out(move |_, w, cx| close(false, w, cx))),
+                    ),
+                )))
+            }),
     );
 
     let mode = c.mode.filter(|m| !m.entries.is_empty()).map(|m| {
@@ -551,6 +584,91 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers, window: &Window) -> Di
         .pr(px(ROW_INSET_RIGHT))
         .child(div().flex().items_center().gap_1().min_w_0().child(folder).children(mode))
         .child(right)
+}
+
+/// The context window's use and, with a trajectory plugin, the thread's totals.
+pub fn context_panel(tokens: u64, window: Option<u64>, stats: Option<&TrajectoryStats>) -> Div {
+    let tok = |n: u64| format!("{} tok", format::thousands(n));
+    let row = |label: &str, value: String| {
+        div()
+            .flex()
+            .justify_between()
+            .gap_6()
+            .child(div().text_color(color::text_3()).child(label.to_string()))
+            .child(div().text_color(color::text()).child(value))
+    };
+    let header = |icon: Lucide, title: &str, value: String| {
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_6()
+            .font_weight(FontWeight::MEDIUM)
+            .child(div().flex().items_center().gap_2().child(Icon::new(icon).size(size::ICON)).child(title.to_string()))
+            .child(value)
+    };
+    let frac = window.map_or(0., |w| (tokens as f32 / w as f32).clamp(0., 1.));
+    let context = match window {
+        Some(w) => {
+            let pct = tokens as f64 / w as f64 * 100.;
+            let pct = if tokens > 0 && pct < 1. { "<1%".to_string() } else { format!("{pct:.0}%") };
+            format!("{} / {} · {pct}", format::compact_tokens(tokens), format::compact_tokens(w))
+        }
+        None => "Not reported yet".to_string(),
+    };
+    let mut panel = div()
+        .w(px(300.))
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .rounded(radius::XL)
+        .bg(color::surface())
+        .border_1()
+        .border_color(color::border())
+        .shadow_lg()
+        .text_size(text::SM)
+        .cursor_default()
+        .child(header(Lucide::Gauge, "Context", context))
+        .child(
+            div()
+                .h(px(4.))
+                .w_full()
+                .rounded_full()
+                .bg(color::border_strong())
+                .child(div().h_full().w(relative(if frac > 0. { frac.max(0.02) } else { 0. })).rounded_full().bg(color::accent())),
+        );
+    if let Some(stats) = stats.filter(|s| s.steps > 0) {
+        let u = &stats.usage;
+        let mut rows = vec![row("Turns", stats.turns.to_string()), row("Steps", stats.steps.to_string())];
+        if let Some(tps) = stats.tokens_per_second() {
+            rows.push(row("Speed", format!("{tps:.0} tok/s")));
+        }
+        if stats.generation_ms > 0 {
+            rows.push(row("Generating", format!("{} for {}", duration_label(stats.generation_ms), tok(stats.generated_tokens))));
+        }
+        if let Some(hit) = u.cache_hit_percent() {
+            rows.push(row("Cache hit", format!("{hit}%")));
+        }
+        rows.push(row("Uncached input", tok(u.input)));
+        if let Some(r) = u.cache_read {
+            rows.push(row("Cached input", tok(r)));
+        }
+        if let Some(w) = u.cache_write {
+            rows.push(row("Cache write", tok(w)));
+        }
+        rows.push(row("Output", tok(u.output)));
+        panel = panel
+            .child(
+                header(Lucide::Database, "Thread usage", tok(u.total()))
+                    .mt_1()
+                    .pt_3()
+                    .border_t_1()
+                    .border_color(color::border()),
+            )
+            .children(rows);
+    }
+    panel
 }
 
 /// Permission mode picker contents: one item per catalog entry, the current one checked.
@@ -664,6 +782,8 @@ pub mod fixtures {
             locked,
             mode: Some(modes("workspace-write", true)),
             blocker: None,
+            stats: None,
+            context_open: false,
         }
     }
 

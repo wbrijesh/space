@@ -25,6 +25,17 @@ bundle profile="debug":
 run dir=project: build (bundle "debug")
     ./target/debug/Space.app/Contents/MacOS/Space {{dir}}
 
+# Launch with live Rust edits: saving a file patches the running app in ~1 s (render code,
+# layout, styles). Changing struct fields or `main` needs a rebuild: press `r` in the dx window.
+# Needs dx at GPUI's subsecond version: cargo install dioxus-cli --version 0.7.10 --locked
+# dx runs Space from target/dx, so SPACE_TARGET_DIR points plugins at the workspace build.
+hot dir=project: build
+    SPACE_TARGET_DIR={{project}}/target/debug dx serve --hot-patch -p space-app --bin Space --features hot --macos --args="{{dir}}"
+
+# Hot reload on the component gallery
+hot-gallery:
+    SPACE_TARGET_DIR={{project}}/target/debug dx serve --hot-patch -p space-app --bin Space --features hot --macos --args=--gallery
+
 # Launch and send a prompt in the first thread (billed when using pi-agent)
 demo prompt="": build
     SPACE_AUTOPROMPT="{{prompt}}" cargo run -p space-app -- {{project}}

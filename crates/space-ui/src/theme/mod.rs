@@ -77,6 +77,12 @@ pub mod color {
         yellow_bg = 0xd299221a;
         yellow_border = 0xd2992266;
         scrollbar_thumb_hover = 0x4a4a4aff;
+        /// Trajectory view background (lighter than the window, like a data sheet).
+        trajectory_bg = 0x232323ff;
+        /// Row hover on the Trajectory background.
+        trajectory_hover = 0x2b2b2bff;
+        /// Selected row on the Trajectory background.
+        trajectory_selected = 0x333333ff;
     }
 }
 

@@ -325,8 +325,8 @@ fn line_base(id: ElementId, selected: bool) -> Stateful<Div> {
         .border_b_1()
         .border_color(color::border().opacity(0.35))
         .text_size(text::SM)
-        .when(selected, |d| d.bg(color::pressed()))
-        .when(!selected, |d| d.hover(|s| s.bg(color::surface())))
+        .when(selected, |d| d.bg(color::trajectory_selected()))
+        .when(!selected, |d| d.hover(|s| s.bg(color::trajectory_hover())))
         .cursor_pointer()
 }
 
@@ -442,7 +442,7 @@ fn load_earlier(on_load: Handler) -> Stateful<Div> {
         .text_size(text::SM)
         .text_color(color::text_2())
         .cursor_pointer()
-        .hover(|s| s.bg(color::surface()).text_color(color::text()))
+        .hover(|s| s.bg(color::trajectory_hover()).text_color(color::text()))
         .border_b_1()
         .border_color(color::border().opacity(0.5))
         .child("Load earlier")

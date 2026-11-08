@@ -243,9 +243,14 @@ pub fn previews() -> Vec<ComponentPreview> {
                 inspector_example("user", "u-1"),
                 inspector_example("context", "c-1"),
             ]),
-        ComponentPreview::new(Area::Trajectory, "Trajectory tabs and stats", "Chat | Trajectory under the title bar; totals under the composer.").stacked().examples([
+        ComponentPreview::new(Area::Trajectory, "Trajectory tabs and context panel", "Chat | Trajectory under the title bar; the context ring's panel with the thread's totals.").stacked().examples([
             Example::new("tabs", |_, _| view_tabs(ViewTab::Trajectory, Rc::new(|_, _, _| {})).into_any_element()).width(px(480.)),
-            Example::new("stats line", |_, _| stats_line(&page().stats).into_any_element()),
+            Example::new("context panel", |_, _| {
+                crate::components::composer::context_panel(182_340, Some(1_000_000), Some(&page().stats)).into_any_element()
+            }),
+            Example::new("context panel (no trajectory)", |_, _| {
+                crate::components::composer::context_panel(182_340, Some(1_000_000), None).into_any_element()
+            }),
         ]),
     ]
 }

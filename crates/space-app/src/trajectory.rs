@@ -55,7 +55,7 @@ impl TrajectoryState {
 }
 
 /// The app's Trajectory state: which threads show the tab, the shown one's data, the search
-/// field, and each thread's totals for the stats line.
+/// field, and each thread's totals for the context panel.
 pub(crate) struct Trajectories {
     pub open: HashSet<u64>,
     pub state: Option<TrajectoryState>,
@@ -102,7 +102,7 @@ impl SpaceApp {
     }
 
     /// Another thread was selected: load its trajectory if it shows the tab, and its totals for
-    /// the stats line.
+    /// the context panel.
     pub(crate) fn thread_selected_for_trajectory(&mut self, cx: &mut Context<Self>) {
         if !self.host.has_trajectory() {
             return;

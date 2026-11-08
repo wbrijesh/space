@@ -1,0 +1,9 @@
+# Read only by `dx serve --hot-patch` (`just hot`), which builds its own Space.app under
+# target/dx. Without this, that bundle is `com.example.Space` with no icon.
+[application]
+name = "Space"
+
+[bundle]
+identifier = "dev.brijesh.space"
+publisher = "brijesh"
+icon = ["resources/AppIcon.png"]

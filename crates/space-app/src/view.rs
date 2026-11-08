@@ -18,7 +18,7 @@ use space_ui::components::settings::{
 use space_ui::components::follow_scroll::FollowScrollArea;
 use space_ui::components::images::{Pic, ViewerHandlers, viewer};
 use space_ui::components::message_actions::ActionHandlers;
-use space_ui::components::trajectory::{TrajectoryHandlers, TrajectoryView, ViewTab, stats_line, view_tabs};
+use space_ui::components::trajectory::{TrajectoryHandlers, TrajectoryView, ViewTab, view_tabs};
 use space_ui::components::shell::{
     banner, confirm_card, empty_heading, problem_card, sidebar_column,
 };
@@ -97,7 +97,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.toggle_settings(window, cx)))
         .on_action(cx.listener(|this, _: &ScrollToBottom, _, cx| this.scroll_to_bottom(cx)))
         .on_action(cx.listener(|this, _: &CyclePermissionMode, _, cx| this.cycle_mode(cx)))
-        // Esc closes a message's usage panel.
+        // Esc closes a message's usage panel or the context panel.
         .when(app.usage_open.is_some(), |d| {
             d.on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                 if e.keystroke.key == "escape" {
@@ -212,7 +212,7 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
             .into_any_element();
     }
 
-    // The tabs, the stats line under the composer: only with a trajectory plugin.
+    // The tabs: only with a trajectory plugin.
     let has_trajectory = app.host.has_trajectory();
     let tabs = has_trajectory.then(|| {
         let this = cx.entity().downgrade();
@@ -220,9 +220,6 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
             let _ = this.update(cx, |this, cx| this.show_tab(tab, w, cx));
         }))
     });
-    let stats = has_trajectory
-        .then(|| app.trajectories.stats.get(&thread.id).filter(|s| s.steps > 0).map(stats_line))
-        .flatten();
     let bottom = div()
         .flex_none()
         .w_full()
@@ -230,12 +227,13 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
         .justify_center()
         .px_6()
         .pb_4()
-        .child(column().gap_2().children(notices).child(composer).children(stats));
+        .child(column().gap_2().children(notices).child(composer));
 
     if app.view_tab() == ViewTab::Trajectory
         && let Some(view) = trajectory_view(app, cx)
     {
-        return div().flex_1().min_h_0().flex().flex_col().children(tabs).child(view).child(bottom).into_any_element();
+        // No composer here: the ledger gets the whole height.
+        return div().flex_1().min_h_0().flex().flex_col().children(tabs).child(view).into_any_element();
     }
 
     let this = cx.entity().downgrade();
@@ -626,6 +624,12 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
             let this = cx.entity().downgrade();
             Rc::new(move |item: &ClipboardItem, _: &mut Window, cx: &mut App| this.update(cx, |this, cx| this.paste(item, cx)).unwrap_or(false))
         },
+        on_context: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |open, _: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| this.show_usage(open.then(|| CONTEXT_PANEL.to_string()), cx));
+            })
+        },
     };
     let mode = app
         .effective_mode(thread)
@@ -648,11 +652,16 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
             locked: thread.state.running || thread.live_session().is_none(),
             mode,
             blocker,
+            stats: app.host.has_trajectory().then(|| app.trajectories.stats.get(&thread.id).cloned()).flatten(),
+            context_open: app.usage_open.as_deref() == Some(CONTEXT_PANEL),
         })
         .handlers(handlers)
         .into_any_element()
 }
 
+
+/// `usage_open` while the context ring's panel is open (rows use their ids).
+const CONTEXT_PANEL: &str = "composer:context";
 /// The agent could not start or exited: say so, with Restart.
 fn agent_problem(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
     let message = match (&app.agent_status, &thread.error) {
