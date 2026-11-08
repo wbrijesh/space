@@ -32,22 +32,31 @@ plugins/trajectory      every thread's trace of model requests and tool calls (T
 
 ## Commands
 
+**Run Space with `just run`** (or plain `just`). It's the only way to run it while developing:
+
+- It builds everything (the Rust workspace, every bundled plugin, pi-agent) and launches the app
+  through [dx](https://dioxuslabs.com) with live Rust edits: saving a file patches the running app in
+  about a second (render code, layout, styles; changing struct fields or `main` needs a rebuild:
+  press `r` in the dx window).
+- Plugins are separate processes: when a plugin's source (or a crate plugins are built from)
+  changes, the running app rebuilds that plugin and restarts it, a service plugin at once, the agent
+  once it's idle (threads load their sessions again). A build error shows as a banner, with the
+  details in the terminal.
+- Arguments go to the app: `just run ~/code/other` (another project), `just run --gallery` (the
+  component gallery), `just run --scenario list` / `--scenario <name>` (scripted states, stub agent).
+- Needs dx at GPUI's subsecond version: `cargo install dioxus-cli --version 0.7.10 --locked`.
+- It's a debug build; for real performance, check `just release`.
+
 | | |
 |---|---|
+| `just run [ARGS]` | build everything and run Space (above) |
 | `just build` | `cargo build --workspace` + `pnpm install && pnpm build` in `plugins/pi-agent` |
-| `just run [DIR]` | open the app on a project directory (default: this repo), from `target/debug/Space.app` |
-| `just bundle [debug\|release]` | wrap the built binary in `target/<profile>/Space.app` (bundle id `dev.brijesh.space`, icon) |
-| `just demo "Reply with exactly: pong"` | open the app and send the prompt in the first thread |
-| `just gallery` | dev: component gallery: tokens, every component state, animation-clock controls |
-| `just scenario name=many-threads` | dev: the real app in a held, scripted state (`name=list` lists them) |
-| `just release` | release build without dev tooling |
+| `just release` | release build without dev tooling (`target/release/Space.app`): for shipping, not daily use |
 | `just test` | all Rust tests; they use the scripted `space-stub-agent`, so they make no model calls |
 | `just lint` | clippy with `-D warnings` |
-| `just smoke ["PROMPT"]` | headless end-to-end run against pi-agent, printing events (billed) |
+| `just smoke ["PROMPT"]` | headless end-to-end run against pi-agent, printing events (billed); no window |
 | `just smoke-stub` | the same headless run against the stub agent (free) |
-
-Without just, run `cargo run -p space-app -- [PROJECT_DIR]` (no bundle: no system notifications, sound only) or
-`cargo run -p space-app -- --smoke "PROMPT" [--plugin ID] [--allow] [--permission-mode ID] [PROJECT_DIR]`.
+| `just protocol` | regenerate the TypeScript protocol bindings from the Rust types |
 
 Environment:
 
@@ -74,8 +83,8 @@ tile, #FFAF54 (halfway between amber and orange).
 
 - `AppIcon.icon`: Icon Composer bundle (the tile colour as its fill, the S as its layer). macOS 26 masks and
   lights it, and uses it for the Dock, app switcher, Finder and notifications.
-- `Assets.car`: compiled from it with Xcode's `actool`; `scripts/bundle.sh` ships it.
-- `AppIcon.png`: flattened, pre-masked copy, set as the Dock icon only for a bare `cargo run`.
+- `Assets.car`: compiled from it with Xcode's `actool`; the release bundle (`scripts/bundle.sh`) ships it.
+- `AppIcon.png`: flattened, pre-masked copy; dx uses it for the bundle it builds (`crates/space-app/Dioxus.toml`).
 
 After changing the icon, macOS may keep showing the old one (cached per bundle id). Clear it with
 `rm -rf "$(getconf DARWIN_USER_CACHE_DIR)"/com.apple.{dock.iconcache,iconservices,iconservicesagent}; killall iconservicesagent Dock NotificationCenter`.

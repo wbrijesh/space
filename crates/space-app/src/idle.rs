@@ -52,6 +52,21 @@ impl SpaceApp {
         self.agent_activity = Instant::now();
     }
 
+    /// Whether anything keeps the agent busy (a thread running, queued, starting, or waiting on
+    /// you or the guardrail). Plugin reload (`just run`) waits for it before restarting the agent.
+    #[cfg(feature = "dev")]
+    pub(crate) fn agent_busy(&self) -> bool {
+        self.threads.iter().any(|t| {
+            ThreadActivity {
+                running: t.state.running,
+                queued: t.queued.is_some(),
+                creating: t.creating,
+                waiting: t.state.pending_permission().is_some() || t.state.held().is_some(),
+            }
+            .busy()
+        })
+    }
+
     /// Check now and then whether the agent has been idle long enough to stop.
     pub(crate) fn watch_agent_idle(&mut self, cx: &mut Context<Self>) {
         let limit = idle_limit();

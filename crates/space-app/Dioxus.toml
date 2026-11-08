@@ -1,4 +1,4 @@
-# Read only by `dx serve --hot-patch` (`just hot`), which builds its own Space.app under
+# Read only by `dx serve --hot-patch` (`just run`), which builds its own Space.app under
 # target/dx. Without this, that bundle is `com.example.Space` with no icon.
 [application]
 name = "Space"

@@ -454,6 +454,8 @@ impl SpaceApp {
             _subscriptions: vec![sub, activation, quit],
         };
         this.watch_agent_idle(cx);
+        #[cfg(feature = "dev")]
+        crate::reload::start(cx);
         this.seed_threads(options.seed, options.select, window, cx);
         this.start_services(cx);
         this.load_saved_threads(cx);

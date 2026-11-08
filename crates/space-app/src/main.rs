@@ -26,6 +26,8 @@ mod notify;
 mod persist;
 mod recall;
 #[cfg(feature = "dev")]
+mod reload;
+#[cfg(feature = "dev")]
 mod scenarios;
 mod settings;
 mod threads;
@@ -83,7 +85,11 @@ fn parse_args() -> Result<Args> {
     }
     let project_dir = match project_dir {
         Some(p) => p.canonicalize().with_context(|| format!("project dir {}", p.display()))?,
-        None => std::env::current_dir()?,
+        // `just run` passes the repo (dx starts the app in its own folder).
+        None => match std::env::var_os("SPACE_PROJECT").filter(|p| !p.is_empty()) {
+            Some(p) => PathBuf::from(p),
+            None => std::env::current_dir()?,
+        },
     };
     Ok(Args { project_dir, smoke, plugin, allow, permission_mode, gallery, scenario })
 }

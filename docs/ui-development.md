@@ -75,7 +75,7 @@ persists across frames. See `components/composer.rs`.
 
 ## 4. Gallery — dev-only window
 
-⌥⌘G, Dev ▸ Component Gallery, `Space --gallery`, or `just gallery`. On the left are components
+⌥⌘G, Dev ▸ Component Gallery, or `just run --gallery`. On the left are components
 grouped by area (Shell, Sidebar, Composer, Transcript, Settings, Indicators) and the Tokens page. The main
 pane shows each example with its name. The top bar has:
 
@@ -88,10 +88,10 @@ the examples whose name contains one of them (handy for screenshots further down
 
 ## 5. Scenarios — the real app in a held state
 
-`Space --scenario <name>` (or `just scenario name=<name>`, or Dev ▸ Relaunch in Scenario) boots
+`just run --scenario <name>` (or Dev ▸ Relaunch in Scenario) boots
 the **real app shell** against the stub agent playing a script (`space_core::stub_script`).
 Script steps can `hold`, so a turn stays thinking, running a tool, or waiting for permission
-until you cancel it. Nothing in the UI is faked. `Space --scenario list` prints them:
+until you cancel it. Nothing in the UI is faked. `just run --scenario list` prints them:
 
 | Scenario | State |
 |---|---|
@@ -144,7 +144,7 @@ the textarea.
 ## Dev vs. release
 
 Dev tooling (previews, gallery, scenarios, clock controls, `SPACE_SCRIPT` input replay) is behind
-the `dev` cargo feature. space-app enables it by default, so every `cargo run` has it.
+the `dev` cargo feature. space-app enables it by default, so `just run` has it.
 `just release` builds with `--no-default-features`, and none of it is compiled in. A feature was
 chosen over `cfg(debug_assertions)` for two reasons. It keeps the choice explicit, and the gallery
 stays available in optimized builds for profiling. CI and lint run both configurations

@@ -3,6 +3,20 @@
 plugin := "plugins/pi-agent"
 project := justfile_directory()
 
+# Builds everything, then launches through dx with live Rust edits: saving a file patches the running
+# app in ~1 s (render code, layout, styles; struct fields or `main` need a rebuild: press `r` in
+# the dx window). Plugins are other processes: when their sources change, the app rebuilds and
+# restarts them (the agent once it's idle). Arguments go to the app:
+#   just run                      this repo as the project
+#   just run ~/code/other         another project
+#   just run --gallery            the component gallery
+#   just run --scenario list      scripted states (stub agent); `--scenario <name>` opens one
+# Needs dx at GPUI's subsecond version: cargo install dioxus-cli --version 0.7.10 --locked
+# Run Space: the one way to run it while developing (plain `just` does this too)
+run *args: build
+    SPACE_TARGET_DIR={{project}}/target/debug SPACE_PROJECT={{project}} SPACE_RELOAD_PLUGINS=1 \
+        dx serve --hot-patch -p space-app --bin Space --features hot --macos --args="{{args}}"
+
 # Build the Rust workspace and the bundled pi-agent plugin
 build: build-rust build-plugin
 
@@ -17,42 +31,9 @@ build-plugin:
         echo "skipping {{plugin}}: no package.json"
     fi
 
-# Wrap the built binary in target/<profile>/Space.app (bundle id, icon; needed for notifications)
-bundle profile="debug":
-    scripts/bundle.sh {{profile}}
-
-# Launch the desktop app on a project directory (from the .app bundle, so notifications work)
-run dir=project: build (bundle "debug")
-    ./target/debug/Space.app/Contents/MacOS/Space {{dir}}
-
-# Launch with live Rust edits: saving a file patches the running app in ~1 s (render code,
-# layout, styles). Changing struct fields or `main` needs a rebuild: press `r` in the dx window.
-# Needs dx at GPUI's subsecond version: cargo install dioxus-cli --version 0.7.10 --locked
-# dx runs Space from target/dx, so SPACE_TARGET_DIR points plugins at the workspace build.
-hot dir=project: build
-    SPACE_TARGET_DIR={{project}}/target/debug dx serve --hot-patch -p space-app --bin Space --features hot --macos --args="{{dir}}"
-
-# Hot reload on the component gallery
-hot-gallery:
-    SPACE_TARGET_DIR={{project}}/target/debug dx serve --hot-patch -p space-app --bin Space --features hot --macos --args=--gallery
-
-# Launch and send a prompt in the first thread (billed when using pi-agent)
-demo prompt="": build
-    SPACE_AUTOPROMPT="{{prompt}}" cargo run -p space-app -- {{project}}
-
-# Dev: component gallery (tokens, every component state, animation clock controls)
-gallery:
-    cargo build --workspace
-    scripts/bundle.sh debug >/dev/null
-    ./target/debug/Space.app/Contents/MacOS/Space --gallery
-
-# Dev: boot the real app into a scripted state (stub agent); `just scenario name=list`
-scenario name="many-threads":
-    cargo build --workspace
-    scripts/bundle.sh debug >/dev/null
-    ./target/debug/Space.app/Contents/MacOS/Space --scenario {{name}} {{project}}
-
-# Release build without dev tooling (no gallery, scenarios or clock controls)
+# Without dev tooling (no gallery, scenarios, clock controls or hot reload): for shipping and for
+# judging real performance, not for running daily
+# Release build: target/release/Space.app
 release:
     cargo build --release -p space-app --no-default-features
     scripts/bundle.sh release
