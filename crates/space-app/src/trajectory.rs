@@ -32,6 +32,8 @@ pub(crate) struct TrajectoryState {
     /// Ids of the rows matching the search (`None`: no search).
     pub matches: Option<Rc<HashSet<String>>>,
     loading: bool,
+    /// It changed while a load was in flight: load again when that one lands.
+    again: bool,
 }
 
 impl TrajectoryState {
@@ -47,6 +49,7 @@ impl TrajectoryState {
             range: None,
             matches: None,
             loading: false,
+            again: false,
         }
     }
 }
@@ -117,13 +120,13 @@ impl SpaceApp {
         self.show_tab(tab, window, cx);
     }
 
-    /// The shown thread's state is for the selected thread (loading it when it isn't yet).
+    /// The shown state is the selected thread's, and up to date: the tab only follows changes
+    /// while it's shown, so turns sent while Chat was shown are read now.
     pub(crate) fn ensure_trajectory(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.current().map(|t| t.id.clone()) else { return };
-        if self.trajectories.state.as_ref().is_some_and(|s| s.thread == id) {
-            return;
+        if !self.trajectories.state.as_ref().is_some_and(|s| s.thread == id) {
+            self.trajectories.state = Some(TrajectoryState::new(id));
         }
-        self.trajectories.state = Some(TrajectoryState::new(id));
         self.reload_trajectory(cx);
     }
 
@@ -131,9 +134,11 @@ impl SpaceApp {
     pub(crate) fn reload_trajectory(&mut self, cx: &mut Context<Self>) {
         let Some(state) = self.trajectories.state.as_mut() else { return };
         if state.loading {
+            state.again = true;
             return;
         }
         state.loading = true;
+        state.again = false;
         let read = TrajectoryRead {
             thread_id: state.thread.clone(),
             before: None,
@@ -146,6 +151,10 @@ impl SpaceApp {
             let _ = this.update(cx, |this, cx| {
                 let Some(state) = this.trajectories.state.as_mut().filter(|s| s.thread == read.thread_id) else { return };
                 state.loading = false;
+                if state.again {
+                    this.reload_trajectory(cx);
+                    return;
+                }
                 match page {
                     Ok(page) => {
                         this.trajectories.stats.insert(read.thread_id.clone(), page.stats.clone());
@@ -198,9 +207,6 @@ impl SpaceApp {
         // The tab was opened before the plugin was up (or for another thread).
         if self.view_tab() == ViewTab::Trajectory && self.current().is_some_and(|t| t.id == thread_id) {
             self.ensure_trajectory(cx);
-        }
-        if self.trajectories.state.as_ref().is_some_and(|s| s.thread == thread_id) && self.view_tab() == ViewTab::Trajectory {
-            self.reload_trajectory(cx);
             return;
         }
         if self.current().is_some_and(|t| t.id == thread_id) {
