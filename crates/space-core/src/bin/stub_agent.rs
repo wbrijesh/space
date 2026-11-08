@@ -506,7 +506,10 @@ async fn run_script(
                     .map(|o| vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(o)))])
                     .unwrap_or_default();
                 if !tools.contains(&id) {
-                    trace.tool_start(&id, &title, serde_json::json!({ "title": title }));
+                    // "bash: cargo test" → tool `bash` with that command (or path, for file tools).
+                    let (name, detail) = title.split_once(": ").unwrap_or((title.as_str(), ""));
+                    let field = if kind == "execute" { "command" } else { "path" };
+                    trace.tool_start(&id, &name.to_lowercase(), serde_json::json!({ field: detail }));
                 }
                 if matches!(status, ToolCallStatus::Completed | ToolCallStatus::Failed) {
                     trace.tool_end(&id, output.as_deref().unwrap_or_default(), status == ToolCallStatus::Failed);

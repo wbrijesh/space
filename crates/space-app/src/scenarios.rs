@@ -28,6 +28,8 @@ pub struct Scenario {
     /// Also run the real permissions plugin (its Keychain items use a scenario-only prefix, so
     /// no decision-model key is set).
     pub permissions: bool,
+    /// Also run the real trajectory plugin, and open the selected thread's Trajectory tab.
+    pub trajectory: bool,
     /// With `permissions`: a decision-model key is set (in a scenario-only Keychain item) but
     /// OpenAI can't be reached, so Workspace Write and Full access calls are paused.
     pub model_offline: bool,
@@ -224,6 +226,13 @@ pub fn all() -> Vec<Scenario> {
                 explain_thread(),
             ],
             select: Some(8),
+            ..Default::default()
+        },
+        Scenario {
+            name: "trajectory",
+            description: "Two finished threads; the selected one shows its Trajectory tab.",
+            threads: vec![explain_thread(), done_thread("Fix the failing test in space-core", "Fixed: the test expected the old message.")],
+            trajectory: true,
             ..Default::default()
         },
         Scenario {
@@ -425,6 +434,14 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
     std::fs::write(plugin.join("space-plugin.toml"), manifest)?;
     let permissions = root.join("permissions");
     let _ = std::fs::remove_dir_all(&permissions);
+    let trajectory = root.join("trajectory");
+    let _ = std::fs::remove_dir_all(&trajectory);
+    if scenario.trajectory {
+        let repo = space_core::discovery::find_repo_root(&Path::new(env!("CARGO_MANIFEST_DIR")).join("x"))
+            .context("the trajectory plugin lives in the repo; run scenarios from a checkout")?;
+        std::fs::create_dir_all(&trajectory)?;
+        std::fs::copy(repo.join("plugins/trajectory/space-plugin.toml"), trajectory.join("space-plugin.toml"))?;
+    }
     if scenario.permissions {
         let repo = space_core::discovery::find_repo_root(&Path::new(env!("CARGO_MANIFEST_DIR")).join("x"))
             .context("the permissions plugin lives in the repo; run scenarios from a checkout")?;
@@ -481,6 +498,7 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         // Never the user's settings file.
         settings_path: Some(settings_path),
         open_settings: scenario.settings_page,
+        open_trajectory: scenario.trajectory,
     };
     Ok((host, options))
 }

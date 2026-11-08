@@ -18,6 +18,7 @@ use space_ui::components::settings::{
 use space_ui::components::follow_scroll::FollowScrollArea;
 use space_ui::components::images::{Pic, ViewerHandlers, viewer};
 use space_ui::components::message_actions::ActionHandlers;
+use space_ui::components::trajectory::{TrajectoryHandlers, TrajectoryView, ViewTab, stats_line, view_tabs};
 use space_ui::components::shell::{
     banner, confirm_card, empty_heading, problem_card, sidebar_column,
 };
@@ -30,7 +31,7 @@ use space_ui::ClickHandler;
 
 use crate::app::{
     CloseSettings, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, ScrollToBottom, SpaceApp,
-    ToggleSidebar,
+    ToggleSidebar, ToggleTrajectory,
 };
 use crate::settings::SaveKind;
 use crate::threads::Thread;
@@ -89,6 +90,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .track_focus(&app.focus)
         .on_action(cx.listener(|this, _: &NewThread, window, cx| this.new_thread(None, window, cx)))
         .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
+        .on_action(cx.listener(|this, _: &ToggleTrajectory, window, cx| this.toggle_trajectory(window, cx)))
         .on_action(cx.listener(|this, _: &GoBack, window, cx| this.go_back(window, cx)))
         .on_action(cx.listener(|this, _: &GoForward, window, cx| this.go_forward(window, cx)))
         .on_action(cx.listener(|this, _: &FocusComposer, window, cx| this.focus_composer(window, cx)))
@@ -210,6 +212,35 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
             .into_any_element();
     }
 
+    // The tabs, the stats line under the composer: only with a trajectory plugin.
+    let has_trajectory = app.host.has_trajectory();
+    let tabs = has_trajectory.then(|| {
+        let this = cx.entity().downgrade();
+        div()
+            .flex_none()
+            .px_4()
+            .child(view_tabs(app.view_tab(), Rc::new(move |tab, w, cx| {
+                let _ = this.update(cx, |this, cx| this.show_tab(tab, w, cx));
+            })))
+    });
+    let stats = has_trajectory
+        .then(|| app.trajectories.stats.get(&thread.id).filter(|s| s.steps > 0).map(stats_line))
+        .flatten();
+    let bottom = div()
+        .flex_none()
+        .w_full()
+        .flex()
+        .justify_center()
+        .px_6()
+        .pb_4()
+        .child(column().gap_2().children(notices).child(composer).children(stats));
+
+    if app.view_tab() == ViewTab::Trajectory
+        && let Some(view) = trajectory_view(app, cx)
+    {
+        return div().flex_1().min_h_0().flex().flex_col().children(tabs).child(view).child(bottom).into_any_element();
+    }
+
     let this = cx.entity().downgrade();
     let (this2, this3) = (this.clone(), this.clone());
     let items = transcript_items(TranscriptView {
@@ -259,23 +290,72 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
             let _ = following;
         });
 
-    div()
-        .flex_1()
-        .min_h_0()
-        .flex()
-        .flex_col()
-        .child(transcript)
-        .child(
-            div()
-                .flex_none()
-                .w_full()
-                .flex()
-                .justify_center()
-                .px_6()
-                .pb_4()
-                .child(column().gap_2().children(notices).child(composer)),
-        )
-        .into_any_element()
+    div().flex_1().min_h_0().flex().flex_col().children(tabs).child(transcript).child(bottom).into_any_element()
+}
+
+/// The Trajectory tab's view of the selected thread (`None` until its state exists).
+fn trajectory_view(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
+    let state = app.trajectories.state.as_ref()?;
+    let this = cx.entity().downgrade();
+    let h = TrajectoryHandlers {
+        on_select: {
+            let this = this.clone();
+            Rc::new(move |id, _, cx| {
+                let _ = this.update(cx, |this, cx| this.select_trajectory_row(id, cx));
+            })
+        },
+        on_close_inspector: handler(cx, |this, _, cx| this.close_trajectory_inspector(cx)),
+        on_toggle_fold: {
+            let this = this.clone();
+            Rc::new(move |key, _, cx| {
+                let _ = this.update(cx, |this, cx| this.toggle_trajectory_fold(key, cx));
+            })
+        },
+        on_fold_all: {
+            let this = this.clone();
+            Rc::new(move |scope, _, cx| {
+                let _ = this.update(cx, |this, cx| this.fold_all_trajectory(scope, cx));
+            })
+        },
+        on_duration_mode: {
+            let this = this.clone();
+            Rc::new(move |mode, _, cx| {
+                let _ = this.update(cx, |this, cx| this.set_trajectory_mode(mode, cx));
+            })
+        },
+        on_range: {
+            let this = this.clone();
+            Rc::new(move |range, _, cx| {
+                let _ = this.update(cx, |this, cx| this.set_trajectory_range(range, cx));
+            })
+        },
+        on_load_earlier: handler(cx, |this, _, cx| this.load_earlier_trajectory(cx)),
+        on_copy: Rc::new(|text, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()))),
+        on_open_image: {
+            let this = this.clone();
+            Rc::new(move |pics, ix, w, cx| {
+                let _ = this.update(cx, |this, cx| this.open_trajectory_images(pics, ix, w, cx));
+            })
+        },
+    };
+    Some(
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(
+                TrajectoryView::new(state.page.clone(), &state.scroll)
+                    .selected(state.selected.clone(), state.detail.clone())
+                    .folds(state.folds.clone())
+                    .search(&app.trajectories.search, state.matches.clone())
+                    .mode(state.mode)
+                    .range(state.range)
+                    .now(crate::app::now_ms())
+                    .handlers(h),
+            )
+            .into_any_element(),
+    )
 }
 
 /// The Settings page, centered in a scrolling column like the transcript.

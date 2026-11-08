@@ -30,6 +30,7 @@ use space_ui::components::settings::FieldCheck;
 pub use space_ui::actions::{
     CloseSettings, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, Quit, ScrollToBottom,
     ToggleSidebar,
+    ToggleTrajectory,
 };
 use space_ui::assets::SpaceAssets;
 use space_ui::components::composer;
@@ -62,6 +63,8 @@ pub struct Options {
     pub settings_path: Option<PathBuf>,
     /// Open on the Settings page.
     pub open_settings: bool,
+    /// Dev scenarios: open the selected thread's Trajectory tab.
+    pub open_trajectory: bool,
 }
 
 /// A thread opened at launch: an optional prompt sent once its session exists and an
@@ -127,6 +130,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-l", FocusComposer, None),
             KeyBinding::new("cmd-,", OpenSettings, None),
             KeyBinding::new("cmd-shift-r", CyclePermissionMode, None),
+            KeyBinding::new("cmd-shift-t", ToggleTrajectory, None),
             // ⌘↓ scrolls the transcript to the bottom, also from the composer (where the
             // textarea would move the caret to the end) unless its text spans several lines.
             // Not context-free: a `None` binding counts as the deepest match and would beat
@@ -161,6 +165,8 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
                     MenuItem::separator(),
                     MenuItem::action("Back", GoBack),
                     MenuItem::action("Forward", GoForward),
+                    MenuItem::separator(),
+                    MenuItem::action("Trajectory", ToggleTrajectory),
                     MenuItem::separator(),
                     MenuItem::action("Scroll to Bottom", ScrollToBottom),
                     MenuItem::action("Focus Composer", FocusComposer),
@@ -245,6 +251,8 @@ pub struct SpaceApp {
     /// The image viewer: a message's pictures and the one shown.
     pub(crate) viewer: Option<(Vec<space_ui::components::images::Pic>, usize)>,
     pub(crate) viewer_focus: FocusHandle,
+    /// The Trajectory tab: which threads show it, the shown one's data, the search field.
+    pub(crate) trajectories: crate::trajectory::Trajectories,
     /// The message row that shows "Copied" for a moment, and the one whose usage panel is open.
     pub(crate) copied: Option<String>,
     pub(crate) usage_open: Option<String>,
@@ -396,6 +404,7 @@ impl SpaceApp {
             forward: Vec::new(),
             session_threads: HashMap::new(),
             orphans: HashMap::new(),
+            trajectories: crate::trajectory::Trajectories::new(window, cx),
             input,
             focus: cx.focus_handle(),
             viewer: None,
@@ -426,6 +435,11 @@ impl SpaceApp {
         this.load_saved_threads(cx);
         this.ensure_agent(cx);
         this.refresh_permission(cx);
+        if options.open_trajectory
+            && let Some(key) = this.selected
+        {
+            this.trajectories.open.insert(key);
+        }
         if options.open_settings {
             this.open_settings(window, cx);
         } else {
@@ -515,7 +529,7 @@ impl SpaceApp {
             }
             HostEvent::OpenUrl { url, .. } => open_url(url),
             // The Trajectory tab isn't wired yet.
-            HostEvent::TrajectoryChanged { .. } => {}
+            HostEvent::TrajectoryChanged { thread_id, .. } => self.trajectory_changed(thread_id, cx),
             HostEvent::Session { session_id, event } => {
                 let Some(&key) = self.session_threads.get(&session_id) else {
                     // Arrived before `new_session` returned; applied once the thread knows its id.
@@ -575,6 +589,7 @@ impl SpaceApp {
             t.unread = 0;
         }
         self.ensure_loaded(key, cx);
+        self.thread_selected_for_trajectory(cx);
         self.transcript_scroll.jump_to_bottom();
         self.focus_composer(window, cx);
         cx.notify();

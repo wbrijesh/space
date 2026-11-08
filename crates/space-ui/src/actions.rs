@@ -5,6 +5,7 @@ gpui::actions!(
     [
         NewThread,
         ToggleSidebar,
+        ToggleTrajectory,
         GoBack,
         GoForward,
         FocusComposer,

@@ -27,6 +27,7 @@ mod persist;
 mod scenarios;
 mod settings;
 mod threads;
+mod trajectory;
 mod view;
 
 use std::path::PathBuf;
@@ -122,6 +123,7 @@ fn main() -> Result<()> {
         notify: std::env::var("SPACE_NOTIFY").map_or(true, |v| v != "0"),
         settings_path: settings::default_path(),
         open_settings: false,
+        open_trajectory: false,
     };
     #[cfg(feature = "dev")]
     if let Some(name) = &args.scenario {

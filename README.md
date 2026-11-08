@@ -122,6 +122,17 @@ lists every plugin and its status; if the agent can't start or exits, the thread
   put while the agent keeps working, with a round ↓ button above the composer. The button, ⌘↓ or
   View ▸ Scroll to Bottom glide back down and follow again (sending a message jumps there too). In a
   composer with several lines of text, ⌘↓ moves the caret to the end instead.
+- **Trajectory** (⌘⇧T, View ▸ Trajectory, or the Chat | Trajectory tabs above a thread; from the
+  bundled trajectory plugin): what went to and came from the model, request by request. A ledger of
+  SYSTEM (the system prompt and tools, again whenever they change), USER, CONTEXT (Space's hidden
+  sections, by plugin), ASSISTANT and TOOL rows, grouped by turn and step; an overview of input,
+  model (time to first token, then decoding) and tool time above it (drag to filter, scroll to
+  zoom, right-drag to pan, Esc clears); search; fold turns or calls; and an inspector per row:
+  prompt, tools and a diff for SYSTEM, options, usage and timing (TTFT, generation, throughput) for
+  a request, input, output and the guard's verdict for a tool. Under the composer: turns, steps,
+  tok/s, tokens and cache hit. pi-agent records it through pi's own extension hooks; traces stay in
+  `~/.space/trajectory/` and go when the thread does. The Claude CLI's own small wrapper around the
+  system prompt isn't visible.
 - **Settings** (⌘, or Space ▸ Settings…): replaces the thread view, sidebar stays. *New threads*: default
   model and thinking level ("Agent default" leaves the agent's choice; existing threads don't change).
   Then each plugin's settings (*Alerts*: notify when an agent finishes, play a sound; *Titles*: the title

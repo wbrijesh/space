@@ -295,10 +295,8 @@ fn row_line(row: &TrajectoryRow, first_of_turn: bool, selected: bool, active_tur
     let id: SharedString = row.id.clone().into();
     let (on_select, on_fold) = (h.on_select.clone(), h.on_toggle_fold.clone());
     let fold = fold_key_of(row);
-    let preview = match (&row.label, row.kind) {
-        (Some(label), RecordKind::Tool) => format!("{label} · {}", row.preview),
-        _ => row.preview.clone(),
-    };
+    // A tool's preview already starts with its name ("bash · cargo test → ok").
+    let preview = row.preview.clone();
     let meta = row_meta(row, now_ms);
     line_base(ElementId::Name(format!("ledger-{}", row.id).into()), selected)
         .child(gutter(row.turn, first_of_turn, active_turn, selected))
