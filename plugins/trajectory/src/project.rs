@@ -89,6 +89,9 @@ impl Projection {
             let mut calls: HashMap<String, usize> = HashMap::new();
             let mut guards: HashMap<String, (GuardDetail, (usize, usize))> = HashMap::new();
             let mut turn = turns_seen;
+            // The first input row (your message, context) since the last request: a header that
+            // arrives after them (the agent sends it with the request) goes before them.
+            let mut inputs_from: Option<usize> = None;
             for (ei, event) in session.events.iter().enumerate() {
                 let id = format!("{}:{ei}", session.id);
                 let at = (si, ei);
@@ -123,8 +126,18 @@ impl Projection {
                         let hi = p.headers.len() - 1;
                         headers.insert(*header_id, hi);
                         let haystack = format!("{system_prompt}\n{}", serde_json::to_string(tools).unwrap_or_default());
-                        let row = TrajectoryRow { id, kind: RecordKind::System, turn, preview, label, ..Default::default() };
-                        p.push(row, RowData::System { header: hi }, haystack, vec![at]);
+                        match inputs_from {
+                            Some(ix) => {
+                                let turn = p.rows[ix].turn;
+                                let row = TrajectoryRow { id, kind: RecordKind::System, turn, preview, label, ..Default::default() };
+                                p.insert(ix, row, RowData::System { header: hi }, haystack, vec![at]);
+                                inputs_from = Some(ix + 1);
+                            }
+                            None => {
+                                let row = TrajectoryRow { id, kind: RecordKind::System, turn, preview, label, ..Default::default() };
+                                p.push(row, RowData::System { header: hi }, haystack, vec![at]);
+                            }
+                        }
                     }
                     TraceEvent::Prompt { at: when, text, files, images } => {
                         let row = TrajectoryRow {
@@ -138,9 +151,13 @@ impl Projection {
                             ..Default::default()
                         };
                         let haystack = format!("{text}\n{}\n{}", files.join("\n"), images.join("\n"));
+                        inputs_from.get_or_insert(p.rows.len());
                         p.push(row, RowData::User { text: text.clone(), images: images.clone() }, haystack, vec![at]);
                     }
                     TraceEvent::Context { at: when, sections } => {
+                        if !sections.is_empty() {
+                            inputs_from.get_or_insert(p.rows.len());
+                        }
                         for (i, section) in sections.iter().enumerate() {
                             let row = TrajectoryRow {
                                 id: format!("{id}.{i}"),
@@ -156,6 +173,7 @@ impl Projection {
                         }
                     }
                     TraceEvent::Request { request, step, at: when, header_id, messages, rewritten, .. } => {
+                        inputs_from = None;
                         let number = p.requests.len() as u32 + 1;
                         let summary = RequestSummary {
                             number,
@@ -333,6 +351,14 @@ impl Projection {
         self.data.push(data);
         self.haystacks.push(haystack);
         self.raw.push(raw);
+    }
+
+    fn insert(&mut self, ix: usize, row: TrajectoryRow, data: RowData, haystack: String, raw: Vec<(usize, usize)>) {
+        let haystack = format!("{} {}\n{haystack}", row.preview, row.label.clone().unwrap_or_default()).to_lowercase();
+        self.rows.insert(ix, row);
+        self.data.insert(ix, data);
+        self.haystacks.insert(ix, haystack);
+        self.raw.insert(ix, raw);
     }
 
     fn assistant_row(&self, request: usize) -> Option<usize> {
@@ -604,15 +630,16 @@ mod tests {
         assert_eq!(
             kinds,
             [
+                // The header goes before the inputs of the request that first used it.
+                (System, 1, None, done),
                 (User, 1, None, done),
                 (Context, 1, None, done),
-                (System, 1, None, done),
                 (Assistant, 1, Some(1), done),
                 (Tool, 1, Some(1), done),
                 (Assistant, 1, Some(2), done),
             ]
         );
-        assert_eq!((p.rows[0].images, p.rows[1].label.as_deref(), p.rows[2].preview.as_str()), (1, Some("permissions"), "Initial system prompt"));
+        assert_eq!((p.rows[1].images, p.rows[2].label.as_deref(), p.rows[0].preview.as_str()), (1, Some("permissions"), "Initial system prompt"));
         assert_eq!(p.rows[3].preview, "Let me run the tests.");
         assert_eq!((p.rows[3].first_token_ms, p.rows[3].tokens), (Some(1500), Some(20)));
         let tool = &p.rows[4];
