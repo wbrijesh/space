@@ -16,6 +16,7 @@ import claudeCli from "@pi-plugins/claude-cli";
 import type { AgentConfig } from "./env.js";
 import { log } from "./env.js";
 import { HostBridge, type HostLink } from "./host.js";
+import { TraceRecorder, type TraceSink } from "./trace.js";
 
 export interface PiSession {
 	runtime: AgentSessionRuntime;
@@ -25,6 +26,8 @@ export interface PiSession {
 	thinkingLevel: string;
 	/** The host's tool pipeline, sandbox and context for this session. */
 	host: HostBridge;
+	/** Records what happens around each model request (`_space/trace`). */
+	trace: TraceRecorder;
 }
 
 export interface PiSessionOptions {
@@ -37,10 +40,13 @@ export interface PiSessionOptions {
 	load?: boolean;
 	/** Tests: register extra providers (e.g. pi-ai's faux provider) before the model is looked up. */
 	registerProviders?: (runtime: ModelRuntime) => void;
+	/** Where trace batches go (none: they're dropped). */
+	traceSink?: TraceSink;
 }
 
 export async function createPiSession(cwd: string, config: AgentConfig, options: PiSessionOptions): Promise<PiSession> {
 	const bridge = new HostBridge(options.host, options.sessionId);
+	const trace = new TraceRecorder(options.sessionId, options.traceSink ?? (async () => {}), options.load ?? false);
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
 		// No API keys: in-memory credentials, no models.json, in-memory settings. The only
 		// provider we use is claude-cli, which signs requests through the `claude` CLI.
@@ -68,6 +74,8 @@ export async function createPiSession(cwd: string, config: AgentConfig, options:
 					{ name: "claude-cli", factory: claudeCli },
 					// The host's tool pipeline and hidden context sections (see host.ts).
 					{ name: "space-host", factory: bridge.extension(), hidden: true },
+					// What each request sent and got back, for Space's Trajectory view (see trace.ts).
+					{ name: "space-trace", factory: trace.extension(), hidden: true },
 				],
 				// Project context files (AGENTS.md / CLAUDE.md walking up from cwd) still load.
 			},
@@ -120,5 +128,6 @@ export async function createPiSession(cwd: string, config: AgentConfig, options:
 		model: model?.id ?? config.modelId,
 		thinkingLevel: session.thinkingLevel,
 		host: bridge,
+		trace,
 	};
 }

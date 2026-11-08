@@ -19,6 +19,8 @@ import {
 	PROTOCOL_VERSION,
 	PROTOCOL_VERSION_META_KEY,
 	STATUS_METHOD,
+	TRACE_METHOD,
+	type TraceBatch,
 	USAGE_META_KEY,
 } from "./generated/protocol.js";
 import { contextFromMeta, type HostLink } from "./host.js";
@@ -60,6 +62,9 @@ const host: HostLink = {
 	confine: (params) => connection.client.request<ConfineResult>(CONFINE_METHOD, params),
 };
 
+/** Trace batches for Space's Trajectory view (`_space/trace`). */
+const traceSink = (batch: TraceBatch): Promise<void> => connection.client.notify(TRACE_METHOD, batch);
+
 /** Readable message for a failed pi turn, mapped to a JSON-RPC error. */
 function turnError(message: string): acp.RequestError {
 	return new acp.RequestError(-32603, message);
@@ -83,7 +88,7 @@ async function openSession(
 	if (load && !dataDir) throw acp.RequestError.invalidParams(undefined, "No saved session to load (no data folder)");
 	let pi: PiSession;
 	try {
-		pi = await createPiSession(cwd, config, { sessionId, host, dataDir, load });
+		pi = await createPiSession(cwd, config, { sessionId, host, dataDir, load, traceSink });
 	} catch (error) {
 		log(`session/${load ? "load" : "new"} failed:`, error);
 		throw turnError(`Failed to start pi session: ${error instanceof Error ? error.message : String(error)}`);
@@ -185,6 +190,7 @@ const app = acp
 					break;
 				case "auto_retry_start":
 					log(`retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms: ${event.errorMessage}`);
+					state.pi.trace.retry(event.attempt, event.maxAttempts, event.delayMs, event.errorMessage);
 					break;
 			}
 		});
@@ -195,6 +201,11 @@ const app = acp
 		const input = promptInput(params.prompt, session.model?.input?.includes("image") ?? true);
 		let failure: unknown;
 		const firstMessage = session.messages.length;
+		const { trace } = state.pi;
+		for (const block of params.prompt) {
+			if (block.type === "image" && block.uri?.startsWith("file://")) trace.noteImage(block.data, decodeURIComponent(new URL(block.uri).pathname));
+		}
+		trace.turnStart();
 		try {
 			await session.prompt(input.text, input.images.length ? { images: input.images } : undefined);
 		} catch (error) {
@@ -212,23 +223,21 @@ const app = acp
 		// What the turn's requests used, for the reply's footer.
 		const usage = turnUsage(session.messages.slice(firstMessage));
 		const done = (stopReason: acp.StopReason) => ({ stopReason, ...(usage ? { _meta: { [USAGE_META_KEY]: usage } } : {}) });
-		if (turn.cancelled) return done("cancelled");
-		if (failure) {
-			log("prompt failed:", failure);
-			throw turnError(failure instanceof Error ? failure.message : String(failure));
-		}
 		const last = lastAssistant(session);
-		switch (last?.stopReason) {
-			case "aborted":
-				return done("cancelled");
-			case "error":
-				log(`turn ended with error: ${last.errorMessage}`);
-				throw turnError(last.errorMessage || "The model request failed");
-			case "length":
-				return done("max_tokens");
-			default:
-				return done("end_turn");
-		}
+		let outcome: acp.StopReason | { error: string };
+		if (turn.cancelled) outcome = "cancelled";
+		else if (failure) {
+			log("prompt failed:", failure);
+			outcome = { error: failure instanceof Error ? failure.message : String(failure) };
+		} else if (last?.stopReason === "aborted") outcome = "cancelled";
+		else if (last?.stopReason === "error") {
+			log(`turn ended with error: ${last.errorMessage}`);
+			outcome = { error: last.errorMessage || "The model request failed" };
+		} else outcome = last?.stopReason === "length" ? "max_tokens" : "end_turn";
+		// The trace reaches Space before the turn's answer does.
+		await trace.turnEnd(typeof outcome === "string" ? outcome : "error");
+		if (typeof outcome !== "string") throw turnError(outcome.error);
+		return done(outcome);
 	})
 	.onRequest(CONFIGURE_METHOD, parseConfigureParams, async ({ params }) => {
 		const state = sessions.get(params.sessionId);

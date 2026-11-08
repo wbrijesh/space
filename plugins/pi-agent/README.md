@@ -62,6 +62,31 @@ An inline pi extension and a replacement bash tool connect pi to it:
 `pnpm test-host` checks all of this, and that a session kept in a folder loads again with its messages, on a real pi session with no model requests: pi-ai's faux provider plays
 the model (including tool calls) and a fake host answers the requests.
 
+### Traces (`src/trace.ts`)
+
+For Space's Trajectory view, each session records what happened around every model request and sends
+it as `_space/trace` notifications ([`TraceBatch`](src/generated/protocol.ts)). A hidden pi extension
+reads pi's public hooks; nothing in pi or claude-cli is changed, and the request goes out exactly as pi
+built it.
+
+- `before_provider_request`: the payload as sent. A `header` (system prompt, tools, options) when it
+  differs from the session's previous one, then a `request` with the turn, step and request numbers and
+  the messages added since the previous request (all of them, `rewritten`, when the history changed).
+  Tool results in messages become `{"toolResultRef": <call id>}` and images their sha256, type and path.
+- `provider_stream_event`: `firstToken` and `chunks` (arrival times of text, thinking and tool-input
+  chunks, as a first time and gaps).
+- `message_end`: `response` with usage, duration, stop reason, response id, model, text and thinking.
+- `tool_execution_start`/`_end`: the call's full input and output (cut at 256 KB, `truncated`).
+- The prompt handler adds `turnStart`/`turnEnd` and `retry` (a retried request keeps its number).
+
+Events go out every 100 ms while some are pending and at once at request, response, tool and turn
+boundaries; the turn's answer waits until its trace was sent. Times are wall-clock ms measured with
+`performance.now()`. Requests outside a turn (title completions) aren't recorded, and recording never
+breaks a turn. `pnpm test` covers the helpers and the recorder fed hook events by hand.
+
+Not visible from here: what the Claude CLI adds to the request (a billing header and identity line)
+and the beta headers. A request's start includes starting the CLI when no spare process is waiting.
+
 ### Isolation from your pi setup
 
 - `PI_CODING_AGENT_DIR` is set to a private directory, `~/.space/pi-agent` by default. pi writes nothing to
@@ -89,6 +114,7 @@ pnpm typecheck    # src + scripts
 pnpm start        # node dist/main.js (speaks ACP on stdio)
 pnpm smoke        # build, then run the end-to-end ACP client test (bills a few tiny requests)
 pnpm test-host    # the host pipeline on a real pi session: preExecute, confine, context (no model requests)
+pnpm test         # node --test: the trace recorder (no model requests)
 SMOKE_NO_PROMPTS=1 node scripts/smoke.ts   # only handshake/status/configure checks, no model requests
 ```
 

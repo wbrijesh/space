@@ -13,7 +13,8 @@
     "typecheck": "tsc -p tsconfig.check.json",
     "start": "node dist/main.js",
     "smoke": "pnpm run build && node scripts/smoke.ts",
-    "test-host": "pnpm run build && node scripts/host-test.ts"
+    "test-host": "pnpm run build && node scripts/host-test.ts",
+    "test": "pnpm run build && node --test dist/*.test.js"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.4.0",

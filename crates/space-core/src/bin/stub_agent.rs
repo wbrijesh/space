@@ -12,6 +12,11 @@
 //! `SPACE_STUB_NO_IMAGES=1` makes it say it takes no images. A finished turn reports fixed usage
 //! (`_meta["space/usage"]`).
 //!
+//! Every turn also sends a trace (`_space/trace`), like a real agent: the header before the
+//! session's first request, each request with its new messages, first token, chunk timing,
+//! responses with usage, tool calls, and the turn's end. The built-in turn makes two requests
+//! (before and after its tool); a scripted turn makes one.
+//!
 //! `_space/complete` answers `"Title by <model>."` (quoted, as models sometimes do), with the
 //! requested model or else the session's; a prompt with `titlefail` fails and one with
 //! `titlehang` never answers.
@@ -39,7 +44,8 @@ use std::time::Duration;
 use space_core::stub_script::{SCRIPT_ENV, Step, StubScript};
 use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY, USAGE_META_KEY};
 use space_protocol::{Complete, CompleteResult, Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, SpaceStatus, Verdict};
-use space_protocol::acp::{self, Agent, ByteStreams, Client, Responder};
+use space_protocol::acp::{self, Agent, ByteStreams, Client, Responder, UntypedMessage};
+use space_protocol::trace::{ChunkKind, HeaderReason, RequestOptions, TRACE_METHOD, ToolDef, TraceBatch, TraceEvent};
 use space_protocol::acp_schema::*;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
@@ -60,12 +66,24 @@ struct StubSession {
     context_tokens: u64,
     /// Where the session's prompts are kept (in its data folder).
     history: Option<std::path::PathBuf>,
+    /// Trace numbering: turns and requests so far, and whether the header went out.
+    turns: u32,
+    requests: u32,
+    header_sent: bool,
 }
 
 impl StubSession {
     fn new(meta: Option<&Meta>) -> Self {
         let dir = meta.and_then(|m| m.get(DATA_DIR_META_KEY)).and_then(|d| d.as_str()).map(std::path::PathBuf::from);
-        Self { model: MODELS[0].0.into(), thinking: "low".into(), context_tokens: 0, history: dir.map(|d| d.join("history.txt")) }
+        Self {
+            model: MODELS[0].0.into(),
+            thinking: "low".into(),
+            context_tokens: 0,
+            history: dir.map(|d| d.join("history.txt")),
+            turns: 0,
+            requests: 0,
+            header_sent: false,
+        }
     }
 }
 
@@ -262,8 +280,11 @@ async fn run_turn(
     }
     if let Some(turn) = state.script.turn(&text) {
         let steps = turn.steps.clone();
-        return run_script(cx, state, sid, steps, responder).await;
+        return run_script(cx, state, sid, &text, steps, responder).await;
     }
+    let mut trace = Tracer::start(&state, &sid);
+    trace.request(vec![serde_json::json!({"role": "user", "content": [{"type": "text", "text": text}]})]);
+    trace.send(&cx)?;
     let text = text.to_lowercase();
     let send = |update: SessionUpdate| cx.send_notification(SessionNotification::new(sid.clone(), update));
     let chunk = |s: &str| ContentChunk::new(ContentBlock::Text(TextContent::new(s)));
@@ -286,7 +307,9 @@ async fn run_turn(
         send(SessionUpdate::AgentMessageChunk(chunk(&format!("Saw {} image{s} ({}). ", images.len(), images.join(", ")))))?;
     }
     send(SessionUpdate::AgentThoughtChunk(chunk("Thinking about ")))?;
+    trace.chunk(ChunkKind::Thinking);
     send(SessionUpdate::AgentThoughtChunk(chunk("the request.")))?;
+    trace.chunk(ChunkKind::Thinking);
 
     if text.contains("crash") {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -295,6 +318,9 @@ async fn run_turn(
     }
 
     let tool_id = "tool-1";
+    trace.respond("toolUse", "", "Thinking about the request.", Some(FIRST_USAGE));
+    trace.tool_start(tool_id, "bash", serde_json::json!({"command": "echo stub"}));
+    trace.send(&cx)?;
     send(SessionUpdate::ToolCall(
         ToolCall::new(tool_id, "bash: echo stub")
             .kind(ToolKind::Execute)
@@ -333,6 +359,7 @@ async fn run_turn(
     });
     if let Some(reason) = blocked {
         eprintln!("space-stub-agent: tool blocked: {reason}");
+        trace.tool_end(tool_id, &format!("blocked: {reason}"), true);
         send(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
             tool_id,
             ToolCallUpdateFields::new()
@@ -368,6 +395,7 @@ async fn run_turn(
             ToolCallUpdateFields::new().status(ToolCallStatus::InProgress),
         )))?;
         let output = format!("stub\nargv: {argv}");
+        trace.tool_end(tool_id, &output, false);
         send(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
             tool_id,
             ToolCallUpdateFields::new()
@@ -375,6 +403,7 @@ async fn run_turn(
                 .content(vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(output)))]),
         )))?;
     } else if !argv.is_empty() {
+        trace.tool_end(tool_id, "rejected by user", true);
         send(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
             tool_id,
             ToolCallUpdateFields::new()
@@ -395,6 +424,11 @@ async fn run_turn(
             eprintln!("space-stub-agent: can't keep the session in {}: {e}", h.display());
         }
     }
+    trace.request(vec![
+        serde_json::json!({"role": "assistant", "content": [{"type": "tool_use", "id": tool_id, "name": "bash", "input": {"command": "echo stub"}}]}),
+        serde_json::json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_id, "content": {"toolResultRef": tool_id}}]}),
+    ]);
+    trace.send(&cx)?;
     let words: Vec<String> = if text.contains("recall") {
         vec![format!("I remember {earlier} earlier prompt(s).")]
     } else if text.contains("slow") {
@@ -402,11 +436,14 @@ async fn run_turn(
     } else {
         ["Hello ", "from ", "the ", "stub ", "agent."].map(String::from).to_vec()
     };
+    let reply: String = words.concat();
     for w in words {
         if state.cancelled.lock().unwrap().contains(&*sid.0) {
+            trace.cancelled(&cx)?;
             return responder.respond(PromptResponse::new(StopReason::Cancelled));
         }
         send(SessionUpdate::AgentMessageChunk(chunk(&w)))?;
+        trace.chunk(ChunkKind::Text);
         let delay = if text.contains("slow") { 100 } else { 10 };
         tokio::time::sleep(Duration::from_millis(delay)).await;
     }
@@ -414,6 +451,9 @@ async fn run_turn(
         s.context_tokens += 1800 + text.len() as u64 * 4;
     }
     cx.send_notification(state.status(&sid.0))?;
+    trace.respond("stop", &reply, "", Some(SECOND_USAGE));
+    trace.end_turn("end_turn");
+    trace.send(&cx)?;
     responder.respond(PromptResponse::new(StopReason::EndTurn).meta(usage_meta()))
 }
 
@@ -422,6 +462,7 @@ async fn run_script(
     cx: Conn,
     state: Arc<State>,
     sid: SessionId,
+    prompt: &str,
     steps: Vec<Step>,
     responder: Responder<PromptResponse, acp::V1>,
 ) -> acp::Result<()> {
@@ -429,9 +470,14 @@ async fn run_script(
     let chunk = |s: &str| ContentChunk::new(ContentBlock::Text(TextContent::new(s)));
     let cancelled = || state.cancelled.lock().unwrap().contains(&*sid.0);
     let mut tools: HashSet<String> = HashSet::new();
+    let mut trace = Tracer::start(&state, &sid);
+    trace.request(vec![serde_json::json!({"role": "user", "content": [{"type": "text", "text": prompt}]})]);
+    trace.send(&cx)?;
+    let (mut reply, mut thought) = (String::new(), String::new());
     cx.send_notification(state.status(&sid.0))?;
     for step in steps {
         if cancelled() {
+            trace.cancelled(&cx)?;
             return responder.respond(PromptResponse::new(StopReason::Cancelled));
         }
         match step {
@@ -439,21 +485,33 @@ async fn run_script(
             Step::Thought { text } => {
                 for w in text.split_inclusive(' ') {
                     send(SessionUpdate::AgentThoughtChunk(chunk(w)))?;
+                    trace.chunk(ChunkKind::Thinking);
                     tokio::time::sleep(Duration::from_millis(8)).await;
                 }
+                thought.push_str(&text);
             }
             Step::Text { text } => {
                 for w in text.split_inclusive(' ') {
                     send(SessionUpdate::AgentMessageChunk(chunk(w)))?;
+                    trace.chunk(ChunkKind::Text);
                     tokio::time::sleep(Duration::from_millis(8)).await;
                 }
+                reply.push_str(&text);
             }
             Step::Tool { id, title, kind, status, output } => {
                 let status: ToolCallStatus =
                     serde_json::from_value(serde_json::json!(status)).unwrap_or(ToolCallStatus::Pending);
                 let content: Vec<ToolCallContent> = output
+                    .clone()
                     .map(|o| vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(o)))])
                     .unwrap_or_default();
+                if !tools.contains(&id) {
+                    trace.tool_start(&id, &title, serde_json::json!({ "title": title }));
+                }
+                if matches!(status, ToolCallStatus::Completed | ToolCallStatus::Failed) {
+                    trace.tool_end(&id, output.as_deref().unwrap_or_default(), status == ToolCallStatus::Failed);
+                }
+                trace.send(&cx)?;
                 if tools.insert(id.clone()) {
                     let kind: ToolKind = serde_json::from_value(serde_json::json!(kind)).unwrap_or(ToolKind::Other);
                     send(SessionUpdate::ToolCall(ToolCall::new(id, title).kind(kind).status(status).content(content)))?;
@@ -479,6 +537,8 @@ async fn run_script(
                 .await?;
             }
             Step::Guard { id, title, kind, tool, args, output } => {
+                trace.tool_start(&id, &tool, args.clone());
+                trace.send(&cx)?;
                 let kind_value: ToolKind = serde_json::from_value(serde_json::json!(kind)).unwrap_or(ToolKind::Other);
                 send(SessionUpdate::ToolCall(ToolCall::new(id.clone(), title).kind(kind_value).status(ToolCallStatus::Pending)))?;
                 let guard = cx
@@ -497,6 +557,8 @@ async fn run_script(
                     Ok(r) => (ToolCallStatus::Failed, r.reason.unwrap_or_else(|| "denied".into())),
                     Err(e) => (ToolCallStatus::Failed, format!("the tool pipeline failed: {e}")),
                 };
+                trace.tool_end(&id, &text, status == ToolCallStatus::Failed);
+                trace.send(&cx)?;
                 let content = vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(text)))];
                 send(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id, ToolCallUpdateFields::new().status(status).content(content))))?;
             }
@@ -509,29 +571,237 @@ async fn run_script(
             Step::Sleep { ms } => tokio::time::sleep(Duration::from_millis(ms)).await,
             Step::Hold => loop {
                 if cancelled() {
+                    trace.cancelled(&cx)?;
                     return responder.respond(PromptResponse::new(StopReason::Cancelled));
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             },
-            Step::Fail { message } => return responder.respond_with_error(acp::Error::new(-32603, message)),
+            Step::Fail { message } => {
+                trace.respond("error", "", "", None);
+                trace.set_error(&message);
+                trace.end_turn("error");
+                trace.send(&cx)?;
+                return responder.respond_with_error(acp::Error::new(-32603, message));
+            }
         }
     }
     cx.send_notification(state.status(&sid.0))?;
+    let usage = turn_usage();
+    trace.respond("stop", &reply, &thought, Some((usage.input, usage.output, 8112, 88)));
+    trace.end_turn("end_turn");
+    trace.send(&cx)?;
     responder.respond(PromptResponse::new(StopReason::EndTurn).meta(usage_meta()))
 }
 
 /// The usage every finished turn reports.
-fn usage_meta() -> Meta {
-    let usage = space_protocol::TurnUsage {
+fn turn_usage() -> space_protocol::TurnUsage {
+    space_protocol::TurnUsage {
         input: 1204,
         output: 97,
         cache_read: Some(8112),
         cache_write: Some(88),
         reasoning: None,
         models: vec!["stub/stub-model".into()],
-    };
+    }
+}
+
+fn usage_meta() -> Meta {
     let mut meta = Meta::new();
-    meta.insert(USAGE_META_KEY.into(), serde_json::to_value(usage).unwrap_or_default());
+    meta.insert(USAGE_META_KEY.into(), serde_json::to_value(turn_usage()).unwrap_or_default());
     meta
+}
+
+/// Tokens (input, output, cache read, cache write) of the built-in turn's two requests: together,
+/// [`turn_usage`].
+const FIRST_USAGE: (u64, u64, u64, u64) = (600, 40, 4000, 88);
+const SECOND_USAGE: (u64, u64, u64, u64) = (604, 57, 4112, 0);
+
+/// Now, in Unix milliseconds.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+/// One turn's trace. Events queue; [`Tracer::send`] sends them as one `_space/trace` batch.
+struct Tracer {
+    sid: String,
+    model: String,
+    turn: u32,
+    step: u32,
+    /// The request being answered, when it went out, and whether its first token came.
+    request: u32,
+    request_at: u64,
+    first_token: bool,
+    /// The current chunk run: its stream, first and last arrival, and the gaps.
+    run: Option<(ChunkKind, u64, u64, Vec<u32>)>,
+    started: HashMap<String, u64>,
+    events: Vec<TraceEvent>,
+    state: Arc<State>,
+}
+
+impl Tracer {
+    /// A new turn in the session, with the header before the session's first request.
+    fn start(state: &Arc<State>, sid: &SessionId) -> Self {
+        let mut sessions = state.sessions.lock().unwrap();
+        let session = sessions.entry(sid.0.to_string()).or_insert_with(|| StubSession::new(None));
+        session.turns += 1;
+        let mut events = vec![TraceEvent::TurnStart { turn: session.turns, at: now_ms() }];
+        if !session.header_sent {
+            session.header_sent = true;
+            events.push(TraceEvent::Header {
+                header_id: 1,
+                reason: HeaderReason::Initial,
+                system_prompt: "You are the stub agent. You run `echo stub` and say hello.".into(),
+                tools: vec![ToolDef {
+                    name: "bash".into(),
+                    description: "Run a shell command.".into(),
+                    parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}),
+                }],
+                options: RequestOptions {
+                    provider: "stub".into(),
+                    model: session.model.clone(),
+                    max_tokens: Some(8192),
+                    effort: Some(session.thinking.clone()),
+                    ..RequestOptions::default()
+                },
+            });
+        }
+        Self {
+            sid: sid.0.to_string(),
+            model: session.model.clone(),
+            turn: session.turns,
+            step: 0,
+            request: 0,
+            request_at: 0,
+            first_token: false,
+            run: None,
+            started: HashMap::new(),
+            events,
+            state: state.clone(),
+        }
+    }
+
+    fn request(&mut self, messages: Vec<serde_json::Value>) {
+        self.end_run();
+        let number = {
+            let mut sessions = self.state.sessions.lock().unwrap();
+            let session = sessions.entry(self.sid.clone()).or_insert_with(|| StubSession::new(None));
+            session.requests += 1;
+            session.requests
+        };
+        self.step += 1;
+        self.request = number;
+        self.request_at = now_ms();
+        self.first_token = false;
+        self.events.push(TraceEvent::Request {
+            request: number,
+            turn: self.turn,
+            step: self.step,
+            at: self.request_at,
+            header_id: 1,
+            messages,
+            rewritten: false,
+        });
+    }
+
+    /// A streamed chunk arrived.
+    fn chunk(&mut self, stream: ChunkKind) {
+        let at = now_ms();
+        if !self.first_token {
+            self.first_token = true;
+            self.events.push(TraceEvent::FirstToken { request: self.request, at });
+        }
+        match &mut self.run {
+            Some((kind, _, last, dt)) if *kind == stream => {
+                dt.push(at.saturating_sub(*last) as u32);
+                *last = at;
+            }
+            _ => {
+                self.end_run();
+                self.run = Some((stream, at, at, Vec::new()));
+            }
+        }
+    }
+
+    fn end_run(&mut self) {
+        if let Some((stream, t0, _, dt)) = self.run.take() {
+            self.events.push(TraceEvent::Chunks { request: self.request, stream, t0, dt });
+        }
+    }
+
+    /// The request's answer, with its tokens (input, output, cache read, cache write).
+    fn respond(&mut self, stop: &str, text: &str, thinking: &str, tokens: Option<(u64, u64, u64, u64)>) {
+        self.end_run();
+        let at = now_ms();
+        let model = format!("stub/{}", self.model);
+        let usage = tokens.map(|(input, output, read, write)| space_protocol::TurnUsage {
+            input,
+            output,
+            cache_read: Some(read),
+            cache_write: Some(write),
+            reasoning: None,
+            models: vec![model.clone()],
+        });
+        self.events.push(TraceEvent::Response {
+            request: self.request,
+            at,
+            duration_ms: at.saturating_sub(self.request_at),
+            usage,
+            stop_reason: stop.into(),
+            response_id: Some(format!("stub-{}-{}", self.sid, self.request)),
+            model: Some(model),
+            text: text.into(),
+            thinking: thinking.into(),
+            error: None,
+        });
+    }
+
+    /// The last response failed with `message`.
+    fn set_error(&mut self, message: &str) {
+        if let Some(TraceEvent::Response { error, .. }) = self.events.last_mut() {
+            *error = Some(message.into());
+        }
+    }
+
+    fn tool_start(&mut self, call_id: &str, name: &str, input: serde_json::Value) {
+        self.end_run();
+        let at = now_ms();
+        self.started.insert(call_id.into(), at);
+        self.events.push(TraceEvent::ToolStart { request: self.request, call_id: call_id.into(), name: name.into(), input, at });
+    }
+
+    fn tool_end(&mut self, call_id: &str, output: &str, is_error: bool) {
+        let at = now_ms();
+        let started = self.started.remove(call_id).unwrap_or(at);
+        self.events.push(TraceEvent::ToolEnd {
+            request: self.request,
+            call_id: call_id.into(),
+            at,
+            duration_ms: at.saturating_sub(started),
+            output: output.into(),
+            is_error,
+            truncated: false,
+        });
+    }
+
+    fn end_turn(&mut self, reason: &str) {
+        self.end_run();
+        self.events.push(TraceEvent::TurnEnd { turn: self.turn, at: now_ms(), reason: reason.into() });
+    }
+
+    /// The turn was cancelled: the answer stops and the turn ends; sent at once.
+    fn cancelled(&mut self, cx: &Conn) -> acp::Result<()> {
+        self.respond("aborted", "", "", None);
+        self.end_turn("cancelled");
+        self.send(cx)
+    }
+
+    /// Send what's queued as one `_space/trace` batch.
+    fn send(&mut self, cx: &Conn) -> acp::Result<()> {
+        if self.events.is_empty() {
+            return Ok(());
+        }
+        let batch = TraceBatch { session_id: self.sid.clone(), events: std::mem::take(&mut self.events) };
+        cx.send_notification(UntypedMessage::new(TRACE_METHOD, batch)?)
+    }
 }
 
