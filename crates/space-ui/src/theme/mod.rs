@@ -209,7 +209,8 @@ pub fn install(cx: &mut App) {
         t.list_active = hover();
         t.list_hover = hover();
         t.link = accent_hover();
-        t.scrollbar = bg();
+        // No track: only the thumb shows, over whatever surface scrolls (the composer card too).
+        t.scrollbar = gpui::transparent_black();
         t.scrollbar_thumb = border_strong();
         t.scrollbar_thumb_hover = scrollbar_thumb_hover();
         // Switches: accent track when on (`primary`), a quiet track when off, white thumb.
