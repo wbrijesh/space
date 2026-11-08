@@ -161,6 +161,21 @@ fn error_thread() -> ScenarioThread {
     )
 }
 
+/// A finished turn with two steps and a reply between them (it folds once done).
+fn multi_step_thread() -> ScenarioThread {
+    thread(
+        "Fix the failing test in space-core",
+        vec![
+            thought("Run the suite first to see what fails."),
+            tool("t1", "bash: cargo test -p space-core", "execute", "completed", Some(TEST_OUTPUT)),
+            say("One test expects the old error message. Updating it.\n\n"),
+            tool("t2", "edit: crates/space-core/tests/stub_agent.rs", "edit", "completed", Some("1 line changed")),
+            tool("t3", "bash: cargo test -p space-core", "execute", "completed", Some(TEST_OUTPUT)),
+            say("Fixed: the test now expects the new message, and the suite passes."),
+        ],
+    )
+}
+
 fn done_thread(prompt: &'static str, reply: &str) -> ScenarioThread {
     thread(
         prompt,
@@ -226,6 +241,12 @@ pub fn all() -> Vec<Scenario> {
                 explain_thread(),
             ],
             select: Some(8),
+            ..Default::default()
+        },
+        Scenario {
+            name: "collapsed-turns",
+            description: "Finished multi-step turns fold their work under \"Completed in …\"; a failed turn stays open; one still runs.",
+            threads: vec![working_thread(), error_thread(), multi_step_thread()],
             ..Default::default()
         },
         Scenario {

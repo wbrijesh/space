@@ -70,6 +70,9 @@ pub struct Thread {
     paused_seen: bool,
     /// Expanded thought/tool items (transcript indices).
     pub expanded: HashSet<usize>,
+    /// Finished turns opened to show their work (by the index of their user message); in
+    /// memory only.
+    pub open_turns: HashSet<usize>,
     thought_started: HashMap<usize, Instant>,
     pub thought_secs: HashMap<usize, u64>,
 }
@@ -113,6 +116,7 @@ impl Thread {
             confirmed: HashSet::new(),
             paused_seen: false,
             expanded: HashSet::new(),
+            open_turns: HashSet::new(),
             thought_started: HashMap::new(),
             thought_secs: HashMap::new(),
         }
@@ -171,6 +175,12 @@ impl SpaceApp {
         let selected = self.selected == Some(key) && !self.show_settings;
         let Some(thread) = self.thread_mut(key) else { return };
         thread.apply(event);
+        if selected && matches!(event, SessionEvent::TurnEnded { .. }) && !self.transcript_scroll.is_following() {
+            let thread = self.thread_mut(key).expect("thread exists");
+            if let Some(user) = thread.state.items.iter().rposition(|i| matches!(i, TranscriptItem::User { .. })) {
+                thread.open_turns.insert(user);
+            }
+        }
         if self.saving_threads() {
             let thread = self.thread_mut(key).expect("thread exists");
             crate::persist::record(&mut thread.unsaved, event);

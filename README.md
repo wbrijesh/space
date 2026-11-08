@@ -116,9 +116,12 @@ lists every plugin and its status; if the agent can't start or exits, the thread
   tiles; click one to view it large, ← / → for the others, Esc closes), replies as markdown. Hovering
   a message of yours shows how long ago you sent it (hover the time for the date) and Copy; hovering
   an agent turn shows Copy (its last reply), the tokens it used ("Usage 9.4k tok"; click for the
-  breakdown: model, cache hit, uncached and cached input, cache write, output) and when it ended. thinking collapsed as
-  "Thought for Ns", tool calls as compact rows that expand to their output, permission cards
-  (Allow/Reject). It follows new output while you're at the bottom; scroll up to read and it stays
+  breakdown: model, cache hit, uncached and cached input, cache write, output) and when it ended. Thinking
+  collapsed as "Thought for Ns", tool calls as compact rows that expand to their output, permission
+  cards (Allow/Reject). Once a turn finishes normally, its thinking and tool calls fold under one
+  "Completed in 2m 3s" row (click to open it again); its replies stay visible. Stopped, failed and
+  running turns stay open. A streaming reply flows in at an even pace, fading in word by word, and
+  opening or closing a row keeps it where it is. It follows new output while you're at the bottom; scroll up to read and it stays
   put while the agent keeps working, with a round ↓ button above the composer. The button, ⌘↓ or
   View ▸ Scroll to Bottom glide back down and follow again (sending a message jumps there too). In a
   composer with several lines of text, ⌘↓ moves the caret to the end instead.

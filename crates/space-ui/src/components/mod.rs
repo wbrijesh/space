@@ -13,4 +13,5 @@ pub mod thread_row;
 pub mod title_bar;
 pub mod trajectory;
 pub mod transcript;
+pub mod turns;
 pub mod widgets;

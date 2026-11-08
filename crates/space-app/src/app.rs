@@ -255,6 +255,8 @@ pub struct SpaceApp {
     pub(crate) trajectories: crate::trajectory::Trajectories,
     /// The message row that shows "Copied" for a moment, and the one whose usage panel is open.
     pub(crate) copied: Option<String>,
+    /// The shown thread's streaming reply, revealed at an even pace.
+    pub(crate) stream_reveal: std::rc::Rc<std::cell::RefCell<space_ui::components::turns::StreamReveal>>,
     pub(crate) usage_open: Option<String>,
     /// Draft images are told apart by this (they're prepared in the background).
     pub(crate) next_image_id: u64,
@@ -411,6 +413,7 @@ impl SpaceApp {
             viewer_focus: cx.focus_handle(),
             next_image_id: 0,
             copied: None,
+            stream_reveal: Default::default(),
             usage_open: None,
             transcript_scroll: FollowScroll::new(),
             sidebar_open: true,
@@ -725,7 +728,20 @@ impl SpaceApp {
         .detach();
     }
 
+    /// Open or fold a finished turn's work; the row stays where it is on screen.
+    pub(crate) fn toggle_turn(&mut self, user_ix: usize, cx: &mut Context<Self>) {
+        if let Some(key) = self.selected
+            && let Some(t) = self.thread_mut(key)
+            && !t.open_turns.remove(&user_ix)
+        {
+            t.open_turns.insert(user_ix);
+        }
+        self.transcript_scroll.hold();
+        cx.notify();
+    }
+
     pub(crate) fn toggle_expanded(&mut self, ix: usize, cx: &mut Context<Self>) {
+        self.transcript_scroll.hold();
         if let Some(key) = self.selected
             && let Some(t) = self.thread_mut(key)
             && !t.expanded.remove(&ix)

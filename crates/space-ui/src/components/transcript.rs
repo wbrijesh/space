@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui::assets::IconName as Lucide;
-use gpui::component::text::TextView;
+use gpui::component::text::{TextView, TextViewMotion};
 use gpui::component::{Icon, IconName};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -15,6 +15,7 @@ use space_core::{PermissionDecision, PermissionRequest, PlanEntry, SessionState,
 
 use super::images::{OpenPicsHandler, Pic, message_images};
 use super::message_actions::{ActionHandlers, MessageActions, message_actions};
+use super::turns::{TurnFold, TurnToggleHandler, folds_away, foldable_turns, turn_summary_row};
 use super::loaders::Spinner;
 use super::widgets::{pill_button, status_dot};
 use crate::format;
@@ -79,11 +80,22 @@ pub fn attachment_chip(path: &Path) -> Div {
 }
 
 pub fn agent_message(id: impl Into<ElementId>, markdown: &str) -> Div {
-    div()
-        .text_size(text::BODY)
-        .line_height(relative(text::LEADING_PROSE))
-        .text_color(color::text())
-        .child(TextView::markdown(id, markdown.trim().to_string()).selectable(true))
+    agent_message_streaming(id, markdown, false)
+}
+
+/// An agent reply; `fade`: it's streaming, so text it gains fades in (word by word).
+pub fn agent_message_streaming(id: impl Into<ElementId>, markdown: &str, fade: bool) -> Div {
+    let view = TextView::markdown(id, markdown.trim().to_string()).selectable(true);
+    let view = if fade {
+        view.motion(
+            TextViewMotion::default()
+                .with_stream_fade(std::time::Duration::from_millis(180))
+                .with_stream_fade_stagger(std::time::Duration::from_millis(12)),
+        )
+    } else {
+        view
+    };
+    div().text_size(text::BODY).line_height(relative(text::LEADING_PROSE)).text_color(color::text()).child(view)
 }
 
 /// "Thinking…" while live (with a spinner), else "Thought for Ns"; expands to the text.
@@ -452,12 +464,19 @@ pub struct TranscriptView<'a> {
     pub copied: Option<&'a str>,
     pub usage_open: Option<&'a str>,
     pub actions: ActionHandlers,
+    /// Finished turns the user opened (by their user message's index), and what toggles one.
+    pub open_turns: &'a HashSet<usize>,
+    pub on_toggle_turn: TurnToggleHandler,
+    /// The streaming reply: its index and how many bytes of it to show (the rest is still to
+    /// be revealed); it fades in as it grows.
+    pub streaming: Option<(usize, usize)>,
 }
 
 /// The transcript's elements, spaced, with a trailing working row while a turn runs. Each
 /// message of yours, and each agent turn (from after your message to its end), is one hover
-/// area with its row of actions under it.
-pub fn transcript_items(view: TranscriptView<'_>) -> Vec<AnyElement> {
+/// area with its row of actions under it. A finished turn's thinking and tool calls fold under
+/// a "Completed in …" row (see [`super::turns`]) unless the user opened it.
+pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut App) -> Vec<AnyElement> {
     let TranscriptView {
         state,
         key,
@@ -471,8 +490,16 @@ pub fn transcript_items(view: TranscriptView<'_>) -> Vec<AnyElement> {
         copied,
         usage_open,
         actions,
+        open_turns,
+        on_toggle_turn,
+        streaming,
     } = view;
     let items = &state.items;
+    let folds = foldable_turns(items);
+    // The folded turn being laid out (its work is hidden until its end).
+    let mut folded: Option<TurnFold> = None;
+    // Stands for the summary row when spacing what follows it (spaced like a thought row).
+    let summary_marker = TranscriptItem::Thought(String::new());
     let compact = |i: &TranscriptItem| matches!(i, TranscriptItem::Tool(_) | TranscriptItem::Thought(_));
     let row = |id: String, group: &SharedString, copy: Option<&str>, at_ms: Option<u64>, usage: Option<&TurnUsage>, end: bool| {
         message_actions(
@@ -506,6 +533,9 @@ pub fn transcript_items(view: TranscriptView<'_>) -> Vec<AnyElement> {
             _ => GAP,
         };
         let last = ix + 1 == items.len();
+        if folded.is_some_and(|f| ix < f.end) && folds_away(item) {
+            continue;
+        }
         let el = match item {
             TranscriptItem::User { text, attachments, images, at_ms } => {
                 // An unfinished turn before it (no end): as it is, without a row.
@@ -523,6 +553,16 @@ pub fn transcript_items(view: TranscriptView<'_>) -> Vec<AnyElement> {
                         .into_any_element(),
                 );
                 (prev, after_row, reply) = (Some(item), true, None);
+                // A finished turn: its summary row comes first; its work is hidden unless opened.
+                if let Some(fold) = folds.get(&ix).copied() {
+                    let open = open_turns.contains(&ix);
+                    folded = (!open).then_some(fold);
+                    let summary = turn_summary_row(ix, fold.duration_ms, open, window, cx, on_toggle_turn.clone());
+                    turn.push(div().mt(px(6.)).child(summary).into_any_element());
+                    (prev, after_row) = (Some(&summary_marker), false);
+                } else {
+                    folded = None;
+                }
                 continue;
             }
             TranscriptItem::TurnEnd { reason, at_ms, usage } => {
@@ -550,7 +590,11 @@ pub fn transcript_items(view: TranscriptView<'_>) -> Vec<AnyElement> {
             }
             TranscriptItem::Agent(md) => {
                 reply = Some(md);
-                agent_message(SharedString::from(format!("md-{key}-{ix}")), md)
+                let id = SharedString::from(format!("md-{key}-{ix}"));
+                match streaming {
+                    Some((at, shown)) if at == ix => agent_message_streaming(id, &md[..shown.min(md.len())], !cx.reduce_motion()),
+                    _ => agent_message(id, md),
+                }
             }
             TranscriptItem::Thought(t) => thought_row(
                 ix,
@@ -691,37 +735,60 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     let t = toggle.clone();
     let ex = |name: &'static str, f: Rc<dyn Fn() -> Div>| Example::new(name, move |_, _| f().into_any_element()).width(w);
 
-    let full = {
+    // A turn laid out by transcript_items from session events; `open`: the user opened it.
+    let turn = {
         let (toggle, answer) = (toggle.clone(), answer.clone());
-        Example::new("tool turn, working", move |_, _| {
-            let mut s = SessionState::new("preview");
-            for e in [
-                SessionEvent::UserMessage { text: "Run the tests and fix what fails".into(), attachments: vec![], images: vec![], at_ms: None },
-                SessionEvent::TurnStarted,
-                SessionEvent::AgentThought { text: "Run the suite first.".into() },
-                SessionEvent::ToolCall(tool(ToolStatus::Completed, TEST_OUTPUT)),
-                SessionEvent::AgentText { text: "All 6 tests pass. Now checking clippy…".into() },
-            ] {
-                s.apply(&e);
-            }
-            let view = TranscriptView {
-                state: &s,
-                key: 0,
-                expanded: &HashSet::new(),
-                thought_secs: &HashMap::from([(1, 3)]),
-                queued: None,
-                on_toggle: toggle.clone(),
-                on_answer: answer.clone(),
-                on_open_image: None,
-                now_ms: 0,
-                copied: None,
-                usage_open: None,
-                actions: ActionHandlers::default(),
-            };
-            div().flex().flex_col().children(transcript_items(view)).into_any_element()
-        })
-        .width(w)
+        move |name: &'static str, events: Vec<SessionEvent>, open: bool, streaming: Option<(usize, usize)>| {
+            let (toggle, answer) = (toggle.clone(), answer.clone());
+            Example::new(name, move |window, cx| {
+                let mut s = SessionState::new("preview");
+                for e in &events {
+                    s.apply(e);
+                }
+                let open_turns: HashSet<usize> = if open { HashSet::from([0]) } else { HashSet::new() };
+                let view = TranscriptView {
+                    state: &s,
+                    key: 0,
+                    expanded: &HashSet::new(),
+                    thought_secs: &HashMap::from([(1, 3)]),
+                    queued: None,
+                    on_toggle: toggle.clone(),
+                    on_answer: answer.clone(),
+                    on_open_image: None,
+                    now_ms: 0,
+                    copied: None,
+                    usage_open: None,
+                    actions: ActionHandlers::default(),
+                    open_turns: &open_turns,
+                    on_toggle_turn: Rc::new(|_, _, _| {}),
+                    streaming,
+                };
+                div().flex().flex_col().children(transcript_items(view, window, cx)).into_any_element()
+            })
+            .width(w)
+        }
     };
+    let work = |at: Option<u64>| {
+        vec![
+            SessionEvent::UserMessage { text: "Run the tests and fix what fails".into(), attachments: vec![], images: vec![], at_ms: at },
+            SessionEvent::TurnStarted,
+            SessionEvent::AgentThought { text: "Run the suite first.".into() },
+            SessionEvent::ToolCall(tool(ToolStatus::Completed, TEST_OUTPUT)),
+            SessionEvent::AgentText { text: "All 6 tests pass. Now checking clippy…".into() },
+        ]
+    };
+    let finished = |at: Option<u64>, reason: &str| {
+        let mut events = work(at);
+        events.push(SessionEvent::AgentText { text: "Clippy is clean too; nothing to fix.".into() });
+        events.push(SessionEvent::TurnEnded { stop_reason: reason.into(), at_ms: at.map(|t| t + 123_000), usage: None });
+        events
+    };
+    let full = turn("tool turn, working", work(None), false, None);
+    let collapsed = turn("finished: work folded", finished(Some(1_000), "end_turn"), false, None);
+    let expanded = turn("finished: opened", finished(Some(1_000), "end_turn"), true, None);
+    let failed = turn("stopped: stays open", finished(Some(1_000), "cancelled"), false, None);
+    let no_times = turn("finished, saved before times were kept", finished(None, "end_turn"), false, None);
+    let streaming = turn("streaming: the reply's first part shown so far", work(None), false, Some((3, 14)));
 
     let (t1, t2, t3, t4, t5, t6, t7, t8, t9) =
         (t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t);
@@ -784,6 +851,13 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         ]),
         ComponentPreview::new(Area::Transcript, "Transcript", "A whole turn laid out by transcript_items.")
             .stacked()
-            .example(full),
+            .examples([full, streaming]),
+        ComponentPreview::new(
+            Area::Transcript,
+            "Finished turns",
+            "A finished turn folds its thinking and tool calls under \"Completed in …\"; replies stay.",
+        )
+        .stacked()
+        .examples([collapsed, expanded, failed, no_times]),
     ]
 }
