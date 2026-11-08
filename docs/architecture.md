@@ -256,7 +256,7 @@ host's own records; never tool output).
   ring) stayed active after clicking elsewhere. Clickable chrome is plain styled divs (no focus);
   dropdown triggers show a focus ring only after keyboard input, because popup menus hand focus back
   to their trigger when they close. Selected and hovered rows use clearly different fills.
-- **Follow scrolling.** The transcript and the logs panel use `space-ui`'s `FollowScrollArea`
+- **Follow scrolling.** The transcript uses `space-ui`'s `FollowScrollArea`
   (`components/follow_scroll.rs`). It measures its content after layout and before the scroll
   container's prepaint, so it decides with this frame's max offset. Only input changes the offset
   between frames (it's measured from the top, so content arriving below leaves it alone), so any

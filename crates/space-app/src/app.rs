@@ -1,4 +1,4 @@
-//! The main window: thread sidebar, thread view with composer, logs panel.
+//! The main window: thread sidebar, thread view with composer.
 //!
 //! State lives here; rendering is in [`crate::view`]. Bridge: `space-core` runs on a tokio
 //! runtime and its async methods spawn onto it internally, so GPUI tasks (`cx.spawn`) await
@@ -13,7 +13,7 @@
 //! Settings (⌘,) replace the thread view in the main column; the sidebar stays. Esc, ⌘, again,
 //! Back, ⌘N or picking a thread leave them.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -29,7 +29,7 @@ use space_ui::components::settings::FieldCheck;
 
 pub use space_ui::actions::{
     CloseSettings, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, Quit, ScrollToBottom,
-    ToggleLogs, ToggleSidebar,
+    ToggleSidebar,
 };
 use space_ui::assets::SpaceAssets;
 use space_ui::components::composer;
@@ -42,7 +42,6 @@ use crate::notify::{self, NotificationPermission};
 use crate::settings::SettingsStore;
 use crate::threads::Thread;
 
-const MAX_LOG_LINES: usize = 2000;
 /// Where ⌘↓ means Scroll to Bottom inside the composer: a single-line textarea. Bound after
 /// gpui-component's own `cmd-down` (MoveToEnd, context `Input`), so it wins at equal depth.
 const SCROLL_IN_COMPOSER: &str = "Input && !ComposerMultiline";
@@ -122,7 +121,6 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             // The composer would otherwise take these as indent/outdent.
             KeyBinding::new("cmd-[", GoBack, Some("Input")),
             KeyBinding::new("cmd-]", GoForward, Some("Input")),
-            KeyBinding::new("cmd-j", ToggleLogs, None),
             KeyBinding::new("cmd-l", FocusComposer, None),
             KeyBinding::new("cmd-,", OpenSettings, None),
             KeyBinding::new("cmd-shift-r", CyclePermissionMode, None),
@@ -157,7 +155,6 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
                 name: "View".into(),
                 items: vec![
                     MenuItem::action("Toggle Sidebar", ToggleSidebar),
-                    MenuItem::action("Plugin Logs", ToggleLogs),
                     MenuItem::separator(),
                     MenuItem::action("Back", GoBack),
                     MenuItem::action("Forward", GoForward),
@@ -228,7 +225,6 @@ pub struct SpaceApp {
     pub(crate) agent_status: PluginStatus,
     pub(crate) agent_title: String,
     pub(crate) notify: bool,
-    pub(crate) logs: VecDeque<String>,
     pub(crate) threads: Vec<Thread>,
     pub(crate) next_key: u64,
     pub(crate) selected: Option<u64>,
@@ -240,11 +236,9 @@ pub struct SpaceApp {
     pub(crate) focus: FocusHandle,
     /// The selected thread's transcript; every thread opens at the bottom.
     pub(crate) transcript_scroll: FollowScroll,
-    pub(crate) log_scroll: FollowScroll,
     pub(crate) sidebar_open: bool,
     /// The sidebar's shown fraction, sliding toward `sidebar_open`.
     pub(crate) sidebar_shown: space_ui::theme::motion::Spring,
-    pub(crate) show_logs: bool,
     pub(crate) banner: Option<String>,
     /// Threads deleted while a save of theirs was in flight (by key): their saved folder is
     /// removed once it lands.
@@ -386,7 +380,6 @@ impl SpaceApp {
             project_dir: options.project_dir.clone(),
             agent: None,
             agent_status: PluginStatus::Stopped,
-            logs: VecDeque::new(),
             threads: Vec::new(),
             next_key: 1,
             selected: None,
@@ -397,10 +390,8 @@ impl SpaceApp {
             input,
             focus: cx.focus_handle(),
             transcript_scroll: FollowScroll::new(),
-            log_scroll: FollowScroll::new(),
             sidebar_open: true,
             sidebar_shown: space_ui::theme::motion::Spring::new(1., space_ui::theme::motion::SIDEBAR_SLIDE),
-            show_logs: false,
             banner,
             deleted_while_saving: HashMap::new(),
             settings: SettingsStore::load(options.settings_path),
@@ -489,14 +480,8 @@ impl SpaceApp {
                 }
                 self.agent_status = status;
             }
-            HostEvent::PluginLog { plugin_id, line } => {
-                // Service plugins' lines are tagged with their id; the agent's are not.
-                let line = if Some(&plugin_id) == self.agent_id.as_ref() { line } else { format!("[{plugin_id}] {line}") };
-                if self.logs.len() == MAX_LOG_LINES {
-                    self.logs.pop_front();
-                }
-                self.logs.push_back(line);
-            }
+            // Plugins' stderr isn't shown in the window; the host keeps a tail for error messages.
+            HostEvent::PluginLog { plugin_id, line } => tracing::debug!(plugin = %plugin_id, "{line}"),
             HostEvent::Catalog { name, entries } => {
                 if name == CATALOG_PERMISSION_MODES {
                     self.permission_modes = entries;
@@ -898,12 +883,6 @@ impl SpaceApp {
 
     pub(crate) fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.input.update(cx, |s, cx| s.focus(window, cx));
-    }
-
-    pub(crate) fn toggle_logs(&mut self, cx: &mut Context<Self>) {
-        self.show_logs = !self.show_logs;
-        self.log_scroll.jump_to_bottom();
-        cx.notify();
     }
 
     /// ⌘↓ or the button: glide the transcript to the bottom and follow again.

@@ -7,7 +7,6 @@ gpui::actions!(
         ToggleSidebar,
         GoBack,
         GoForward,
-        ToggleLogs,
         FocusComposer,
         OpenSettings,
         CloseSettings,

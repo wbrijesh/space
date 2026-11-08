@@ -149,7 +149,7 @@ pub fn thread_preview(state: &SessionState) -> Preview {
 }
 
 /// The readable part of a host error: without the `session/prompt failed:` wrapper and
-/// the plugin stderr tail (which the logs panel shows).
+/// the plugin stderr tail.
 pub fn clean_error(message: &str) -> String {
     let main = message.split("\nplugin stderr:").next().unwrap_or(message).trim();
     let main = main.strip_prefix("session/prompt failed: ").unwrap_or(main);

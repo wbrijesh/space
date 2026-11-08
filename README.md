@@ -120,8 +120,9 @@ sits in the sidebar footer; Settings ▸ Plugins lists every plugin.
   model, "Same as agent" by default). *Notifications*:
   the macOS permission status (with a button to allow it or open System Settings). Esc, ⌘, again, ⌘[, ⌘N or clicking a thread leaves.
   Saved on every change to `~/.space/settings.json`.
-- **Logs**: the terminal icon in the sidebar footer (or ⌘J) opens the agent's stderr. If the agent
-  exits, the thread shows the error with Restart and Logs.
+- **Agent errors**: if the agent can't start or exits, the thread shows the error (with the last
+  lines of its stderr) and a Restart button. Plugins' stderr isn't shown in the window; run Space
+  from a terminal with `RUST_LOG=debug` to see it.
 
 ## space-core API sketch
 

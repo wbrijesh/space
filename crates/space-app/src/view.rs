@@ -16,7 +16,7 @@ use space_ui::components::settings::{
 };
 use space_ui::components::follow_scroll::FollowScrollArea;
 use space_ui::components::shell::{
-    AgentFooter, AgentState, LogsPanel, banner, confirm_card, empty_heading, problem_card, sidebar_column,
+    AgentFooter, AgentState, banner, confirm_card, empty_heading, problem_card, sidebar_column,
 };
 use space_ui::components::thread_row::{RowIndicator, ThreadRow};
 use space_ui::components::title_bar::{MainTitleBar, SidebarTitleBar, TitleBarNav};
@@ -27,7 +27,7 @@ use space_ui::ClickHandler;
 
 use crate::app::{
     CloseSettings, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, ScrollToBottom, SpaceApp,
-    ToggleLogs, ToggleSidebar,
+    ToggleSidebar,
 };
 use crate::settings::SaveKind;
 use crate::threads::Thread;
@@ -77,8 +77,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
             })
             .sidebar(shown, nav.clone()),
         )
-        .child(if app.show_settings { settings(app, window, cx) } else { body(app, window, cx) })
-        .when(app.show_logs, |d| d.child(logs(app, cx)));
+        .child(if app.show_settings { settings(app, window, cx) } else { body(app, window, cx) });
 
     div()
         .id("space-root")
@@ -89,7 +88,6 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
         .on_action(cx.listener(|this, _: &GoBack, window, cx| this.go_back(window, cx)))
         .on_action(cx.listener(|this, _: &GoForward, window, cx| this.go_forward(window, cx)))
-        .on_action(cx.listener(|this, _: &ToggleLogs, _, cx| this.toggle_logs(cx)))
         .on_action(cx.listener(|this, _: &FocusComposer, window, cx| this.focus_composer(window, cx)))
         .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.toggle_settings(window, cx)))
         .on_action(cx.listener(|this, _: &ScrollToBottom, _, cx| this.scroll_to_bottom(cx)))
@@ -156,8 +154,6 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
         PluginStatus::Crashed(msg) | PluginStatus::NotStarted(msg) => AgentState::Exited(msg.clone()),
     };
     let footer = AgentFooter::new(app.agent_title.clone(), state)
-        .logs_open(app.show_logs)
-        .on_toggle_logs(cx.listener(|this, _, _, cx| this.toggle_logs(cx)))
         .when(app.agent_id.is_some(), |f| f.on_restart(cx.listener(|this, _, _, cx| this.restart_agent(cx))));
 
     sidebar_column(SidebarTitleBar::new(nav).shown(shown), rows, footer)
@@ -525,7 +521,7 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         .into_any_element()
 }
 
-/// The agent could not start or exited: say so, with Restart and Logs.
+/// The agent could not start or exited: say so, with Restart.
 fn agent_problem(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
     let message = match (&app.agent_status, &thread.error) {
         (PluginStatus::Crashed(msg), _) => format!("The agent exited: {}", format::one_line(msg)),
@@ -534,20 +530,7 @@ fn agent_problem(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) ->
         (_, None) if app.agent_id.is_none() => "No agent plugin is installed.".to_string(),
         _ => return None,
     };
-    let actions = app.agent_id.is_some().then(|| {
-        (
-            click(cx, |this, _, cx| this.restart_agent(cx)),
-            click(cx, |this, _, cx| {
-                this.show_logs = true;
-                cx.notify();
-            }),
-        )
-    });
-    Some(problem_card(message, actions).into_any_element())
+    let restart = app.agent_id.is_some().then(|| click(cx, |this, _, cx| this.restart_agent(cx)));
+    Some(problem_card(message, restart).into_any_element())
 }
 
-fn logs(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> impl IntoElement {
-    let lines = app.logs.iter().skip(app.logs.len().saturating_sub(500)).map(|l| SharedString::from(l.clone())).collect();
-    LogsPanel::new("Plugin logs · stderr", lines, &app.log_scroll)
-        .on_close(cx.listener(|this, _, _, cx| this.toggle_logs(cx)))
-}

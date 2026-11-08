@@ -493,7 +493,7 @@ pub mod fixtures {
 **What happens on start**\n\n\
 - The manifest's `run.command` is resolved on `PATH` and spawned with piped stdio.\n\
 - The harness performs the ACP `initialize` handshake.\n\
-- stderr lines are kept in a ring buffer for the logs panel.\n\n\
+- stderr lines are kept in a ring buffer for error messages.\n\n\
 ```rust\nlet agent = host.start_agent(\"pi-agent\").await?;\nlet session = agent.new_session(dir).await?;\n```\n\n\
 Invalid manifests are reported, not fatal.";
 

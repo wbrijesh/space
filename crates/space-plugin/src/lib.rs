@@ -20,8 +20,8 @@
 //! }
 //! ```
 //!
-//! stdout carries protocol messages only; log to stderr (`eprintln!`), which the host shows in
-//! its logs panel.
+//! stdout carries protocol messages only; log to stderr (`eprintln!`). The host keeps the
+//! recent lines and adds the last few to the error when the plugin fails to start or crashes.
 
 pub mod rpc;
 

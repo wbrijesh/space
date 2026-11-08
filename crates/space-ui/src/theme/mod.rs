@@ -35,7 +35,7 @@ pub mod color {
     colors! {
         /// Window / main column background.
         bg = 0x141414ff;
-        /// Sidebar, logs panel, code blocks.
+        /// Sidebar, code blocks.
         bg_sidebar = 0x1a1a1aff;
         /// Raised surfaces: composer card, cards, quiet hover on rows.
         surface = 0x1f1f1fff;
@@ -118,7 +118,6 @@ pub mod size {
     /// the first title-bar button.
     pub const TRAFFIC_LIGHTS_W: Pixels = px(92.);
     pub const CONTENT_MAX_W: Pixels = px(760.);
-    pub const LOGS_H: Pixels = px(220.);
 
     pub const ICON_XS: Pixels = px(11.);
     pub const ICON_SM: Pixels = px(12.);
@@ -161,8 +160,6 @@ pub mod text {
     pub const MONO_FONT: &str = "Menlo";
 
     pub const XS: Pixels = px(11.);
-    /// Logs.
-    pub const MONO_SM: Pixels = px(11.5);
     pub const CODE: Pixels = px(12.);
     pub const SM: Pixels = px(12.5);
     pub const MD: Pixels = px(13.5);
