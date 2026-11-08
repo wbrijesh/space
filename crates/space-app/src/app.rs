@@ -28,7 +28,8 @@ use space_core::{
 use space_ui::components::settings::FieldCheck;
 
 pub use space_ui::actions::{
-    CloseSettings, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, Quit, ScrollToBottom,
+    CloseSettings, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious,
+    ScrollToBottom,
     ToggleSidebar,
     ToggleTrajectory,
 };
@@ -138,6 +139,10 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-down", ScrollToBottom, Some("Space")),
             KeyBinding::new("cmd-down", ScrollToBottom, Some(SCROLL_IN_COMPOSER)),
             KeyBinding::new("escape", CloseSettings, Some("Space")),
+            // ↑ on the composer's first line / ↓ on its last step through the thread's sent
+            // messages; otherwise they reach the text field (its MoveUp/MoveDown).
+            KeyBinding::new("up", RecallPrevious, Some("Composer > Input")),
+            KeyBinding::new("down", RecallNext, Some("Composer > Input")),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
@@ -304,8 +309,13 @@ impl SpaceApp {
             }
             match event {
                 InputEvent::PressEnter { shift: false, .. } => this.send(window, cx),
+                // Typing ends ↑/↓ recall (a recalled message is set without a change event).
+                InputEvent::Change => {
+                    this.end_recall();
+                    cx.notify();
+                }
                 // Send button state and the card's focus border follow the input.
-                InputEvent::Change | InputEvent::Focus | InputEvent::Blur => cx.notify(),
+                InputEvent::Focus | InputEvent::Blur => cx.notify(),
                 _ => {}
             }
         });

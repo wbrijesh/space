@@ -622,6 +622,10 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
                 let _ = this.update(cx, |this, cx| this.add_files(paths, cx));
             })
         },
+        on_recall: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |step, w: &mut Window, cx: &mut App| this.update(cx, |this, cx| this.recall(step, w, cx)).unwrap_or(false))
+        },
         on_paste: {
             let this = cx.entity().downgrade();
             Rc::new(move |item: &ClipboardItem, _: &mut Window, cx: &mut App| this.update(cx, |this, cx| this.paste(item, cx)).unwrap_or(false))

@@ -21,6 +21,7 @@ use super::images::draft_thumb;
 use super::loaders::ContextRing;
 use super::transcript::attachment_chip;
 use super::widgets::{icon_button, menu_trigger, tip};
+use crate::actions::{RecallNext, RecallPrevious};
 use crate::format;
 use crate::theme::{color, radius, size, space, text};
 
@@ -42,6 +43,21 @@ const ROW_INSET_RIGHT: f32 = 1. + PAD;
 pub const MAX_LINES: usize = 10;
 /// Key context around the composer while its text spans more than one line.
 pub const MULTILINE_CONTEXT: &str = "ComposerMultiline";
+/// Key context around the whole composer (↑/↓ recall sent messages from its text field).
+pub const COMPOSER_CONTEXT: &str = "Composer";
+
+/// Which way ↑/↓ recall steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecallStep {
+    /// ↑: an older sent message.
+    Back,
+    /// ↓: a newer one, then the draft.
+    Forward,
+}
+
+/// Recall a sent message: `true` took the key (the composer's text was replaced); `false` lets
+/// it move the caret.
+pub type RecallHandler = Rc<dyn Fn(RecallStep, &mut Window, &mut App) -> bool>;
 
 /// A textarea configured for the composer (placeholder, 1–10 line auto-grow, Enter submits).
 pub fn new_input(window: &mut Window, cx: &mut Context<TextareaState>) -> TextareaState {
@@ -80,6 +96,8 @@ pub struct ComposerHandlers {
     /// Files dropped on the card.
     pub on_drop: PathsHandler,
     pub on_paste: PasteHandler,
+    /// ↑ on the text's first line, ↓ on its last.
+    pub on_recall: RecallHandler,
 }
 
 impl Default for ComposerHandlers {
@@ -99,6 +117,7 @@ impl Default for ComposerHandlers {
             on_remove_image: Rc::new(|_, _, _| {}),
             on_drop: Rc::new(|_, _, _| {}),
             on_paste: Rc::new(|_, _, _| false),
+            on_recall: Rc::new(|_, _, _| false),
         }
     }
 }
@@ -360,7 +379,28 @@ impl RenderOnce for Composer {
             .gap_2()
             // More than one line: ⌘↓ moves the caret to the end instead of scrolling the
             // transcript (see the key bindings in space-app).
-            .when(expanded, |d| d.key_context(MULTILINE_CONTEXT))
+            .key_context(if expanded { "Composer ComposerMultiline" } else { COMPOSER_CONTEXT })
+            // ↑ with the caret on the first line, ↓ on the last: step through the sent messages;
+            // elsewhere (or with nothing to recall) the key moves the caret.
+            .on_action({
+                let (input, recall) = (input.clone(), h.on_recall.clone());
+                move |_: &RecallPrevious, w, cx| {
+                    let on_first_line = input.read(cx).cursor_position().line == 0;
+                    if !(on_first_line && recall(RecallStep::Back, w, cx)) {
+                        cx.propagate();
+                    }
+                }
+            })
+            .on_action({
+                let (input, recall) = (input.clone(), h.on_recall.clone());
+                move |_: &RecallNext, w, cx| {
+                    let state = input.read(cx);
+                    let last_line = state.value().matches('\n').count() as u32;
+                    if !(state.cursor_position().line == last_line && recall(RecallStep::Forward, w, cx)) {
+                        cx.propagate();
+                    }
+                }
+            })
             .children(blocker.map(|b| blocker_row(b, h.on_blocker_action.clone())))
             .child(card)
             .children(controls.map(|c| control_row(c, &h, window)))

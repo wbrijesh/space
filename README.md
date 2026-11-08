@@ -95,7 +95,8 @@ lists every plugin and its status; if the agent can't start or exits, the thread
 - **Composer**: one row, **+** · text · send, while the text fits on one line. Longer text
   switches the card to two zones: the text across the full width (growing upward to ten lines,
   then scrolling) and **+** / send in a row below; it collapses again when the text fits. Enter
-  sends, Shift+Enter adds a newline. While the agent works, send
+  sends, Shift+Enter adds a newline. ↑ on the first line brings back the messages you sent in the thread, newest
+  first; ↓ on the last line goes forward and back to what you were typing (editing keeps the text). While the agent works, send
   becomes Stop (`session/cancel`). **+** attaches files or folders (sent as ACP `resource_link`s);
   images (PNG, JPEG, GIF, WebP, HEIC, TIFF, BMP) from **+**, a drop on the card or ⌘V become thumbnails
   above the text instead and go to the agent as images (up to 20 per message; each is scaled to at most

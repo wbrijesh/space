@@ -14,6 +14,7 @@
 //! type some text      type text into the focused element
 //! resize 1280 820     resize the window (logical px)
 //! context             print the focused element's key context stack
+//! composer            print the composer's text
 //! shot name           run `$SPACE_SHOT_CMD name` (e.g. a script calling `screencapture -l`)
 //! shotnow name        same as `shot` without the 250 ms settle delay (animation frames)
 //! quit                quit the app
@@ -160,6 +161,15 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                     let _ = window.update(cx, |_, window, _| {
                         let stack: Vec<String> = window.context_stack().iter().map(|c| format!("{c:?}")).collect();
                         eprintln!("script: context {}", stack.join(" > "));
+                    });
+                }
+                "composer" => {
+                    let _ = window.update(cx, |root, _, cx| {
+                        // The window's root wraps the app's view.
+                        let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
+                        if let Some(app) = app {
+                            eprintln!("script: composer {:?}", app.read(cx).input.read(cx).value());
+                        }
                     });
                 }
                 "quit" => {

@@ -13,6 +13,8 @@ gpui::actions!(
         CloseSettings,
         CyclePermissionMode,
         ScrollToBottom,
+        RecallPrevious,
+        RecallNext,
         Quit
     ]
 );
