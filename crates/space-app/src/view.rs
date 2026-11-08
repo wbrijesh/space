@@ -524,6 +524,7 @@ fn plugin_rows(app: &SpaceApp) -> Vec<PluginRow> {
                 (true, _) if approval == Approval::Pending => "Needs your approval".into(),
                 (true, _) if approval == Approval::Denied => "Not approved".into(),
                 (true, Some(PluginStatus::Running)) => "Running".into(),
+                (true, _) if agent && app.agent_asleep => "Asleep (starts when you write)".into(),
                 (true, Some(PluginStatus::Starting)) => "Starting…".into(),
                 (true, Some(PluginStatus::Crashed(m))) => format!("Exited: {}", format::one_line(m)),
                 (true, Some(PluginStatus::NotStarted(m))) => format!("Not started: {}", format::one_line(m)),
@@ -645,7 +646,8 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
             dirs: app.recent_dirs(),
             thread_empty: thread.is_empty(),
             status: thread.state.status.clone(),
-            locked: thread.state.running || thread.live_session().is_none(),
+            // While the agent sleeps the choice is kept and applied when the session is loaded again.
+            locked: thread.state.running || (thread.live_session().is_none() && !app.agent_asleep),
             mode,
             blocker,
         })

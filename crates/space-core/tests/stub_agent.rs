@@ -325,3 +325,43 @@ async fn an_agent_without_images_refuses_them() {
     let err = session.prompt_with("look", vec![], vec![image]).await.unwrap_err();
     assert!(err.to_string().contains("can't read images"), "{err}");
 }
+
+/// The app stops an idle agent: the stop reads as Stopped (not a crash), and the session goes
+/// on in a new agent process, loaded from its data folder.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_stopped_on_purpose_is_stopped_and_its_session_loads_again() {
+    let root = stub_root();
+    let (host, mut events) = host(root.path());
+    let data = root.path().join("thread-data");
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.new_session_in(PathBuf::from(root.path()), Some(data.clone()), Some("t1")).await.unwrap();
+    let id = session.id().to_string();
+    assert_eq!(session.prompt("hello").await.unwrap(), "end_turn");
+
+    agent.stop();
+    let status = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(e) = events.recv().await {
+            if let HostEvent::PluginStatus { status, .. } = e
+                && !matches!(status, PluginStatus::Running | PluginStatus::Starting)
+            {
+                return status;
+            }
+        }
+        panic!("event stream closed");
+    })
+    .await
+    .expect("the agent's exit is reported");
+    assert_eq!(status, PluginStatus::Stopped);
+    assert!(!agent.is_running());
+
+    // Woken: a new process loads the same session and remembers the earlier prompt.
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.load_session(&id, PathBuf::from(root.path()), Some(data), Some("t1")).await.unwrap();
+    assert_eq!(session.id(), id);
+    let mut state = SessionState::new(session.id());
+    let mut seen = Vec::new();
+    assert_eq!(session.prompt("recall").await.unwrap(), "end_turn");
+    until(&mut events, &mut state, &mut seen, turn_ended).await;
+    let reply: String = state.items.iter().filter_map(|i| if let TranscriptItem::Agent(t) = i { Some(t.as_str()) } else { None }).collect();
+    assert!(reply.contains("I remember 1 earlier prompt(s)."), "{reply}");
+}
