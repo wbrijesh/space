@@ -36,7 +36,8 @@ fn actions(health: &Health) -> Vec<BlockerAction> {
 }
 
 /// The modes, in menu order. Workspace Write and Full access can be used only while the
-/// decision model can (`health`); until then they carry a blocker saying why.
+/// decision model can (`health`, or while a key is still being checked); otherwise they carry
+/// a blocker saying why.
 pub fn catalog(health: &Health) -> Vec<CatalogEntry> {
     let needs_model = |mut e: CatalogEntry| {
         if let Some(text) = health.problem(&e.name) {

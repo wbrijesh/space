@@ -22,7 +22,8 @@ pub fn retry_interval() -> Duration {
 pub enum State {
     /// No key (or the Keychain wouldn't give it).
     NotSet,
-    /// A key was just set or the plugin started: the first probe is under way.
+    /// A key was just set or the plugin started: the first probe is under way. Quiet: the
+    /// modes count as ready and calls are reviewed as usual until the probe says otherwise.
     Checking,
     Healthy,
     /// Timeouts, network errors, 5xx, rate limits, unreadable answers.
@@ -167,16 +168,16 @@ impl Health {
         self.state == State::Healthy
     }
 
-    /// The blocker sentence for a mode named `mode` (also the reason of a held call).
+    /// The blocker sentence for a mode named `mode` (also the reason of a held call). None while
+    /// healthy or still checking a key (that happens in the background, unannounced).
     pub fn problem(&self, mode: &str) -> Option<String> {
         let detail = || self.detail.as_deref().map(|d| format!(" ({d})")).unwrap_or_default();
         Some(match self.state {
-            State::Healthy => return None,
+            State::Healthy | State::Checking => return None,
             State::NotSet if self.unreadable => {
                 format!("{mode} needs your OpenAI API key, but Space couldn't read it from the Keychain.")
             }
             State::NotSet => format!("{mode} needs an OpenAI API key."),
-            State::Checking => "Checking your OpenAI API key…".to_string(),
             State::Unreachable => format!("Can't reach OpenAI{}, so actions are paused.", detail()),
             State::KeyRejected => "OpenAI rejected your API key, so actions are paused.".to_string(),
             State::NoAccess => {
@@ -230,6 +231,7 @@ mod tests {
         let mut h = Health::new(true, false, at(0));
         assert_eq!(h.state, State::Checking);
         assert!(h.probe_due(at(0)) && !h.ready());
+        assert_eq!(h.problem("Workspace Write"), None, "checking is quiet");
 
         // A failure: next probe in 5 minutes; the blocker says why.
         h.failure(&Failure::new(State::KeyRejected, "Incorrect API key"), at(1), MIN5);

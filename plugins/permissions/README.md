@@ -32,14 +32,14 @@ The plugin keeps one health state (`src/health.rs`):
 | State | Cause | Blocker links |
 |---|---|---|
 | NotSet | no key (or the Keychain wouldn't give it) | Open Settings |
-| Checking | a key was just set / Space started | — |
+| Checking | a key was just set / Space started | none: quiet, the modes work as usual meanwhile |
 | Unreachable | timeout, offline, 5xx, rate limit, unreadable answers | Retry now |
 | KeyRejected | 401 | Update key · Retry now |
 | NoAccess | 403, endpoint missing for the account | Open Settings · Retry now |
 | NoCredit | 429 `insufficient_quota` | Open billing · Retry now |
 | Incompatible | 400, model gone, 3 unreadable answers in a row | Retry now |
 
-In every state but Healthy, Workspace Write and Full access carry a blocker (sending is blocked) and
+In every state but Healthy and Checking, Workspace Write and Full access carry a blocker (sending is blocked) and
 tool calls are answered `unavailable`, so the host holds them. Blips are retried twice within a review
 first. A tiny probe request retries every 5 minutes (or at `Retry-After` if later), at once on "Retry
 now" or a new key; any change of state sends `hooks/ready`, so held calls go on after a recovery and

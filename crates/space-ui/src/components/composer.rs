@@ -664,10 +664,6 @@ pub mod fixtures {
         }
     }
 
-    pub fn checking() -> ComposerBlocker {
-        ComposerBlocker { text: "Checking your OpenAI API key…".into(), ..Default::default() }
-    }
-
     pub fn failing(text: &str, fix: Option<(&str, &str)>) -> ComposerBlocker {
         let mut actions: Vec<_> = fix.into_iter().map(|(l, a)| action(l, a)).collect();
         actions.push(action("Retry now", "retry:permissions"));
@@ -765,9 +761,6 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             example("full access", "", |c| c.controls(fixtures::with_mode(fixtures::controls(18_200, false), "full-access", true))),
             example("mode not set up (sending blocked)", "Clean up the build cache", |c| {
                 c.controls(fixtures::with_mode(fixtures::controls(18_200, false), "workspace-write", false))
-            }),
-            example("checking the key", "", |c| {
-                c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::checking()))
             }),
             example("key rejected (paused, retrying)", "", |c| {
                 c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::key_rejected()))

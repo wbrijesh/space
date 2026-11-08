@@ -302,7 +302,7 @@ async fn an_outage_holds_calls_and_the_probe_resumes_them() {
     let mut state = SessionState::new(session.id());
     let s = session.clone();
     let turn = tokio::spawn(async move { s.prompt("hello").await });
-    // First "Checking…", then, once the probe fails, why.
+    // The first check is quiet; once it fails, the held call says why.
     until(&mut events, &mut state, &mut catalog, 15, |_, s| s.held().is_some_and(|r| r.starts_with("Can't reach OpenAI"))).await;
     assert!(state.held().unwrap().contains("HTTP 503"), "{:?}", state.held());
     let b = wait_ww(&host, |e| !e.ready).await.blocker.unwrap();
