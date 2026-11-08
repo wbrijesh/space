@@ -54,6 +54,8 @@ pub struct Thread {
     pub unread: usize,
     pub draft: String,
     pub attachments: Vec<PathBuf>,
+    /// ↑/↓ through the sent messages.
+    pub recall: crate::recall::Recall,
     /// Images in the draft, in order.
     pub images: Vec<DraftImage>,
     /// Where the thread's sent images are kept (from the session store; known once a session
@@ -106,6 +108,7 @@ impl Thread {
             unread: 0,
             draft: String::new(),
             attachments: Vec::new(),
+            recall: Default::default(),
             images: Vec::new(),
             attachments_dir: None,
             queued: None,
@@ -442,6 +445,7 @@ impl SpaceApp {
         }
         let Some(thread) = self.thread_mut(key) else { return };
         let attachments = std::mem::take(&mut thread.attachments);
+        thread.recall.end();
         let images: Vec<Prepared> = std::mem::take(&mut thread.images).into_iter().filter_map(|i| i.prepared).collect();
         thread.draft.clear();
         self.input.update(cx, |s, cx| s.clean(window, cx));

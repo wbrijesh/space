@@ -24,6 +24,7 @@ mod dev;
 mod devscript;
 mod notify;
 mod persist;
+mod recall;
 #[cfg(feature = "dev")]
 mod scenarios;
 mod settings;
