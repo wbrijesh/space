@@ -10,7 +10,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use space_protocol::acp::{self, Agent, ByteStreams, Client};
 use space_protocol::acp_schema as schema;
-use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY};
+use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY, USAGE_META_KEY};
 use space_protocol::service::HistoryItem;
 use space_protocol::{Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SpaceStatus};
 use tokio::sync::oneshot;
@@ -511,7 +511,7 @@ impl Session {
         }
         let host = self.inner.agent.inner.shared.host.clone();
         let id = self.inner.id.clone();
-        host.emit_session(&id, SessionEvent::UserMessage { text: text.clone(), attachments: attachments.clone(), images });
+        host.emit_session(&id, SessionEvent::UserMessage { text: text.clone(), attachments: attachments.clone(), images, at_ms: Some(now_ms()) });
         host.emit_session(&id, SessionEvent::TurnStarted);
         host.record(&id, HistoryItem::User { text: text.clone() });
 
@@ -554,12 +554,18 @@ impl Session {
         match result {
             Ok(response) => {
                 let stop_reason = convert::wire_str(&response.stop_reason);
-                host.emit_session(&id, SessionEvent::TurnEnded { stop_reason: stop_reason.clone() });
+                // What the turn used, if the agent says (`_meta["space/usage"]`).
+                let usage = response
+                    .meta
+                    .as_ref()
+                    .and_then(|m| m.get(USAGE_META_KEY))
+                    .and_then(|u| serde_json::from_value(u.clone()).map_err(|e| tracing::debug!("turn usage: {e}")).ok());
+                host.emit_session(&id, SessionEvent::TurnEnded { stop_reason: stop_reason.clone(), at_ms: Some(now_ms()), usage });
                 Ok(stop_reason)
             }
             Err(e) => {
                 host.emit_session(&id, SessionEvent::Error { message: format!("{e:#}") });
-                host.emit_session(&id, SessionEvent::TurnEnded { stop_reason: "error".into() });
+                host.emit_session(&id, SessionEvent::TurnEnded { stop_reason: "error".into(), at_ms: Some(now_ms()), usage: None });
                 Err(e)
             }
         }
@@ -609,4 +615,9 @@ impl Session {
         host.emit_session(&self.inner.id, SessionEvent::Status(status.clone()));
         Ok(status)
     }
+}
+
+/// Now, in Unix milliseconds (the times on messages and turn ends).
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }

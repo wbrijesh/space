@@ -1,6 +1,7 @@
 // Mapping between pi tool executions and ACP tool-call updates.
 
 import type { ContentBlock, ToolCallContent, ToolKind } from "@agentclientprotocol/sdk";
+import type { TurnUsage } from "./generated/protocol.js";
 
 const MAX_TITLE = 120;
 const MAX_RESULT = 8000;
@@ -135,4 +136,37 @@ export function promptInput(blocks: ContentBlock[], images = true): { text: stri
 		}
 	}
 	return { text: parts.join("\n\n"), images: out };
+}
+
+/** An assistant message as pi keeps it (the fields usage needs). */
+interface UsageMessage {
+	role?: string;
+	provider?: string;
+	model?: string;
+	usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; reasoning?: number };
+}
+
+/**
+ * The tokens a turn used: the usage of every assistant message it added (one per model request),
+ * summed. `undefined` when none reported any.
+ */
+export function turnUsage(messages: readonly unknown[]): TurnUsage | undefined {
+	let total: TurnUsage | undefined;
+	let reasoning = true;
+	for (const raw of messages) {
+		const m = raw as UsageMessage;
+		if (m?.role !== "assistant" || !m.usage) continue;
+		const u = m.usage;
+		total ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, models: [] };
+		total.input += u.input ?? 0;
+		total.output += u.output ?? 0;
+		total.cacheRead = (total.cacheRead ?? 0) + (u.cacheRead ?? 0);
+		total.cacheWrite = (total.cacheWrite ?? 0) + (u.cacheWrite ?? 0);
+		if (u.reasoning == null) reasoning = false;
+		else total.reasoning = (total.reasoning ?? 0) + u.reasoning;
+		const model = m.provider && m.model ? `${m.provider}/${m.model}` : undefined;
+		if (model && !total.models?.includes(model)) total.models?.push(model);
+	}
+	if (total && !reasoning) delete total.reasoning;
+	return total;
 }

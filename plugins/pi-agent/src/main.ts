@@ -19,11 +19,12 @@ import {
 	PROTOCOL_VERSION,
 	PROTOCOL_VERSION_META_KEY,
 	STATUS_METHOD,
+	USAGE_META_KEY,
 } from "./generated/protocol.js";
 import { contextFromMeta, type HostLink } from "./host.js";
 import { createPiSession, type PiSession } from "./pi.js";
 import { completeOnce, configureSession, parseCompleteParams, parseConfigureParams, sessionStatus } from "./status.js";
-import { promptInput, textToolContent, toolKind, toolResultText, toolTitle } from "./translate.js";
+import { promptInput, textToolContent, toolKind, toolResultText, toolTitle, turnUsage } from "./translate.js";
 
 const VERSION: string = (() => {
 	try {
@@ -193,6 +194,7 @@ const app = acp
 		// A text-only model gets each image's path instead of the image.
 		const input = promptInput(params.prompt, session.model?.input?.includes("image") ?? true);
 		let failure: unknown;
+		const firstMessage = session.messages.length;
 		try {
 			await session.prompt(input.text, input.images.length ? { images: input.images } : undefined);
 		} catch (error) {
@@ -207,7 +209,10 @@ const app = acp
 			.notify(STATUS_METHOD, sessionStatus(sessionId, session))
 			.catch((error: unknown) => log("failed to send _space/status:", error));
 
-		if (turn.cancelled) return { stopReason: "cancelled" };
+		// What the turn's requests used, for the reply's footer.
+		const usage = turnUsage(session.messages.slice(firstMessage));
+		const done = (stopReason: acp.StopReason) => ({ stopReason, ...(usage ? { _meta: { [USAGE_META_KEY]: usage } } : {}) });
+		if (turn.cancelled) return done("cancelled");
 		if (failure) {
 			log("prompt failed:", failure);
 			throw turnError(failure instanceof Error ? failure.message : String(failure));
@@ -215,14 +220,14 @@ const app = acp
 		const last = lastAssistant(session);
 		switch (last?.stopReason) {
 			case "aborted":
-				return { stopReason: "cancelled" };
+				return done("cancelled");
 			case "error":
 				log(`turn ended with error: ${last.errorMessage}`);
 				throw turnError(last.errorMessage || "The model request failed");
 			case "length":
-				return { stopReason: "max_tokens" };
+				return done("max_tokens");
 			default:
-				return { stopReason: "end_turn" };
+				return done("end_turn");
 		}
 	})
 	.onRequest(CONFIGURE_METHOD, parseConfigureParams, async ({ params }) => {

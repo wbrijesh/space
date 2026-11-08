@@ -171,3 +171,35 @@ impl SpaceApp {
         }
     }
 }
+
+/// How long a row shows "Copied".
+const COPIED_FOR: std::time::Duration = std::time::Duration::from_millis(1500);
+
+impl SpaceApp {
+    /// A message row's copy button: the text goes to the clipboard and the row says "Copied" for
+    /// a moment.
+    pub(crate) fn copy_message(&mut self, row: String, text: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.copied = Some(row.clone());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(COPIED_FOR).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.copied.as_deref() == Some(row.as_str()) {
+                    this.copied = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Open a row's usage panel (`Some`), or close it.
+    pub(crate) fn show_usage(&mut self, row: Option<String>, cx: &mut Context<Self>) {
+        if self.usage_open != row {
+            self.usage_open = row;
+            cx.notify();
+        }
+    }
+}
+

@@ -23,10 +23,49 @@ pub const CONTEXT_META_KEY: &str = "space/context";
 /// session's own files in (to load it again later). It belongs to the thread and is deleted
 /// with it; the agent may not have been given one (then it keeps the session in memory).
 pub const DATA_DIR_META_KEY: &str = "space/dataDir";
+/// `_meta` key of a `session/prompt` response carrying the turn's [`TurnUsage`] (ACP's own
+/// `usage` field is still unstable).
+pub const USAGE_META_KEY: &str = "space/usage";
 /// `_meta` key of ACP `initialize` carrying [`crate::PROTOCOL_VERSION`], both ways. An agent that
 /// speaks the `_space/*` methods answers with the version it was built for, and the host refuses
 /// it on a mismatch; a plain ACP agent leaves it out.
 pub const PROTOCOL_VERSION_META_KEY: &str = "space/protocolVersion";
+
+/// Tokens a turn used, summed over every model request it made (retries and tool steps
+/// included). The input buckets don't overlap: the whole prompt is `input + cacheRead +
+/// cacheWrite`. A bucket is left out when the provider didn't report it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+#[serde(rename_all = "camelCase")]
+pub struct TurnUsage {
+    /// Prompt tokens read without the cache.
+    pub input: u64,
+    pub output: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<u64>,
+    /// The part of `output` spent reasoning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<u64>,
+    /// The models that answered (`provider/model`), in order, without repeats.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
+}
+
+impl TurnUsage {
+    /// Every token the turn's requests read or wrote.
+    pub fn total(&self) -> u64 {
+        self.input + self.cache_read.unwrap_or(0) + self.cache_write.unwrap_or(0) + self.output
+    }
+
+    /// The share of the prompt read from the cache, in percent (`None`: not reported, or no prompt).
+    pub fn cache_hit_percent(&self) -> Option<u64> {
+        let read = self.cache_read?;
+        let prompt = self.input + read + self.cache_write.unwrap_or(0);
+        (prompt > 0).then(|| (read * 100 + prompt / 2) / prompt)
+    }
+}
 
 /// A model the agent can switch a session to.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

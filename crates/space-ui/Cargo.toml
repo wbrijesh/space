@@ -13,3 +13,4 @@ dev = []
 [dependencies]
 space-core.workspace = true
 gpui = { package = "gpui-kit", version = "0.9.0" }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

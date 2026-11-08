@@ -9,7 +9,8 @@
 //! * `recall` — answer how many earlier prompts of the session it remembers.
 //!
 //! Images in a prompt are answered first: "Saw 2 images (image/png 132 bytes <uri>, …). ".
-//! `SPACE_STUB_NO_IMAGES=1` makes it say it takes no images.
+//! `SPACE_STUB_NO_IMAGES=1` makes it say it takes no images. A finished turn reports fixed usage
+//! (`_meta["space/usage"]`).
 //!
 //! `_space/complete` answers `"Title by <model>."` (quoted, as models sometimes do), with the
 //! requested model or else the session's; a prompt with `titlefail` fails and one with
@@ -36,7 +37,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use space_core::stub_script::{SCRIPT_ENV, Step, StubScript};
-use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY};
+use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY, USAGE_META_KEY};
 use space_protocol::{Complete, CompleteResult, Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, SpaceStatus, Verdict};
 use space_protocol::acp::{self, Agent, ByteStreams, Client, Responder};
 use space_protocol::acp_schema::*;
@@ -413,7 +414,7 @@ async fn run_turn(
         s.context_tokens += 1800 + text.len() as u64 * 4;
     }
     cx.send_notification(state.status(&sid.0))?;
-    responder.respond(PromptResponse::new(StopReason::EndTurn))
+    responder.respond(PromptResponse::new(StopReason::EndTurn).meta(usage_meta()))
 }
 
 /// Play a scripted turn (see `space_core::stub_script`).
@@ -516,5 +517,21 @@ async fn run_script(
         }
     }
     cx.send_notification(state.status(&sid.0))?;
-    responder.respond(PromptResponse::new(StopReason::EndTurn))
+    responder.respond(PromptResponse::new(StopReason::EndTurn).meta(usage_meta()))
 }
+
+/// The usage every finished turn reports.
+fn usage_meta() -> Meta {
+    let usage = space_protocol::TurnUsage {
+        input: 1204,
+        output: 97,
+        cache_read: Some(8112),
+        cache_write: Some(88),
+        reasoning: None,
+        models: vec!["stub/stub-model".into()],
+    };
+    let mut meta = Meta::new();
+    meta.insert(USAGE_META_KEY.into(), serde_json::to_value(usage).unwrap_or_default());
+    meta
+}
+

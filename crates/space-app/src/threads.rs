@@ -196,7 +196,7 @@ impl SpaceApp {
                 event,
                 SessionEvent::TurnEnded { .. } | SessionEvent::PermissionRequested(_) | SessionEvent::Error { .. }
             );
-        if !selected && attention && !matches!(event, SessionEvent::TurnEnded { stop_reason } if stop_reason == "error") {
+        if !selected && attention && !matches!(event, SessionEvent::TurnEnded { stop_reason, .. } if stop_reason == "error") {
             thread.unread += 1;
         }
     }
@@ -271,7 +271,7 @@ impl SpaceApp {
         // Continue the saved conversation if this agent can; else start over in a new session.
         let resume = thread.resume.take().filter(|(plugin, _)| plugin == agent.plugin_id() && can_load);
         if resume.is_none() && !thread.state.items.is_empty() {
-            thread.state.items.push(TranscriptItem::TurnEnd("new-session".into()));
+            thread.state.items.push(TranscriptItem::divider("new-session"));
         }
         let (cwd, id) = (thread.cwd.clone(), thread.id.clone());
         cx.spawn(async move |this, cx| {
@@ -535,7 +535,7 @@ mod tests {
     fn a_generated_title_replaces_the_first_line() {
         let mut thread = Thread::new(1, PathBuf::from("/nonexistent"));
         assert_eq!(thread.title(), "New thread");
-        thread.apply(&SessionEvent::UserMessage { text: "please fix the login page\nit redirects".into(), attachments: vec![], images: vec![] });
+        thread.apply(&SessionEvent::UserMessage { text: "please fix the login page\nit redirects".into(), attachments: vec![], images: vec![], at_ms: None });
         // Until a title arrives (or if none does): the first line.
         assert_eq!(thread.title(), "please fix the login page");
         thread.name = Some("Fix login redirect".into());

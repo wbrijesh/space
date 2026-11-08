@@ -127,7 +127,7 @@ pub async fn run(host: &Host, mut events: EventReceiver, opts: SmokeOptions) -> 
             }
             SessionEvent::Plan(p) => println!("[plan] {} entries", p.len()),
             SessionEvent::Error { message } => println!("[error] {message}"),
-            SessionEvent::TurnEnded { stop_reason } => {
+            SessionEvent::TurnEnded { stop_reason, .. } => {
                 println!("[turn ended: {stop_reason}]");
                 break;
             }

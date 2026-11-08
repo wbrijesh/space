@@ -78,6 +78,8 @@ async fn full_turn_streams_and_ends() {
 
     let stop = session.prompt("hello").await.unwrap();
     assert_eq!(stop, "end_turn");
+    // The message and the turn end carry times; the turn end, the agent's usage.
+    let ended = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
     until(&mut events, &mut state, &mut seen, turn_ended).await;
 
     assert!(seen.iter().any(|e| matches!(e, HostEvent::PluginStatus { status: PluginStatus::Running, .. })));
@@ -92,6 +94,7 @@ async fn full_turn_streams_and_ends() {
             TranscriptItem::Thought(t) => format!("thought:{t}"),
             TranscriptItem::Tool(t) => format!("tool:{}:{}:{}", t.kind, t.status.as_str(), t.output),
             TranscriptItem::Agent(t) => format!("agent:{t}"),
+            TranscriptItem::TurnEnd { reason, .. } => format!("turn-end:{reason}"),
             other => format!("{other:?}"),
         })
         .collect();
@@ -101,9 +104,16 @@ async fn full_turn_streams_and_ends() {
             "user:hello",
             "thought:Thinking about the request.",
             "tool:execute:done:stub\nargv: /bin/sh -c echo stub",
-            "agent:Hello from the stub agent."
+            "agent:Hello from the stub agent.",
+            "turn-end:end_turn"
         ]
     );
+    let TranscriptItem::User { at_ms: Some(sent), .. } = state.items[0] else { panic!("no time on {:?}", state.items[0]) };
+    let Some(TranscriptItem::TurnEnd { at_ms: Some(at), usage: Some(usage), .. }) = state.items.last() else {
+        panic!("no time or usage on {:?}", state.items.last())
+    };
+    assert!(sent <= *at && *at <= ended + 1000, "{sent} {at} {ended}");
+    assert_eq!((usage.total(), usage.cache_hit_percent(), usage.models.as_slice()), (9501, Some(86), &["stub/stub-model".to_string()][..]));
     assert!(agent.logs().iter().any(|l| l.contains("prompt \"hello\"")));
 
     // Stopping reports the plugin as stopped.
@@ -170,7 +180,7 @@ async fn cancel_stops_turn() {
     session.cancel().unwrap();
     until(&mut events, &mut state, &mut seen, turn_ended).await;
     assert_eq!(turn.await.unwrap().unwrap(), "cancelled");
-    assert!(matches!(state.items.last(), Some(TranscriptItem::TurnEnd(r)) if r == "cancelled"));
+    assert!(matches!(state.items.last(), Some(TranscriptItem::TurnEnd { reason, .. }) if reason == "cancelled"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -284,7 +294,8 @@ async fn images_go_as_image_blocks_after_the_message_event() {
     assert_eq!(stop, "end_turn");
     until(&mut events, &mut state, &mut seen, turn_ended).await;
 
-    assert_eq!(state.items[0], TranscriptItem::User { text: "what is this".into(), attachments: vec![], images: vec![image] });
+    let TranscriptItem::User { text, images, at_ms, .. } = &state.items[0] else { panic!("{:?}", state.items[0]) };
+    assert_eq!((text.as_str(), images.as_slice(), at_ms.is_some()), ("what is this", &[image][..], true));
     let reply: String = state.items.iter().filter_map(|i| if let TranscriptItem::Agent(t) = i { Some(t.as_str()) } else { None }).collect();
     assert!(reply.starts_with(&format!("Saw 1 image (image/png 5 bytes file://{}). ", path.display())), "{reply}");
 

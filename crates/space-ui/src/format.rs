@@ -248,10 +248,88 @@ pub fn attempt_times(last_ms: Option<u64>, next_ms: Option<u64>, now_ms: u64) ->
     }
 }
 
+/// "just now", "1 minute ago", "7 hours ago", "yesterday", "3 days ago", "4 weeks ago",
+/// "2 months ago", "3 years ago": how long ago Unix ms `at` was, rounded down to the largest
+/// whole unit.
+pub fn time_ago(at_ms: u64, now_ms: u64) -> String {
+    let s = now_ms.saturating_sub(at_ms) / 1000;
+    let (n, unit) = match s {
+        0..45 => return "just now".to_string(),
+        45..3600 => ((s / 60).max(1), "minute"),
+        3600..86_400 => (s / 3600, "hour"),
+        86_400..172_800 => return "yesterday".to_string(),
+        172_800..604_800 => (s / 86_400, "day"),
+        604_800..2_592_000 => (s / 604_800, "week"),
+        2_592_000..31_536_000 => ((s / 2_592_000).min(11), "month"),
+        _ => (s / 31_536_000, "year"),
+    };
+    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+}
+
+/// "Sat, Nov 8 at 2:55 PM" (local time), with the year when it isn't this one.
+pub fn exact_time(at_ms: u64) -> String {
+    use chrono::{Datelike as _, Local, TimeZone as _};
+    let Some(t) = Local.timestamp_millis_opt(at_ms as i64).single() else { return String::new() };
+    if t.year() == Local::now().year() {
+        t.format("%a, %b %-d at %-I:%M %p").to_string()
+    } else {
+        t.format("%a, %b %-d, %Y at %-I:%M %p").to_string()
+    }
+}
+
+/// 9413 → "9,413".
+pub fn thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use space_core::SessionEvent;
+
+    #[test]
+    fn time_ago_steps_up_at_each_unit() {
+        let ago = |secs: u64| time_ago(1_000_000_000_000 - secs * 1000, 1_000_000_000_000);
+        let (min, hour, day, week, month, year) = (60, 3600, 86_400, 604_800, 2_592_000, 31_536_000);
+        let cases = [
+            (0, "just now"),
+            (44, "just now"),
+            (45, "1 minute ago"),
+            (3 * min + 59, "3 minutes ago"),
+            (hour - 1, "59 minutes ago"),
+            (hour, "1 hour ago"),
+            (7 * hour + 30 * min, "7 hours ago"),
+            (day - 1, "23 hours ago"),
+            (day, "yesterday"),
+            (2 * day, "2 days ago"),
+            (week - 1, "6 days ago"),
+            (week, "1 week ago"),
+            (4 * week, "4 weeks ago"),
+            (month, "1 month ago"),
+            (2 * month + day, "2 months ago"),
+            (year - 1, "11 months ago"),
+            (year, "1 year ago"),
+            (3 * year, "3 years ago"),
+        ];
+        for (secs, want) in cases {
+            assert_eq!(ago(secs), want, "{secs}s");
+        }
+        // A time a little in the future (clocks) reads as now.
+        assert_eq!(time_ago(2000, 1000), "just now");
+    }
+
+    #[test]
+    fn thousands_groups_digits() {
+        assert_eq!([thousands(0), thousands(999), thousands(9413), thousands(1_234_567)], ["0", "999", "9,413", "1,234,567"]);
+    }
 
     fn info(name: &str) -> ModelInfo {
         ModelInfo { provider: "claude-cli".into(), id: "x".into(), name: Some(name.into()) }
@@ -280,12 +358,12 @@ mod tests {
     fn titles_and_previews() {
         let mut s = SessionState::new("s");
         assert_eq!(thread_preview(&s), Preview::Empty);
-        s.apply(&SessionEvent::UserMessage { text: "\n  Fix the tests\nplease".into(), attachments: vec![], images: vec![] });
+        s.apply(&SessionEvent::UserMessage { text: "\n  Fix the tests\nplease".into(), attachments: vec![], images: vec![], at_ms: None });
         s.apply(&SessionEvent::TurnStarted);
         assert_eq!(thread_title(&s).as_deref(), Some("Fix the tests"));
         assert_eq!(thread_preview(&s), Preview::Working(None));
         s.apply(&SessionEvent::AgentText { text: "## Done\n\nAll **green**:\n```\nok\n```\n- `cargo test`".into() });
-        s.apply(&SessionEvent::TurnEnded { stop_reason: "end_turn".into() });
+        s.apply(&SessionEvent::turn_ended("end_turn"));
         assert_eq!(thread_preview(&s), Preview::Text("Done All green: cargo test".into()));
         s.apply(&SessionEvent::Error { message: "boom".into() });
         assert_eq!(thread_preview(&s), Preview::Error("boom".into()));

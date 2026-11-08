@@ -6485,6 +6485,7 @@ dependencies = [
 name = "space-ui"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "gpui-kit",
  "space-core",
 ]

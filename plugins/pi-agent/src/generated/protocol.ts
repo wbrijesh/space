@@ -9,6 +9,7 @@ export const CONFINE_METHOD = "_space/sandbox/confine";
 export const COMPLETE_METHOD = "_space/complete";
 export const CONTEXT_META_KEY = "space/context";
 export const DATA_DIR_META_KEY = "space/dataDir";
+export const USAGE_META_KEY = "space/usage";
 
 /**
  * A model the agent can switch a session to.
@@ -117,5 +118,24 @@ export type ContextSection = {
  * Stable id (the agent may use it as a prompt-section name).
  */
 id: string, text: string, };
+
+/**
+ * Tokens a turn used, summed over every model request it made (retries and tool steps
+ * included). The input buckets don't overlap: the whole prompt is `input + cacheRead +
+ * cacheWrite`. A bucket is left out when the provider didn't report it.
+ */
+export type TurnUsage = { 
+/**
+ * Prompt tokens read without the cache.
+ */
+input: number, output: number, cacheRead?: number, cacheWrite?: number, 
+/**
+ * The part of `output` spent reasoning.
+ */
+reasoning?: number, 
+/**
+ * The models that answered (`provider/model`), in order, without repeats.
+ */
+models: Array<string>, };
 
 export type JsonValue = number | string | boolean | Array<JsonValue> | { [key in string]: JsonValue } | null;

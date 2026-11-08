@@ -17,6 +17,7 @@ use space_ui::components::settings::{
 };
 use space_ui::components::follow_scroll::FollowScrollArea;
 use space_ui::components::images::{Pic, ViewerHandlers, viewer};
+use space_ui::components::message_actions::ActionHandlers;
 use space_ui::components::shell::{
     banner, confirm_card, empty_heading, problem_card, sidebar_column,
 };
@@ -94,6 +95,14 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.toggle_settings(window, cx)))
         .on_action(cx.listener(|this, _: &ScrollToBottom, _, cx| this.scroll_to_bottom(cx)))
         .on_action(cx.listener(|this, _: &CyclePermissionMode, _, cx| this.cycle_mode(cx)))
+        // Esc closes a message's usage panel.
+        .when(app.usage_open.is_some(), |d| {
+            d.on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                if e.keystroke.key == "escape" {
+                    this.show_usage(None, cx);
+                }
+            }))
+        })
         // Only while the page is open, so Esc is free otherwise.
         .when(app.show_settings, |d| {
             d.on_action(cx.listener(|this, _: &CloseSettings, window, cx| this.close_settings(window, cx)))
@@ -218,6 +227,23 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
         on_open_image: Some(Rc::new(move |pics, ix, w, cx| {
             let _ = this3.update(cx, |this, cx| this.open_viewer(pics, ix, w, cx));
         })),
+        now_ms: crate::app::now_ms(),
+        copied: app.copied.as_deref(),
+        usage_open: app.usage_open.as_deref(),
+        actions: ActionHandlers {
+            on_copy: {
+                let this = cx.entity().downgrade();
+                Rc::new(move |row, text, _, cx| {
+                    let _ = this.update(cx, |this, cx| this.copy_message(row.to_string(), text.to_string(), cx));
+                })
+            },
+            on_usage: {
+                let this = cx.entity().downgrade();
+                Rc::new(move |row, _, cx| {
+                    let _ = this.update(cx, |this, cx| this.show_usage(row.map(|r| r.to_string()), cx));
+                })
+            },
+        },
     });
 
     let content =

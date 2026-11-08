@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use space_protocol::SpaceStatus;
+use space_protocol::{SpaceStatus, TurnUsage};
 
 /// Opaque ACP session id.
 pub type SessionId = String;
@@ -134,6 +134,9 @@ pub enum SessionEvent {
         attachments: Vec<PathBuf>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<ImageRef>,
+        /// When it was sent (Unix ms; `None` in threads saved before Space kept times).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at_ms: Option<u64>,
     },
     TurnStarted,
     AgentText { text: String },
@@ -150,23 +153,44 @@ pub enum SessionEvent {
     ToolCallHeld { id: String, title: String, reason: Option<String> },
     PermissionResolved { request_id: u64, decision: PermissionDecision },
     /// The prompt request settled. `stop_reason` is the ACP stop reason (`end_turn`,
-    /// `cancelled`, ...) or `error`.
-    TurnEnded { stop_reason: String },
+    /// `cancelled`, ...) or `error`; `at_ms` when (Unix ms); `usage` the tokens the turn used,
+    /// if the agent said.
+    TurnEnded {
+        stop_reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<TurnUsage>,
+    },
     Error { message: String },
 }
 
 /// One entry in the rendered transcript.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TranscriptItem {
-    User { text: String, attachments: Vec<PathBuf>, images: Vec<ImageRef> },
+    User { text: String, attachments: Vec<PathBuf>, images: Vec<ImageRef>, at_ms: Option<u64> },
     Agent(String),
     Thought(String),
     Tool(ToolCallInfo),
     Permission { request: PermissionRequest, resolved: Option<PermissionDecision> },
     Plan(Vec<PlanEntry>),
     Error(String),
-    /// A turn that ended with something other than `end_turn`.
-    TurnEnd(String),
+    /// The end of a turn: why (`end_turn`, `cancelled`, `error`, ...), when, and what it used.
+    TurnEnd { reason: String, at_ms: Option<u64>, usage: Option<TurnUsage> },
+}
+
+impl SessionEvent {
+    /// A turn end without a time or usage (tests, and turns Space ends itself).
+    pub fn turn_ended(stop_reason: impl Into<String>) -> Self {
+        SessionEvent::TurnEnded { stop_reason: stop_reason.into(), at_ms: None, usage: None }
+    }
+}
+
+impl TranscriptItem {
+    /// A divider Space adds itself (e.g. `new-session`), with no time or usage.
+    pub fn divider(reason: impl Into<String>) -> Self {
+        TranscriptItem::TurnEnd { reason: reason.into(), at_ms: None, usage: None }
+    }
 }
 
 /// Folded state of a session.
@@ -193,10 +217,11 @@ impl SessionState {
                 self.plugin_id.clone_from(plugin_id);
                 self.cwd.clone_from(cwd);
             }
-            SessionEvent::UserMessage { text, attachments, images } => self.items.push(TranscriptItem::User {
+            SessionEvent::UserMessage { text, attachments, images, at_ms } => self.items.push(TranscriptItem::User {
                 text: text.clone(),
                 attachments: attachments.clone(),
                 images: images.clone(),
+                at_ms: *at_ms,
             }),
             SessionEvent::TurnStarted => self.running = true,
             SessionEvent::AgentText { text } => match self.items.last_mut() {
@@ -286,7 +311,7 @@ impl SessionState {
                     }
                 }
             }
-            SessionEvent::TurnEnded { stop_reason } => {
+            SessionEvent::TurnEnded { stop_reason, at_ms, usage } => {
                 self.running = false;
                 // Nothing waits once the turn is over.
                 for item in &mut self.items {
@@ -300,9 +325,7 @@ impl SessionState {
                         *resolved = Some(PermissionDecision::Cancelled);
                     }
                 }
-                if stop_reason != "end_turn" {
-                    self.items.push(TranscriptItem::TurnEnd(stop_reason.clone()));
-                }
+                self.items.push(TranscriptItem::TurnEnd { reason: stop_reason.clone(), at_ms: *at_ms, usage: usage.clone() });
             }
             SessionEvent::Error { message } => self.items.push(TranscriptItem::Error(message.clone())),
         }
@@ -359,7 +382,7 @@ mod tests {
         let mut s = SessionState::new("s1");
         let ev = |e: SessionEvent| e;
         for e in [
-            ev(SessionEvent::UserMessage { text: "hi".into(), attachments: vec![], images: vec![] }),
+            ev(SessionEvent::UserMessage { text: "hi".into(), attachments: vec![], images: vec![], at_ms: None }),
             ev(SessionEvent::TurnStarted),
             ev(SessionEvent::AgentThought { text: "think".into() }),
             ev(SessionEvent::AgentThought { text: "ing".into() }),
@@ -382,12 +405,12 @@ mod tests {
                 ..Default::default()
             })),
             ev(SessionEvent::AgentText { text: "Done".into() }),
-            ev(SessionEvent::TurnEnded { stop_reason: "end_turn".into() }),
+            ev(SessionEvent::turn_ended("end_turn")),
         ] {
             s.apply(&e);
         }
         assert!(!s.running);
-        assert_eq!(s.items.len(), 5);
+        assert_eq!(s.items.len(), 6);
         assert_eq!(s.items[1], TranscriptItem::Thought("thinking".into()));
         assert_eq!(s.items[2], TranscriptItem::Agent("Hello".into()));
         match &s.items[3] {
@@ -399,6 +422,7 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(s.items[4], TranscriptItem::Agent("Done".into()));
+        assert_eq!(s.items[5], TranscriptItem::divider("end_turn"));
     }
 
     #[test]
@@ -426,6 +450,24 @@ mod tests {
         // After the agent's report, too.
         s.apply(&SessionEvent::ToolCallBlocked { id: "t".into(), reason: "again".into() });
         assert_eq!(s.items.len(), 1);
+    }
+
+    #[test]
+    fn times_and_usage_round_trip_and_old_events_still_load() {
+        let usage = TurnUsage { input: 4, output: 4, cache_read: Some(0), cache_write: Some(2668), reasoning: None, models: vec!["a/b".into()] };
+        let events = [
+            SessionEvent::UserMessage { text: "hi".into(), attachments: vec![], images: vec![], at_ms: Some(5) },
+            SessionEvent::TurnEnded { stop_reason: "end_turn".into(), at_ms: Some(9), usage: Some(usage) },
+        ];
+        for e in &events {
+            let json = serde_json::to_string(e).unwrap();
+            assert_eq!(&serde_json::from_str::<SessionEvent>(&json).unwrap(), e, "{json}");
+        }
+        // Saved before Space kept times and usage.
+        let old: SessionEvent = serde_json::from_str(r#"{"TurnEnded":{"stop_reason":"end_turn"}}"#).unwrap();
+        assert_eq!(old, SessionEvent::turn_ended("end_turn"));
+        let old: SessionEvent = serde_json::from_str(r#"{"UserMessage":{"text":"hi","attachments":[]}}"#).unwrap();
+        assert!(matches!(old, SessionEvent::UserMessage { at_ms: None, .. }));
     }
 
     #[test]
@@ -459,7 +501,7 @@ mod tests {
         s.apply(&SessionEvent::ToolCallHeld { id: "x".into(), title: String::new(), reason: None });
         assert_eq!(s.items.len(), 1);
         s.apply(&held(Some("again")));
-        s.apply(&SessionEvent::TurnEnded { stop_reason: "cancelled".into() });
+        s.apply(&SessionEvent::turn_ended("cancelled"));
         assert_eq!(s.held(), None);
     }
 

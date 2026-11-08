@@ -69,7 +69,7 @@ impl HostInner {
                 project_root: cwd.display().to_string(),
             },
             SessionEvent::TurnStarted => Observed::TurnStarted { session_id: id() },
-            SessionEvent::TurnEnded { stop_reason } => {
+            SessionEvent::TurnEnded { stop_reason, .. } => {
                 Observed::TurnEnded { session_id: id(), stop_reason: stop_reason.clone(), watching: watching() }
             }
             SessionEvent::ToolCallHeld { id: call_id, reason: Some(reason), .. } => Observed::ToolHeld {

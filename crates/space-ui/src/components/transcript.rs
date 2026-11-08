@@ -10,9 +10,11 @@ use gpui::component::text::TextView;
 use gpui::component::{Icon, IconName};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use space_core::protocol::TurnUsage;
 use space_core::{PermissionDecision, PermissionRequest, PlanEntry, SessionState, ToolCallInfo, ToolStatus, TranscriptItem};
 
 use super::images::{OpenPicsHandler, Pic, message_images};
+use super::message_actions::{ActionHandlers, MessageActions, message_actions};
 use super::loaders::Spinner;
 use super::widgets::{pill_button, status_dot};
 use crate::format;
@@ -444,34 +446,112 @@ pub struct TranscriptView<'a> {
     pub on_answer: AnswerHandler,
     /// A message's picture was clicked.
     pub on_open_image: Option<OpenPicsHandler>,
+    /// For the rows under messages: now (Unix ms), the row showing "Copied", the row whose
+    /// usage panel is open, and what their buttons do.
+    pub now_ms: u64,
+    pub copied: Option<&'a str>,
+    pub usage_open: Option<&'a str>,
+    pub actions: ActionHandlers,
 }
 
-/// The transcript's elements, spaced, with a trailing working row while a turn runs.
+/// The transcript's elements, spaced, with a trailing working row while a turn runs. Each
+/// message of yours, and each agent turn (from after your message to its end), is one hover
+/// area with its row of actions under it.
 pub fn transcript_items(view: TranscriptView<'_>) -> Vec<AnyElement> {
-    let TranscriptView { state, key, expanded, thought_secs, queued, on_toggle, on_answer, on_open_image } = view;
+    let TranscriptView {
+        state,
+        key,
+        expanded,
+        thought_secs,
+        queued,
+        on_toggle,
+        on_answer,
+        on_open_image,
+        now_ms,
+        copied,
+        usage_open,
+        actions,
+    } = view;
     let items = &state.items;
     let compact = |i: &TranscriptItem| matches!(i, TranscriptItem::Tool(_) | TranscriptItem::Thought(_));
+    let row = |id: String, group: &SharedString, copy: Option<&str>, at_ms: Option<u64>, usage: Option<&TurnUsage>, end: bool| {
+        message_actions(
+            MessageActions {
+                copied: copied == Some(id.as_str()),
+                usage_open: usage_open == Some(id.as_str()),
+                id: id.into(),
+                group: group.clone(),
+                copy_text: copy.map(str::trim).filter(|t| !t.is_empty()).map(|t| SharedString::from(t.to_string())),
+                at_ms,
+                now_ms,
+                usage: usage.cloned(),
+                end,
+                shown: false,
+            },
+            &actions,
+        )
+    };
     let mut out = Vec::new();
+    // The agent turn being laid out: its elements and its last reply's text.
+    let mut turn: Vec<AnyElement> = Vec::new();
+    let mut reply: Option<&str> = None;
     let mut prev: Option<&TranscriptItem> = None;
+    // The previous element ends with a row of actions (its height already spaces them).
+    let mut after_row = false;
     for (ix, item) in items.iter().enumerate() {
-        if matches!(item, TranscriptItem::TurnEnd(r) if r == "error" || r == "end_turn") {
-            continue;
-        }
         let gap = match prev {
             None => px(0.),
+            _ if after_row => px(6.),
             Some(p) if compact(p) && compact(item) => GAP_TIGHT,
             _ => GAP,
         };
         let last = ix + 1 == items.len();
         let el = match item {
-            TranscriptItem::User { text, attachments, images } => user_message(
-                format!("pics-{key}-{ix}"),
-                text,
-                attachments,
-                images.iter().map(Pic::file).collect(),
-                on_open_image.clone(),
-            ),
-            TranscriptItem::Agent(md) => agent_message(SharedString::from(format!("md-{key}-{ix}")), md),
+            TranscriptItem::User { text, attachments, images, at_ms } => {
+                // An unfinished turn before it (no end): as it is, without a row.
+                if !turn.is_empty() {
+                    out.push(div().flex().flex_col().children(std::mem::take(&mut turn)).into_any_element());
+                }
+                let group = SharedString::from(format!("user-{key}-{ix}"));
+                let message = user_message(format!("pics-{key}-{ix}"), text, attachments, images.iter().map(Pic::file).collect(), on_open_image.clone());
+                out.push(
+                    div()
+                        .group(group.clone())
+                        .mt(gap)
+                        .child(message)
+                        .child(row(format!("user-{key}-{ix}"), &group, Some(text), *at_ms, None, true))
+                        .into_any_element(),
+                );
+                (prev, after_row, reply) = (Some(item), true, None);
+                continue;
+            }
+            TranscriptItem::TurnEnd { reason, at_ms, usage } => {
+                let divider = !matches!(reason.as_str(), "end_turn" | "error");
+                if divider {
+                    turn.push(div().mt(gap).child(turn_divider(reason)).into_any_element());
+                }
+                let group = SharedString::from(format!("turn-{key}-{ix}"));
+                let has_row = reply.is_some() || at_ms.is_some() || usage.is_some();
+                if !turn.is_empty() {
+                    out.push(
+                        div()
+                            .group(group.clone())
+                            .flex()
+                            .flex_col()
+                            .children(std::mem::take(&mut turn))
+                            .when(has_row, |d| d.child(row(format!("turn-{key}-{ix}"), &group, reply, *at_ms, usage.as_ref(), false)))
+                            .into_any_element(),
+                    );
+                }
+                after_row = has_row || (after_row && !divider);
+                prev = Some(item);
+                reply = None;
+                continue;
+            }
+            TranscriptItem::Agent(md) => {
+                reply = Some(md);
+                agent_message(SharedString::from(format!("md-{key}-{ix}")), md)
+            }
             TranscriptItem::Thought(t) => thought_row(
                 ix,
                 t,
@@ -484,10 +564,13 @@ pub fn transcript_items(view: TranscriptView<'_>) -> Vec<AnyElement> {
             TranscriptItem::Permission { request, resolved } => permission_card(request, resolved.as_ref(), on_answer.clone()),
             TranscriptItem::Plan(entries) => plan_card(entries),
             TranscriptItem::Error(msg) => error_card(msg),
-            TranscriptItem::TurnEnd(reason) => turn_divider(reason),
         };
-        out.push(div().mt(gap).child(el).into_any_element());
-        prev = Some(item);
+        turn.push(div().mt(gap).child(el).into_any_element());
+        (prev, after_row) = (Some(item), false);
+    }
+    // The running turn: no row until it ends.
+    if !turn.is_empty() {
+        out.push(div().flex().flex_col().children(turn).into_any_element());
     }
     if let Some((text_, attachments, pics)) = queued {
         out.push(div().mt(GAP).child(user_message(format!("pics-{key}-queued"), text_, attachments, pics, None)).into_any_element());
@@ -613,7 +696,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         Example::new("tool turn, working", move |_, _| {
             let mut s = SessionState::new("preview");
             for e in [
-                SessionEvent::UserMessage { text: "Run the tests and fix what fails".into(), attachments: vec![], images: vec![] },
+                SessionEvent::UserMessage { text: "Run the tests and fix what fails".into(), attachments: vec![], images: vec![], at_ms: None },
                 SessionEvent::TurnStarted,
                 SessionEvent::AgentThought { text: "Run the suite first.".into() },
                 SessionEvent::ToolCall(tool(ToolStatus::Completed, TEST_OUTPUT)),
@@ -630,6 +713,10 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 on_toggle: toggle.clone(),
                 on_answer: answer.clone(),
                 on_open_image: None,
+                now_ms: 0,
+                copied: None,
+                usage_open: None,
+                actions: ActionHandlers::default(),
             };
             div().flex().flex_col().children(transcript_items(view)).into_any_element()
         })

@@ -112,7 +112,10 @@ lists every plugin and its status; if the agent can't start or exits, the thread
   unchecked), the thread shows a pause icon in the sidebar, and it goes on by itself once the check works
   again, the key changes, or you switch the thread to Read Only.
 - **Transcript**: your messages as bubbles (their images above them: one shown whole, several as
-  tiles; click one to view it large, ← / → for the others, Esc closes), replies as markdown, thinking collapsed as
+  tiles; click one to view it large, ← / → for the others, Esc closes), replies as markdown. Hovering
+  a message of yours shows how long ago you sent it (hover the time for the date) and Copy; hovering
+  an agent turn shows Copy (its last reply), the tokens it used ("Usage 9.4k tok"; click for the
+  breakdown: model, cache hit, uncached and cached input, cache write, output) and when it ended. thinking collapsed as
   "Thought for Ns", tool calls as compact rows that expand to their output, permission cards
   (Allow/Reject). It follows new output while you're at the bottom; scroll up to read and it stays
   put while the agent keeps working, with a round ↓ button above the composer. The button, ⌘↓ or

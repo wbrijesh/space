@@ -29,6 +29,7 @@ fn generate() -> String {
         ("COMPLETE_METHOD", format!("{COMPLETE_METHOD:?}")),
         ("CONTEXT_META_KEY", format!("{CONTEXT_META_KEY:?}")),
         ("DATA_DIR_META_KEY", format!("{DATA_DIR_META_KEY:?}")),
+        ("USAGE_META_KEY", format!("{USAGE_META_KEY:?}")),
     ];
     for (name, value) in consts {
         out.push_str(&format!("export const {name} = {value};\n"));
@@ -45,6 +46,7 @@ fn generate() -> String {
         item::<Complete>(&cfg),
         item::<CompleteResult>(&cfg),
         item::<ContextSection>(&cfg),
+        item::<TurnUsage>(&cfg),
         item::<serde_json::Value>(&cfg),
     ] {
         out.push('\n');

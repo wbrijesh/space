@@ -7,7 +7,7 @@ use gpui::{AssetSource, Result, SharedString};
 
 icon_assets!(
     ExtraIcons,
-    [GitBranch, CircleStop, Brain, Wrench, Pencil, ListChecks, Terminal, SquarePen, Shield, ShieldCheck, ShieldHalf, ShieldAlert, KeyRound, CirclePause]
+    [GitBranch, CircleStop, Brain, Wrench, Pencil, ListChecks, Terminal, SquarePen, Shield, ShieldCheck, ShieldHalf, ShieldAlert, KeyRound, CirclePause, Database, Copy, Check]
 );
 
 pub struct SpaceAssets;

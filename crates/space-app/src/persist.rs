@@ -199,7 +199,7 @@ impl SpaceApp {
                             thread.apply(event);
                         }
                         if thread.state.running || thread.state.pending_permission().is_some() {
-                            thread.apply(&SessionEvent::TurnEnded { stop_reason: "cancelled".into() });
+                            thread.apply(&SessionEvent::turn_ended("cancelled"));
                         }
                         if thread.save_again {
                             this.save_thread(key, cx);
@@ -275,7 +275,7 @@ mod tests {
     fn chunks_merge_and_holds_are_left_out() {
         let mut unsaved = Vec::new();
         let events = [
-            SessionEvent::UserMessage { text: "hi".into(), attachments: vec![], images: vec![] },
+            SessionEvent::UserMessage { text: "hi".into(), attachments: vec![], images: vec![], at_ms: None },
             SessionEvent::TurnStarted,
             SessionEvent::AgentThought { text: "a".into() },
             SessionEvent::AgentThought { text: "b".into() },
@@ -295,7 +295,7 @@ mod tests {
             SessionEvent::AgentText { text: "lo".into() },
             SessionEvent::Status(SpaceStatus { model: Some("m".into()), ..Default::default() }),
             SessionEvent::Status(SpaceStatus { thinking_level: Some("high".into()), ..Default::default() }),
-            SessionEvent::TurnEnded { stop_reason: "end_turn".into() },
+            SessionEvent::turn_ended("end_turn"),
         ];
         let mut live = SessionState::default();
         for e in &events {

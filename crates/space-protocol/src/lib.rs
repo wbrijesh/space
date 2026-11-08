@@ -27,7 +27,7 @@ pub use agent_client_protocol::v1::schema as acp_schema;
 
 pub use ext::{
     Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, ContextSection, ModelInfo, PreExecute, PreExecuteResult, SpaceStatus,
-    Verdict,
+    TurnUsage, Verdict,
 };
 pub use manifest::{
     CAP_AGENT, CAP_CONTEXT, CAP_SANDBOX, CAP_SESSION_STORE, CAP_SESSION_TITLE, CAP_SETTINGS, CATALOG_PERMISSION_MODES, CATALOG_PREFIX, EVENTS,

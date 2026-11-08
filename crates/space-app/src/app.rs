@@ -245,6 +245,9 @@ pub struct SpaceApp {
     /// The image viewer: a message's pictures and the one shown.
     pub(crate) viewer: Option<(Vec<space_ui::components::images::Pic>, usize)>,
     pub(crate) viewer_focus: FocusHandle,
+    /// The message row that shows "Copied" for a moment, and the one whose usage panel is open.
+    pub(crate) copied: Option<String>,
+    pub(crate) usage_open: Option<String>,
     /// Draft images are told apart by this (they're prepared in the background).
     pub(crate) next_image_id: u64,
     /// Threads deleted while a save of theirs was in flight (by key): their saved folder is
@@ -398,6 +401,8 @@ impl SpaceApp {
             viewer: None,
             viewer_focus: cx.focus_handle(),
             next_image_id: 0,
+            copied: None,
+            usage_open: None,
             transcript_scroll: FollowScroll::new(),
             sidebar_open: true,
             sidebar_shown: space_ui::theme::motion::Spring::new(1., space_ui::theme::motion::SIDEBAR_SLIDE),
