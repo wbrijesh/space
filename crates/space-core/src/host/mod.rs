@@ -127,6 +127,9 @@ pub enum HostEvent {
     TerminalTitle { terminal_id: String, title: String },
     /// A terminal's shell ended.
     TerminalExited { terminal_id: String, exit_code: Option<i32> },
+    /// A message sent with [`Session::steer`] was handed to the model (it's in the transcript
+    /// now, as a [`SessionEvent::UserMessage`]).
+    Steered { session_id: SessionId, steer_id: String },
 }
 
 /// One plugin setting as the Settings page shows it.

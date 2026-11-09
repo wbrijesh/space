@@ -10,10 +10,13 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use space_protocol::acp::{self, Agent, ByteStreams, Client};
 use space_protocol::acp_schema as schema;
-use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY, USAGE_META_KEY};
+use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY, STEER_META_KEY, USAGE_META_KEY};
 use space_protocol::service::HistoryItem;
 use space_protocol::trace::{ContextFact, TraceBatch, TraceEvent};
-use space_protocol::{Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SpaceStatus};
+use space_protocol::{
+    Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SpaceStatus, SteerImage, SteerSession,
+    Steered, UnsteerSession,
+};
 use tokio::sync::oneshot;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
@@ -56,6 +59,16 @@ pub(super) struct Shared {
     loading: Mutex<HashSet<SessionId>>,
     /// The process exited or was stopped.
     dead: AtomicBool,
+    /// Messages sent to steer a running turn, by session, until the agent delivers them.
+    steers: Mutex<HashMap<SessionId, Vec<PendingSteer>>>,
+}
+
+/// A steering message the agent hasn't handed to the model yet.
+struct PendingSteer {
+    id: String,
+    text: String,
+    attachments: Vec<PathBuf>,
+    images: Vec<ImageRef>,
 }
 
 struct PendingPermission {
@@ -64,6 +77,31 @@ struct PendingPermission {
 }
 
 impl Shared {
+    /// The agent handed a steering message to the model: it joins the transcript here.
+    fn on_steered(&self, steered: Steered) {
+        let pending = {
+            let mut steers = self.steers.lock().unwrap();
+            let list = steers.entry(steered.session_id.clone()).or_default();
+            let at = list.iter().position(|p| p.id == steered.id);
+            at.map(|i| list.remove(i))
+        };
+        let Some(p) = pending else { return };
+        let (host, id) = (&self.host, &steered.session_id);
+        if host.tracing() {
+            let path = |p: &PathBuf| p.display().to_string();
+            let prompt = TraceEvent::Prompt {
+                at: now_ms(),
+                text: p.text.clone(),
+                files: p.attachments.iter().map(path).collect(),
+                images: p.images.iter().map(|i| path(&i.path)).collect(),
+            };
+            host.trace(id, vec![prompt]);
+        }
+        host.record(id, HistoryItem::User { text: p.text.clone() });
+        host.emit_session(id, SessionEvent::UserMessage { text: p.text, attachments: p.attachments, images: p.images, at_ms: Some(now_ms()) });
+        host.emit(HostEvent::Steered { session_id: steered.session_id, steer_id: steered.id });
+    }
+
     pub(super) fn on_session_notification(&self, n: schema::SessionNotification) {
         if self.loading.lock().unwrap().contains(n.session_id.0.as_ref()) {
             return;
@@ -139,6 +177,7 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
         permissions: Mutex::new(HashMap::new()),
         loading: Mutex::new(HashSet::new()),
         dead: AtomicBool::new(false),
+        steers: Mutex::new(HashMap::new()),
     });
 
     let launch = host.launch(&plugin_id);
@@ -182,6 +221,16 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
                 async move |status: SpaceStatus, _cx| {
                     let session_id = status.session_id.clone();
                     shared.host.emit_session(&session_id, SessionEvent::Status(status));
+                    Ok(())
+                }
+            },
+            acp::on_receive_notification!(),
+        )
+        .on_receive_notification(
+            {
+                let shared = shared.clone();
+                async move |steered: Steered, _cx| {
+                    shared.on_steered(steered);
                     Ok(())
                 }
             },
@@ -278,8 +327,9 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
     let agent_name = init.agent_info.as_ref().map(|i| i.title.clone().unwrap_or_else(|| i.name.clone()));
     let can_load = init.agent_capabilities.load_session;
     let images = init.agent_capabilities.prompt_capabilities.image;
+    let steer = init.meta.as_ref().and_then(|m| m.get(STEER_META_KEY)).and_then(|v| v.as_bool()).unwrap_or(false);
 
-    let inner = Arc::new(AgentInner { plugin_id: plugin_id.clone(), conn, process, shared, agent_name, can_load, images });
+    let inner = Arc::new(AgentInner { plugin_id: plugin_id.clone(), conn, process, shared, agent_name, can_load, images, steer });
     host.agents.lock().unwrap().insert(plugin_id, Arc::downgrade(&inner));
     Ok(AgentHandle { inner })
 }
@@ -332,6 +382,8 @@ pub(super) struct AgentInner {
     can_load: bool,
     /// The agent takes images in prompts (ACP `promptCapabilities.image`).
     images: bool,
+    /// The agent takes messages between the steps of a running turn (`_space/session/steer`).
+    steer: bool,
 }
 
 impl AgentHandle {
@@ -396,6 +448,11 @@ impl AgentHandle {
     /// Whether the agent takes images in prompts (ACP `promptCapabilities.image`).
     pub fn accepts_images(&self) -> bool {
         self.inner.images
+    }
+
+    /// Whether the agent takes messages for a running turn ([`Session::steer`]).
+    pub fn can_steer(&self) -> bool {
+        self.inner.steer
     }
 
     /// ACP `session/load`: continue session `session_id` (from an earlier run) in `cwd`. The
@@ -607,6 +664,73 @@ impl Session {
                 Err(e)
             }
         }
+    }
+
+    /// `_space/session/steer`: a message for the running turn, delivered after its current step
+    /// (needs [`AgentHandle::can_steer`]). Returns once the agent has it; when the agent hands it
+    /// to the model it joins the transcript and [`HostEvent::Steered`] says so.
+    pub async fn steer(&self, id: String, text: String, attachments: Vec<PathBuf>, images: Vec<ImageRef>) -> Result<()> {
+        if !self.inner.agent.can_steer() {
+            bail!("this agent can't take messages during a turn");
+        }
+        if !images.is_empty() && !self.inner.agent.accepts_images() {
+            bail!("this agent can't read images");
+        }
+        let blocks = images
+            .iter()
+            .map(|image| {
+                let bytes = std::fs::read(&image.path).map_err(|e| anyhow!("reading {}: {e}", image.path.display()))?;
+                Ok(SteerImage { data: BASE64.encode(bytes), mime_type: image.mime.clone(), uri: format!("file://{}", image.path.display()) })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let request = SteerSession {
+            session_id: self.inner.id.clone(),
+            id: id.clone(),
+            text: text.clone(),
+            images: blocks,
+            attachments: attachments.iter().map(|p| format!("file://{}", p.display())).collect(),
+        };
+        let shared = self.inner.agent.inner.shared.clone();
+        shared.steers.lock().unwrap().entry(self.inner.id.clone()).or_default().push(PendingSteer { id: id.clone(), text, attachments, images });
+        let agent = self.inner.agent.clone();
+        let result = shared
+            .host
+            .rt
+            .spawn(async move {
+                agent.inner.conn.send_request(request).block_task().await.map_err(|e| acp_error("_space/session/steer", e, &agent.inner.process))
+            })
+            .await
+            .map_err(|e| anyhow!("steer task failed: {e}"))
+            .and_then(|r| r);
+        if result.is_err()
+            && let Some(list) = shared.steers.lock().unwrap().get_mut(&self.inner.id)
+        {
+            list.retain(|p| p.id != id);
+        }
+        result.map(|_| ())
+    }
+
+    /// `_space/session/unsteer`: drop the steering messages the agent hasn't delivered.
+    /// Returns their ids.
+    pub async fn unsteer(&self) -> Result<Vec<String>> {
+        if !self.inner.agent.can_steer() {
+            return Ok(Vec::new());
+        }
+        let request = UnsteerSession { session_id: self.inner.id.clone() };
+        let agent = self.inner.agent.clone();
+        let shared = agent.inner.shared.clone();
+        let result = shared
+            .host
+            .rt
+            .spawn(async move {
+                agent.inner.conn.send_request(request).block_task().await.map_err(|e| acp_error("_space/session/unsteer", e, &agent.inner.process))
+            })
+            .await
+            .map_err(|e| anyhow!("unsteer task failed: {e}"))??;
+        if let Some(list) = shared.steers.lock().unwrap().get_mut(&self.inner.id) {
+            list.retain(|p| !result.ids.contains(&p.id));
+        }
+        Ok(result.ids)
     }
 
     /// `session/cancel`: ask the agent to stop the running turn. Pending permission

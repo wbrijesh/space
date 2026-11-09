@@ -107,7 +107,30 @@ pub struct ComposerHandlers {
     pub on_menu: MenuHandler,
     /// ↑ on the text's first line, ↓ on its last.
     pub on_recall: RecallHandler,
+    /// ⌘⏎ or the white send button while the agent works: after the current step.
+    pub on_send_after_step: Handler,
+    /// A queued message's row: edit, remove, or send what's queued now.
+    pub on_queued: QueuedHandler,
 }
+
+/// A message waiting for the agent, as its row above the composer shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueuedView {
+    pub text: SharedString,
+    /// Sent after the current step (else when the turn is done).
+    pub after_step: bool,
+    /// Images and files sent with it.
+    pub extras: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueuedAction {
+    Edit,
+    Remove,
+    SendNow,
+}
+
+pub type QueuedHandler = Rc<dyn Fn(usize, QueuedAction, &mut Window, &mut App)>;
 
 impl Default for ComposerHandlers {
     fn default() -> Self {
@@ -129,6 +152,8 @@ impl Default for ComposerHandlers {
             on_context: Rc::new(|_, _, _| {}),
             on_menu: Rc::new(|_, _, _| {}),
             on_recall: Rc::new(|_, _, _| false),
+            on_send_after_step: Rc::new(|_, _| {}),
+            on_queued: Rc::new(|_, _, _, _| {}),
         }
     }
 }
@@ -213,6 +238,11 @@ pub struct Composer {
     images: Vec<Option<ImageSource>>,
     controls: Option<ComposerControls>,
     handlers: ComposerHandlers,
+    /// Messages waiting for the agent.
+    queued_messages: Vec<QueuedView>,
+    /// ⌘ is held and the agent takes messages mid-turn: sending while it works goes in after
+    /// the current step (the button turns white).
+    after_step: bool,
 }
 
 impl Composer {
@@ -226,7 +256,19 @@ impl Composer {
             images: Vec::new(),
             controls: None,
             handlers: ComposerHandlers::default(),
+            queued_messages: Vec::new(),
+            after_step: false,
         }
+    }
+
+    pub fn queued_messages(mut self, queued: Vec<QueuedView>) -> Self {
+        self.queued_messages = queued;
+        self
+    }
+
+    pub fn after_step(mut self, after_step: bool) -> Self {
+        self.after_step = after_step;
+        self
     }
 
     pub fn running(mut self, running: bool) -> Self {
@@ -262,11 +304,12 @@ impl Composer {
 
 impl RenderOnce for Composer {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let Self { id, input, running, queued, attachments, images, controls, handlers: h } = self;
+        let Self { id, input, running, queued, attachments, images, controls, handlers: h, queued_messages, after_step } = self;
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
         let has_text = !input.read(cx).value().trim().is_empty();
         let blocker = controls.as_ref().and_then(|c| c.blocker.clone());
         let preparing = images.iter().any(Option::is_none);
+        let has_content = has_text || !attachments.is_empty() || !images.is_empty();
         let can_send = (has_text || !attachments.is_empty() || !images.is_empty())
             && !running
             && !queued
@@ -306,7 +349,56 @@ impl RenderOnce for Composer {
             }))
         });
 
-        let send: AnyElement = if running {
+        let queueable = running && has_content && !preparing && blocker.is_none();
+        let send: AnyElement = if queueable {
+            // Working, and something typed: stop moves aside; the arrow queues it (grey: when the
+            // turn is done; white with ⌘: after the current step).
+            let (stop, send, steer) = (h.on_stop.clone(), h.on_send.clone(), h.on_send_after_step.clone());
+            div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .child(
+                    div()
+                        .id("stop")
+                        .size(px(BUTTON))
+                        .flex_none()
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .border_1()
+                        .border_color(color::border_strong())
+                        .cursor_pointer()
+                        .hover(|s| s.bg(color::hover()))
+                        .child(div().size(px(10.)).rounded(px(2.)).bg(color::text_2()))
+                        .tip("Stop  ⎋")
+                        .on_click(move |_, w, cx| stop(w, cx)),
+                )
+                .child(
+                    div()
+                        .id("send-queued")
+                        .size(px(BUTTON))
+                        .flex_none()
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .map(|d| {
+                            if after_step {
+                                d.bg(color::text()).text_color(color::bg())
+                            } else {
+                                d.bg(color::border_strong()).text_color(color::text())
+                            }
+                        })
+                        .hover(|s| s.opacity(0.85))
+                        .child(Icon::new(IconName::ArrowUp).size(size::ICON_MD))
+                        .tip(if after_step { "Send after this step  ⌘⏎" } else { "Send when done  ⏎" })
+                        .on_click(move |_, w, cx| if after_step { steer(w, cx) } else { send(w, cx) }),
+                )
+                .into_any_element()
+        } else if running {
             let stop = h.on_stop.clone();
             div()
                 .id("stop")
@@ -439,10 +531,67 @@ impl RenderOnce for Composer {
                     }
                 }
             })
+            .children((!queued_messages.is_empty()).then(|| queued_rows(&queued_messages, running, h.on_queued.clone())))
             .children(blocker.map(|b| blocker_row(b, h.on_blocker_action.clone())))
             .child(card)
             .children(controls.map(|c| control_row(c, &h)))
     }
+}
+
+/// Messages waiting for the agent, above the card: when each goes (a small arrow, white for
+/// after this step, grey for when done), what it says, and edit / remove. If the turn isn't
+/// running (it failed), they can be sent now.
+pub fn queued_rows(queued: &[QueuedView], running: bool, on_queued: QueuedHandler) -> Div {
+    let row = |ix: usize, q: &QueuedView| {
+        let (edit, remove) = (on_queued.clone(), on_queued.clone());
+        let extras = match q.extras {
+            0 => String::new(),
+            1 => " · 1 attachment".into(),
+            n => format!(" · {n} attachments"),
+        };
+        div()
+            .id(("queued", ix))
+            .h(px(32.))
+            .pl_2()
+            .pr_1()
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded(radius::XL)
+            .bg(color::surface())
+            .border_1()
+            .border_color(color::border())
+            .text_size(text::SM)
+            .child(
+                div()
+                    .size(px(18.))
+                    .flex_none()
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .map(|d| if q.after_step { d.bg(color::text()).text_color(color::bg()) } else { d.bg(color::border_strong()).text_color(color::text()) })
+                    .child(Icon::new(IconName::ArrowUp).size(size::ICON_XS)),
+            )
+            .child(div().flex_none().text_color(color::text_3()).child(if q.after_step { "After this step" } else { "When done" }))
+            .child(div().flex_1().min_w_0().truncate().text_color(color::text_2()).child(format!("{}{extras}", format::one_line(&q.text))))
+            .child(icon_button(("queued-edit", ix), Lucide::Pencil, true, false).tip("Edit").on_click(move |_, w, cx| edit(ix, QueuedAction::Edit, w, cx)))
+            .child(icon_button(("queued-remove", ix), Lucide::X, true, false).tip("Remove").on_click(move |_, w, cx| remove(ix, QueuedAction::Remove, w, cx)))
+    };
+    let send_now = on_queued.clone();
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .children(queued.iter().enumerate().map(|(ix, q)| row(ix, q)))
+        .when(!running, |d| {
+            d.child(
+                div().flex().justify_end().child(
+                    super::widgets::pill_button("queued-send-now", if queued.len() == 1 { "Send it now" } else { "Send them now" }, false)
+                        .on_click(move |_, w, cx| send_now(0, QueuedAction::SendNow, w, cx)),
+                ),
+            )
+        })
 }
 
 /// Why sending is blocked, above the card: a warning box shaped like the transcript's error card,

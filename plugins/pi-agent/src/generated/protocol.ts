@@ -7,6 +7,10 @@ export const CONFIGURE_METHOD = "_space/session/configure";
 export const PRE_EXECUTE_METHOD = "_space/tools/preExecute";
 export const CONFINE_METHOD = "_space/sandbox/confine";
 export const COMPLETE_METHOD = "_space/complete";
+export const STEER_METHOD = "_space/session/steer";
+export const UNSTEER_METHOD = "_space/session/unsteer";
+export const STEERED_METHOD = "_space/steered";
+export const STEER_META_KEY = "space/steer";
 export const CONTEXT_META_KEY = "space/context";
 export const DATA_DIR_META_KEY = "space/dataDir";
 export const USAGE_META_KEY = "space/usage";
@@ -109,6 +113,54 @@ export type Complete = { sessionId: string, prompt: string, provider?: string, m
  * The answer to [`Complete`]: the model's reply as plain text.
  */
 export type CompleteResult = { text: string, };
+
+/**
+ * An image in a [`SteerSession`]: the saved file's bytes and where it is.
+ */
+export type SteerImage = { 
+/**
+ * Base64.
+ */
+data: string, mimeType: string, 
+/**
+ * `file://` URI of the saved image.
+ */
+uri: string, };
+
+/**
+ * `_space/session/steer` (client → agent request): a message for a running turn, to be
+ * delivered after the current step (the reply being written and its tool calls), before the
+ * model is asked again. The agent answers at once; when it hands the message to the model it
+ * sends [`Steered`] with the same `id`. A message still undelivered when the turn ends without
+ * another step is delivered as the turn's last step. Only for agents that set
+ * [`STEER_META_KEY`] in `initialize`.
+ */
+export type SteerSession = { sessionId: string, 
+/**
+ * The client's id for the message (echoed in [`Steered`]).
+ */
+id: string, text: string, images: Array<SteerImage>, 
+/**
+ * `file://` URIs of attached files.
+ */
+attachments: Array<string>, };
+
+export type SteerResult = Record<symbol, never>;
+
+/**
+ * `_space/session/unsteer` (client → agent request): drop the session's undelivered
+ * [`SteerSession`] messages (the turn was stopped, or the user took them back). Answers with
+ * the ids it dropped.
+ */
+export type UnsteerSession = { sessionId: string, };
+
+export type UnsteerResult = { ids: Array<string>, };
+
+/**
+ * `_space/steered` (agent → client notification): a [`SteerSession`] message was handed to the
+ * model; it belongs in the transcript here.
+ */
+export type Steered = { sessionId: string, id: string, };
 
 /**
  * Hidden text a plugin adds to a prompt (the agent puts it in its system prompt, never in

@@ -28,6 +28,11 @@
 //! scripted turn plays that turn's steps instead, which can hold a turn open indefinitely
 //! (thinking, running a tool, waiting for permission). The app's dev scenarios use this.
 //!
+//! Steering (`_space/session/steer`, advertised in `initialize`): a message sent during a turn is
+//! delivered at the next step: after the built-in turn's tool, every ten words of a `slow` reply,
+//! while a scripted turn holds, or else at the end of the turn. Delivery sends `_space/steered`
+//! and a reply chunk "Steered: <text>. ". A steer when no turn runs is refused.
+//!
 //! Sessions report two fake models (`stub-model`, `stub-fast`) and thinking levels through
 //! `_space/status`, and accept `_space/session/configure`.
 //!
@@ -42,8 +47,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use space_core::stub_script::{SCRIPT_ENV, Step, StubScript};
-use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY, USAGE_META_KEY};
-use space_protocol::{Complete, CompleteResult, Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, SpaceStatus, Verdict};
+use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY, STEER_META_KEY, USAGE_META_KEY};
+use space_protocol::{
+    Complete, CompleteResult, Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, SpaceStatus, SteerResult, SteerSession, Steered,
+    UnsteerResult, UnsteerSession, Verdict,
+};
 use space_protocol::acp::{self, Agent, ByteStreams, Client, Responder, UntypedMessage};
 use space_protocol::trace::{ChunkKind, HeaderReason, RequestOptions, TRACE_METHOD, ToolDef, TraceBatch, TraceEvent};
 use space_protocol::acp_schema::*;
@@ -57,6 +65,44 @@ struct State {
     cancelled: Mutex<HashSet<String>>,
     sessions: Mutex<HashMap<String, StubSession>>,
     script: StubScript,
+    /// Sessions with a turn running.
+    running: Mutex<HashSet<String>>,
+    /// Steered messages not delivered yet, by session: (id, text).
+    steers: Mutex<HashMap<String, Vec<(String, String)>>>,
+}
+
+/// Marks a session's turn as running while it lives.
+struct Running(Arc<State>, String);
+
+impl Running {
+    fn start(state: &Arc<State>, sid: &SessionId) -> Self {
+        state.running.lock().unwrap().insert(sid.0.to_string());
+        Self(state.clone(), sid.0.to_string())
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.0.running.lock().unwrap().remove(&self.1);
+        self.0.steers.lock().unwrap().remove(&self.1);
+    }
+}
+
+/// Deliver the session's steered messages: `_space/steered` for each, then a reply chunk
+/// naming them. Returns the chunk's text (empty when there were none).
+fn deliver_steers(state: &State, cx: &Conn, sid: &SessionId) -> acp::Result<String> {
+    let steers = state.steers.lock().unwrap().remove(&*sid.0).unwrap_or_default();
+    let mut said = String::new();
+    for (id, text) in steers {
+        eprintln!("space-stub-agent: steered {id}");
+        cx.send_notification(Steered { session_id: sid.0.to_string(), id })?;
+        said.push_str(&format!("Steered: {text}. "));
+    }
+    if !said.is_empty() {
+        let chunk = ContentChunk::new(ContentBlock::Text(TextContent::new(said.clone())));
+        cx.send_notification(SessionNotification::new(sid.clone(), SessionUpdate::AgentMessageChunk(chunk)))?;
+    }
+    Ok(said)
 }
 
 #[derive(Clone)]
@@ -141,6 +187,7 @@ async fn main() -> acp::Result<()> {
                 let version = std::env::var(PROTOCOL_ENV).ok().and_then(|v| v.parse().ok()).unwrap_or(PROTOCOL_VERSION);
                 let mut meta = Meta::new();
                 meta.insert(PROTOCOL_VERSION_META_KEY.into(), version.into());
+                meta.insert(STEER_META_KEY.into(), true.into());
                 responder.respond(
                     InitializeResponse::new(req.protocol_version)
                         .agent_capabilities(
@@ -243,6 +290,30 @@ async fn main() -> acp::Result<()> {
             },
             acp::on_receive_request!(),
         )
+        .on_receive_request(
+            {
+                let state = state.clone();
+                async move |req: SteerSession, responder: Responder<SteerResult, acp::V1>, _cx: Conn| {
+                    eprintln!("space-stub-agent: steer {} {:?}", req.id, req.text);
+                    if !state.running.lock().unwrap().contains(&req.session_id) {
+                        return responder.respond_with_error(acp::Error::new(-32600, "No turn is running"));
+                    }
+                    state.steers.lock().unwrap().entry(req.session_id).or_default().push((req.id, req.text));
+                    responder.respond(SteerResult {})
+                }
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = state.clone();
+                async move |req: UnsteerSession, responder: Responder<UnsteerResult, acp::V1>, _cx: Conn| {
+                    let ids = state.steers.lock().unwrap().remove(&req.session_id).unwrap_or_default().into_iter().map(|(id, _)| id).collect();
+                    responder.respond(UnsteerResult { ids })
+                }
+            },
+            acp::on_receive_request!(),
+        )
         .on_receive_notification(
             {
                 let state = state.clone();
@@ -266,6 +337,7 @@ async fn run_turn(
 ) -> acp::Result<()> {
     let sid = req.session_id.clone();
     state.cancelled.lock().unwrap().remove(&*sid.0);
+    let _running = Running::start(&state, &sid);
     let text: String = req
         .prompt
         .iter()
@@ -429,6 +501,8 @@ async fn run_turn(
         serde_json::json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_id, "content": {"toolResultRef": tool_id}}]}),
     ]);
     trace.send(&cx)?;
+    // A step ended (the tool): steered messages go in now.
+    deliver_steers(&state, &cx, &sid)?;
     let words: Vec<String> = if text.contains("recall") {
         vec![format!("I remember {earlier} earlier prompt(s).")]
     } else if text.contains("slow") {
@@ -437,7 +511,10 @@ async fn run_turn(
         ["Hello ", "from ", "the ", "stub ", "agent."].map(String::from).to_vec()
     };
     let reply: String = words.concat();
-    for w in words {
+    for (i, w) in words.into_iter().enumerate() {
+        if text.contains("slow") && i > 0 && i % 10 == 0 {
+            deliver_steers(&state, &cx, &sid)?;
+        }
         if state.cancelled.lock().unwrap().contains(&*sid.0) {
             trace.cancelled(&cx)?;
             return responder.respond(PromptResponse::new(StopReason::Cancelled));
@@ -450,6 +527,8 @@ async fn run_turn(
     if let Some(s) = state.sessions.lock().unwrap().get_mut(&*sid.0) {
         s.context_tokens += 1800 + text.len() as u64 * 4;
     }
+    // Steered messages not yet delivered: a last step.
+    deliver_steers(&state, &cx, &sid)?;
     cx.send_notification(state.status(&sid.0))?;
     trace.respond("stop", &reply, "", Some(SECOND_USAGE));
     trace.end_turn("end_turn");
@@ -469,6 +548,7 @@ async fn run_script(
     let send = |update: SessionUpdate| cx.send_notification(SessionNotification::new(sid.clone(), update));
     let chunk = |s: &str| ContentChunk::new(ContentBlock::Text(TextContent::new(s)));
     let cancelled = || state.cancelled.lock().unwrap().contains(&*sid.0);
+    let _running = Running::start(&state, &sid);
     let mut tools: HashSet<String> = HashSet::new();
     let mut trace = Tracer::start(&state, &sid);
     trace.request(vec![serde_json::json!({"role": "user", "content": [{"type": "text", "text": prompt}]})]);
@@ -577,6 +657,8 @@ async fn run_script(
                     trace.cancelled(&cx)?;
                     return responder.respond(PromptResponse::new(StopReason::Cancelled));
                 }
+                // A held turn takes steered messages (and keeps holding).
+                reply.push_str(&deliver_steers(&state, &cx, &sid)?);
                 tokio::time::sleep(Duration::from_millis(50)).await;
             },
             Step::Fail { message } => {
@@ -588,6 +670,7 @@ async fn run_script(
             }
         }
     }
+    reply.push_str(&deliver_steers(&state, &cx, &sid)?);
     cx.send_notification(state.status(&sid.0))?;
     let usage = turn_usage();
     trace.respond("stop", &reply, &thought, Some((usage.input, usage.output, 8112, 88)));

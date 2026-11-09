@@ -59,7 +59,7 @@ impl SpaceApp {
         self.threads.iter().any(|t| {
             ThreadActivity {
                 running: t.state.running,
-                queued: t.queued.is_some(),
+                queued: t.queued.is_some() || !t.pending.is_empty(),
                 creating: t.creating,
                 waiting: t.state.pending_permission().is_some() || t.state.held().is_some(),
             }

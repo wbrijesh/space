@@ -17,6 +17,15 @@ pub const PRE_EXECUTE_METHOD: &str = "_space/tools/preExecute";
 pub const CONFINE_METHOD: &str = "_space/sandbox/confine";
 /// Method name of the [`Complete`] request (client → agent).
 pub const COMPLETE_METHOD: &str = "_space/complete";
+/// Method name of the [`SteerSession`] request (client → agent).
+pub const STEER_METHOD: &str = "_space/session/steer";
+/// Method name of the [`UnsteerSession`] request (client → agent).
+pub const UNSTEER_METHOD: &str = "_space/session/unsteer";
+/// Method name of the [`Steered`] notification (agent → client).
+pub const STEERED_METHOD: &str = "_space/steered";
+/// `_meta` key of the ACP `initialize` response: `true` when the agent takes
+/// [`SteerSession`] (messages delivered between the steps of a running turn).
+pub const STEER_META_KEY: &str = "space/steer";
 /// `_meta` key of a `session/prompt` carrying the prompt's hidden [`ContextSection`]s.
 pub const CONTEXT_META_KEY: &str = "space/context";
 /// `_meta` key of ACP `session/new` and `session/load` carrying a folder the agent may keep the
@@ -166,6 +175,75 @@ pub struct ConfigureSession {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<String>,
+}
+
+/// An image in a [`SteerSession`]: the saved file's bytes and where it is.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+#[serde(rename_all = "camelCase")]
+pub struct SteerImage {
+    /// Base64.
+    pub data: String,
+    pub mime_type: String,
+    /// `file://` URI of the saved image.
+    pub uri: String,
+}
+
+/// `_space/session/steer` (client → agent request): a message for a running turn, to be
+/// delivered after the current step (the reply being written and its tool calls), before the
+/// model is asked again. The agent answers at once; when it hands the message to the model it
+/// sends [`Steered`] with the same `id`. A message still undelivered when the turn ends without
+/// another step is delivered as the turn's last step. Only for agents that set
+/// [`STEER_META_KEY`] in `initialize`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
+#[request(method = "_space/session/steer", response = SteerResult)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+#[serde(rename_all = "camelCase")]
+pub struct SteerSession {
+    pub session_id: String,
+    /// The client's id for the message (echoed in [`Steered`]).
+    pub id: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<SteerImage>,
+    /// `file://` URIs of attached files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcResponse)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+#[serde(rename_all = "camelCase")]
+pub struct SteerResult {}
+
+/// `_space/session/unsteer` (client → agent request): drop the session's undelivered
+/// [`SteerSession`] messages (the turn was stopped, or the user took them back). Answers with
+/// the ids it dropped.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
+#[request(method = "_space/session/unsteer", response = UnsteerResult)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+#[serde(rename_all = "camelCase")]
+pub struct UnsteerSession {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcResponse)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+#[serde(rename_all = "camelCase")]
+pub struct UnsteerResult {
+    #[serde(default)]
+    pub ids: Vec<String>,
+}
+
+/// `_space/steered` (agent → client notification): a [`SteerSession`] message was handed to the
+/// model; it belongs in the transcript here.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcNotification)]
+#[notification(method = "_space/steered")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+#[serde(rename_all = "camelCase")]
+pub struct Steered {
+    pub session_id: String,
+    pub id: String,
 }
 
 /// `_space/tools/preExecute` (agent → client request): may the agent run this tool call now?

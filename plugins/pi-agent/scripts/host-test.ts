@@ -139,6 +139,35 @@ await completeOnce(loaded.session, { sessionId: "s2", prompt: "x", model: "nope"
 check(unknown.includes("faux/nope"), `an unknown model is refused (${unknown})`);
 await loaded.runtime.dispose();
 
+// Steering (`_space/session/steer`): a message steered in while a tool runs reaches the model's
+// next request, and pi's queue update shows it leaving the queue (pi-agent reports it delivered
+// then).
+{
+	const steered = await createPiSession(work, config, { sessionId: "s3", host, registerProviders: providers });
+	const requests: string[] = [];
+	const see = (message: ReturnType<typeof fauxAssistantMessage>) => (context: unknown) => {
+		requests.push(JSON.stringify(context));
+		return message;
+	};
+	faux.setResponses([
+		see(fauxAssistantMessage([fauxToolCall("bash", { command: "sleep 0.5; echo slept" }, { id: "c-sleep" })], { stopReason: "toolUse" })),
+		see(fauxAssistantMessage("done after the steer")),
+	]);
+	const queues: number[] = [];
+	steered.session.subscribe((e: { type: string; steering?: readonly string[] }) => {
+		if (e.type === "queue_update") queues.push(e.steering?.length ?? -1);
+	});
+	const turn = steered.session.prompt("run the tool");
+	while (!steered.session.isStreaming) await new Promise((r) => setTimeout(r, 10));
+	await new Promise((r) => setTimeout(r, 100));
+	await steered.session.steer("also check the tests");
+	await turn;
+	check(requests.length === 2, `the turn made two requests (${requests.length})`);
+	check(!requests[0]?.includes("also check the tests") && (requests[1]?.includes("also check the tests") ?? false), "the steered message reached the next request");
+	check(queues.join(",") === "1,0", `the queue went 1 → 0 when it was delivered (${queues.join(",")})`);
+	await steered.runtime.dispose();
+}
+
 for (const d of [agentDir, work, outside]) rmSync(d, { recursive: true, force: true });
 if (failures.length) {
 	console.log(`\n${failures.length} check(s) failed`);

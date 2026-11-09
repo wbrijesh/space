@@ -27,6 +27,7 @@ mod dev;
 mod devscript;
 mod notify;
 mod persist;
+mod queue;
 mod recall;
 #[cfg(feature = "dev")]
 mod reload;

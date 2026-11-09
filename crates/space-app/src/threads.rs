@@ -63,6 +63,10 @@ pub struct Thread {
     pub attachments_dir: Option<PathBuf>,
     /// Message sent before the session existed; sent once it does.
     pub queued: Option<Queued>,
+    /// Messages typed while the agent works, in order (see `queue`).
+    pub pending: Vec<crate::queue::Pending>,
+    /// The turn was stopped: its queued messages go back into the composer when it's shown.
+    pub restore_pending: bool,
     /// Permission mode picked for this thread (a `permission-modes` id); `None`: the default
     /// for new threads. Applied to every session the thread gets.
     pub mode: Option<String>,
@@ -115,6 +119,8 @@ impl Thread {
             images: Vec::new(),
             attachments_dir: None,
             queued: None,
+            pending: Vec::new(),
+            restore_pending: false,
             mode: None,
             confirmed: HashSet::new(),
             paused_seen: false,
@@ -183,6 +189,9 @@ impl SpaceApp {
             if let Some(user) = thread.state.items.iter().rposition(|i| matches!(i, TranscriptItem::User { .. })) {
                 thread.open_turns.insert(user);
             }
+        }
+        if let SessionEvent::TurnEnded { stop_reason, .. } = event {
+            self.turn_ended_with_queue(key, stop_reason, cx);
         }
         if self.saving_threads() {
             let thread = self.thread_mut(key).expect("thread exists");
@@ -431,7 +440,17 @@ impl SpaceApp {
         }
     }
 
+    /// ⏎: send now, or when the turn is done if the agent is working.
     pub(crate) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.send_when(crate::queue::When::Done, window, cx);
+    }
+
+    /// ⌘⏎: send now, or after the current step if the agent is working.
+    pub(crate) fn send_after_step(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.send_when(crate::queue::When::Step, window, cx);
+    }
+
+    fn send_when(&mut self, when: crate::queue::When, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected else { return };
         self.touch_agent();
         let text = self.input.read(cx).value().trim().to_string();
@@ -444,9 +463,10 @@ impl SpaceApp {
             return;
         }
         // Not into a saved thread that isn't open (it didn't load).
-        if thread.state.running || thread.queued.is_some() || thread.loading || thread.unloaded {
+        if thread.queued.is_some() || thread.loading || thread.unloaded {
             return;
         }
+        let running = thread.state.running && thread.live_session().is_some();
         // The thread's mode isn't set up yet (the composer says so, with a link).
         if let Some(t) = self.thread(key)
             && self.blocker(t).is_some()
@@ -460,6 +480,11 @@ impl SpaceApp {
         thread.draft.clear();
         self.input.update(cx, |s, cx| s.clean(window, cx));
 
+        // The agent is working: the message waits (for the turn, or for the current step).
+        if running {
+            self.queue_message(key, when, text, attachments, images, cx);
+            return;
+        }
         let thread = self.thread_mut(key).expect("thread exists");
         if thread.live_session().is_some() {
             self.prompt(key, text, attachments, images, cx);

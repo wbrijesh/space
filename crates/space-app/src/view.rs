@@ -51,6 +51,8 @@ fn handler(cx: &mut Context<SpaceApp>, f: impl Fn(&mut SpaceApp, &mut Window, &m
 }
 
 pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> impl IntoElement {
+    // A stopped turn's queued messages go back into the composer.
+    app.restore_stopped_queue(window, cx);
     let clock = space_ui::clock::AnimationClock::global(cx);
     let (shown, moving) = app.sidebar_shown.at(clock.now(), clock.pinned());
     if moving && clock.is_running() {
@@ -114,6 +116,25 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &PreviousTerminal, window, cx| this.step_terminal(-1, window, cx)))
         .on_action(cx.listener(|this, _: &MaximizeTerminal, _, cx| this.toggle_terminal_maximized(cx)))
         .on_action(cx.listener(|this, _: &Quit, window, cx| this.quit(window, cx)))
+        // ⌘ held turns the composer's queue button white (after this step).
+        .on_modifiers_changed(cx.listener(|this, e: &ModifiersChangedEvent, _, cx| {
+            if this.cmd_held != e.modifiers.platform {
+                this.cmd_held = e.modifiers.platform;
+                cx.notify();
+            }
+        }))
+        // Esc in the composer while the agent works stops it (open panels and menus close first).
+        .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+            if e.keystroke.key == "escape"
+                && !e.keystroke.modifiers.modified()
+                && this.usage_open.is_none()
+                && this.current().is_some_and(|t| t.state.running)
+                && this.input.read(cx).focus_handle(cx).is_focused(window)
+            {
+                this.cancel(cx);
+                cx.stop_propagation();
+            }
+        }))
         // Dragging the terminal pane's divider.
         .when(app.terminals.dragging, |d| {
             d.cursor_col_resize()
@@ -813,6 +834,19 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
     };
     let handlers = ComposerHandlers {
         on_send: handler(cx, |this, w, cx| this.send(w, cx)),
+        on_send_after_step: handler(cx, |this, w, cx| this.send_after_step(w, cx)),
+        on_queued: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |ix, action, w: &mut Window, cx: &mut App| {
+                use space_ui::components::composer::QueuedAction;
+                let action = match action {
+                    QueuedAction::Edit => crate::queue::PendingAction::Edit,
+                    QueuedAction::Remove => crate::queue::PendingAction::Remove,
+                    QueuedAction::SendNow => crate::queue::PendingAction::SendNow,
+                };
+                let _ = this.update(cx, |this, cx| this.pending_action(ix, action, w, cx));
+            })
+        },
         on_stop: handler(cx, |this, _, cx| this.cancel(cx)),
         on_attach: handler(cx, |this, _, cx| this.attach_files(cx)),
         on_focus: handler(cx, |this, w, cx| this.focus_composer(w, cx)),
@@ -873,9 +907,21 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         text: b.text.into(),
         actions: b.actions.into_iter().map(|a| (a.label.into(), a.action.into())).collect(),
     });
+    let can_steer = thread.session.as_ref().is_some_and(|s| s.agent().can_steer());
+    let queued_messages = thread
+        .pending
+        .iter()
+        .map(|p| space_ui::components::composer::QueuedView {
+            text: p.text.clone().into(),
+            after_step: p.when == crate::queue::When::Step,
+            extras: p.attachments.len() + p.images.len(),
+        })
+        .collect();
     Composer::new("composer", &app.input)
         .running(thread.state.running)
         .queued(thread.queued.is_some())
+        .queued_messages(queued_messages)
+        .after_step(app.cmd_held && can_steer && thread.state.running)
         .attachments(thread.attachments.clone())
         .images(thread.images.iter().map(|i| i.pic().map(|p| p.src)).collect())
         .controls(ComposerControls {

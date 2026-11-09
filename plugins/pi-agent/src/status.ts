@@ -1,8 +1,9 @@
 // `_space/status` payloads and `_space/session/configure` handling for a pi session.
 
+import type { ContentBlock } from "@agentclientprotocol/sdk";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS, type ThinkingLevelName } from "./env.js";
-import type { Complete, ConfigureSession, ModelInfo, SpaceStatus } from "./generated/protocol.js";
+import type { Complete, ConfigureSession, ModelInfo, SpaceStatus, SteerSession, UnsteerSession } from "./generated/protocol.js";
 
 function str(v: unknown): string | undefined {
 	return typeof v === "string" && v.length > 0 ? v : undefined;
@@ -14,6 +15,39 @@ export function parseCompleteParams(raw: unknown): Complete {
 	const prompt = str(p.prompt);
 	if (!sessionId || !prompt) throw new Error("sessionId and prompt are required");
 	return { sessionId, prompt, provider: str(p.provider), model: str(p.model) };
+}
+
+export function parseSteerParams(raw: unknown): SteerSession {
+	const p = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+	const sessionId = str(p.sessionId);
+	const id = str(p.id);
+	if (!sessionId || !id || typeof p.text !== "string") throw new Error("sessionId, id and text are required");
+	const images = (Array.isArray(p.images) ? p.images : []).flatMap((i) => {
+		const r = (i && typeof i === "object" ? i : {}) as Record<string, unknown>;
+		const data = str(r.data);
+		const mimeType = str(r.mimeType);
+		return data && mimeType ? [{ data, mimeType, uri: str(r.uri) ?? "" }] : [];
+	});
+	const attachments = (Array.isArray(p.attachments) ? p.attachments : []).filter((a): a is string => typeof a === "string");
+	return { sessionId, id, text: p.text, images, attachments };
+}
+
+export function parseSessionRef(raw: unknown): UnsteerSession {
+	const p = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+	const sessionId = str(p.sessionId);
+	if (!sessionId) throw new Error("sessionId is required");
+	return { sessionId };
+}
+
+/** A steered message as ACP prompt blocks (as a prompt would come): images, the text, files. */
+export function steerBlocks(steer: SteerSession): ContentBlock[] {
+	const blocks: ContentBlock[] = (steer.images ?? []).map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType, uri: i.uri || undefined }));
+	blocks.push({ type: "text", text: steer.text });
+	for (const uri of steer.attachments ?? []) {
+		const name = decodeURIComponent(uri.split("/").pop() ?? uri);
+		blocks.push({ type: "resource_link", name, uri });
+	}
+	return blocks;
 }
 
 export function parseConfigureParams(raw: unknown): ConfigureSession {

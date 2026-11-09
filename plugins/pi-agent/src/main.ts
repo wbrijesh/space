@@ -18,13 +18,26 @@ import {
 	PROTOCOL_VERSION,
 	PROTOCOL_VERSION_META_KEY,
 	STATUS_METHOD,
+	STEER_META_KEY,
+	STEER_METHOD,
+	STEERED_METHOD,
 	TRACE_METHOD,
+	UNSTEER_METHOD,
 	type TraceBatch,
 	USAGE_META_KEY,
 } from "./generated/protocol.js";
 import { contextFromMeta, type HostLink } from "./host.js";
 import { createPiSession, type PiSession } from "./pi.js";
-import { completeOnce, configureSession, parseCompleteParams, parseConfigureParams, sessionStatus } from "./status.js";
+import {
+	completeOnce,
+	configureSession,
+	parseCompleteParams,
+	parseConfigureParams,
+	parseSessionRef,
+	parseSteerParams,
+	sessionStatus,
+	steerBlocks,
+} from "./status.js";
 import { promptInput, textToolContent, toolKind, toolResultText, toolTitle, turnUsage } from "./translate.js";
 // Built in (a single-file executable has no package.json next to it).
 import pkg from "../package.json" with { type: "json" };
@@ -35,6 +48,8 @@ interface SessionState {
 	pi: PiSession;
 	/** Set while a session/prompt is running. */
 	turn?: { cancelled: boolean };
+	/** Messages steered into the running turn and not delivered yet, in order (id, the text pi has). */
+	steers: { id: string; text: string }[];
 }
 
 const sessions = new Map<string, SessionState>();
@@ -87,7 +102,7 @@ async function openSession(
 		log(`session/${load ? "load" : "new"} failed:`, error);
 		throw turnError(`Failed to start pi session: ${error instanceof Error ? error.message : String(error)}`);
 	}
-	sessions.set(sessionId, { pi });
+	sessions.set(sessionId, { pi, steers: [] });
 	log(`session/${load ? "load" : "new"} ${sessionId} cwd=${cwd} model=${pi.provider}/${pi.model} thinking=${pi.thinkingLevel} ${dataDir ? `dir=${dataDir} messages=${pi.session.messages.length}` : "in memory"}`);
 	// Sent after the response is written so the client already knows the sessionId.
 	setImmediate(() => {
@@ -121,7 +136,7 @@ const app = acp
 			agentInfo: { name: "pi-agent", title: "Pi Agent", version: VERSION },
 			authMethods: [],
 			// The Space protocol this build speaks (the host refuses a mismatch).
-			_meta: { [PROTOCOL_VERSION_META_KEY]: PROTOCOL_VERSION },
+			_meta: { [PROTOCOL_VERSION_META_KEY]: PROTOCOL_VERSION, [STEER_META_KEY]: true },
 		};
 	})
 	.onRequest(acp.methods.agent.session.new, async ({ params, client }) => {
@@ -155,6 +170,27 @@ const app = acp
 
 		const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
 			switch (event.type) {
+				// A steered message was handed to the model when it left pi's queue: say so, in
+				// order with the turn's updates, so it lands in the transcript here.
+				case "queue_update": {
+					const waiting = [...event.steering];
+					const delivered: string[] = [];
+					state.steers = state.steers.filter((s) => {
+						const at = waiting.indexOf(s.text);
+						if (at === -1) {
+							delivered.push(s.id);
+							return false;
+						}
+						waiting.splice(at, 1);
+						return true;
+					});
+					for (const id of delivered) {
+						outbox = outbox
+							.then(() => client.notify(STEERED_METHOD, { sessionId, id }))
+							.catch((error: unknown) => log("failed to send _space/steered:", error));
+					}
+					break;
+				}
 				case "message_update": {
 					const e = event.assistantMessageEvent;
 					if (e.type === "text_delta" && e.delta) {
@@ -207,6 +243,13 @@ const app = acp
 		} finally {
 			unsubscribe();
 			state.turn = undefined;
+			// Steered messages the turn ended without: not delivered later by pi (Space sends them
+			// as the next message instead).
+			if (state.steers.length) {
+				log(`turn ended with ${state.steers.length} steered message(s) undelivered`);
+				state.steers = [];
+				session.clearQueue();
+			}
 		}
 		await outbox;
 		// Context usage changed; the model may have too (e.g. a retry fallback).
@@ -257,6 +300,36 @@ const app = acp
 			log(`complete ${params.sessionId} failed:`, error);
 			throw turnError(error instanceof Error ? error.message : String(error));
 		}
+	})
+	// A message for the running turn, delivered after its current step (pi's steering queue).
+	.onRequest(STEER_METHOD, parseSteerParams, async ({ params }) => {
+		const state = sessions.get(params.sessionId);
+		if (!state) throw acp.RequestError.sessionNotFound(params.sessionId);
+		const { session } = state.pi;
+		if (!state.turn || !session.isStreaming) throw acp.RequestError.invalidRequest(undefined, "No turn is running");
+		const blocks = steerBlocks(params);
+		const input = promptInput(blocks, session.model?.input?.includes("image") ?? true);
+		for (const block of blocks) {
+			if (block.type === "image" && block.uri?.startsWith("file://")) state.pi.trace.noteImage(block.data, decodeURIComponent(new URL(block.uri).pathname));
+		}
+		state.steers.push({ id: params.id, text: input.text });
+		try {
+			await session.steer(input.text, input.images.length ? input.images : undefined);
+		} catch (error) {
+			state.steers = state.steers.filter((s) => s.id !== params.id);
+			throw acp.RequestError.invalidParams(undefined, error instanceof Error ? error.message : String(error));
+		}
+		log(`steer ${params.sessionId}: queued ${params.id}`);
+		return {};
+	})
+	// Take back the steered messages not delivered yet.
+	.onRequest(UNSTEER_METHOD, parseSessionRef, async ({ params }) => {
+		const state = sessions.get(params.sessionId);
+		if (!state) throw acp.RequestError.sessionNotFound(params.sessionId);
+		const ids = state.steers.map((s) => s.id);
+		state.steers = [];
+		if (ids.length) state.pi.session.clearQueue();
+		return { ids };
 	})
 	.onNotification(acp.methods.agent.session.cancel, async ({ params }) => {
 		const state = sessions.get(params.sessionId);

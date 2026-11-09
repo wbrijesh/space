@@ -31,7 +31,7 @@ pub use agent_client_protocol::v1::schema as acp_schema;
 
 pub use ext::{
     Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, ContextSection, ModelInfo, PreExecute, PreExecuteResult, SpaceStatus,
-    TurnUsage, Verdict,
+    SteerImage, SteerResult, SteerSession, Steered, TurnUsage, UnsteerResult, UnsteerSession, Verdict,
 };
 pub use manifest::{
     CAP_AGENT, CAP_CONTEXT, CAP_SANDBOX, CAP_SESSION_STORE, CAP_SESSION_TITLE, CAP_SETTINGS, CAP_TERMINAL, CAP_TRAJECTORY, CATALOG_PERMISSION_MODES, CATALOG_PREFIX, EVENTS,

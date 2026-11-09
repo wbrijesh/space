@@ -324,6 +324,10 @@ pub struct SpaceApp {
     /// The `claude` CLI pi-agent needs was found (checked at launch and on each restart).
     pub(crate) claude_cli: bool,
     pub(crate) _subscriptions: Vec<Subscription>,
+    /// Numbers queued messages.
+    pub(crate) next_pending: u64,
+    /// ⌘ is held (the composer's send button shows "after this step").
+    pub(crate) cmd_held: bool,
     pub(crate) terminals: crate::terminal::Terminals,
 }
 
@@ -347,7 +351,13 @@ impl SpaceApp {
                 }
             }
             match event {
-                InputEvent::PressEnter { shift: false, .. } => this.send(window, cx),
+                InputEvent::PressEnter { shift: false, secondary } => {
+                    if *secondary {
+                        this.send_after_step(window, cx)
+                    } else {
+                        this.send(window, cx)
+                    }
+                }
                 // Typing ends ↑/↓ recall (a recalled message is set without a change event), and
                 // typing while the agent sleeps starts it, so it's up when you send.
                 InputEvent::Change => {
@@ -498,6 +508,8 @@ impl SpaceApp {
             claude_cli: claude_cli_installed(),
             _subscriptions: vec![sub, activation, quit],
             terminals: crate::terminal::Terminals::new(&host_for_terminals),
+            next_pending: 0,
+            cmd_held: false,
         };
         this.watch_agent_idle(cx);
         #[cfg(feature = "dev")]
@@ -620,6 +632,7 @@ impl SpaceApp {
             HostEvent::TerminalOutput { .. } => {}
             HostEvent::TerminalTitle { terminal_id, title } => self.terminal_title(&terminal_id, title),
             HostEvent::TerminalExited { terminal_id, exit_code } => self.terminal_exited(&terminal_id, exit_code, cx),
+            HostEvent::Steered { session_id, steer_id } => self.steered(&session_id, &steer_id, cx),
             HostEvent::Session { session_id, event } => {
                 self.touch_agent();
                 let Some(&key) = self.session_threads.get(&session_id) else {

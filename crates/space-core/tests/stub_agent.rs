@@ -365,3 +365,42 @@ async fn an_agent_stopped_on_purpose_is_stopped_and_its_session_loads_again() {
     let reply: String = state.items.iter().filter_map(|i| if let TranscriptItem::Agent(t) = i { Some(t.as_str()) } else { None }).collect();
     assert!(reply.contains("I remember 1 earlier prompt(s)."), "{reply}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_steered_message_joins_the_running_turn_at_its_next_step() {
+    let root = stub_root();
+    let (host, mut events) = host(root.path());
+    let agent = host.start_agent("stub").await.unwrap();
+    assert!(agent.can_steer());
+    let session = agent.new_session(root.path()).await.unwrap();
+    let mut state = SessionState::new(session.id());
+    let mut seen = Vec::new();
+
+    // Nothing runs: refused (the app sends it as a normal message instead).
+    assert!(session.steer("s0".into(), "too early".into(), vec![], vec![]).await.is_err());
+
+    let s = session.clone();
+    let turn = tokio::spawn(async move { s.prompt("slow please").await });
+    until(&mut events, &mut state, &mut seen, |e| matches!(e, HostEvent::Session { event: SessionEvent::AgentText { .. }, .. })).await;
+    session.steer("s1".into(), "also check the tests".into(), vec![], vec![]).await.unwrap();
+    until(&mut events, &mut state, &mut seen, |e| matches!(e, HostEvent::Steered { steer_id, .. } if steer_id == "s1")).await;
+    // The message is in the transcript before what the agent says after it.
+    let users: Vec<&str> =
+        state.items.iter().filter_map(|i| if let TranscriptItem::User { text, .. } = i { Some(text.as_str()) } else { None }).collect();
+    assert_eq!(users, ["slow please", "also check the tests"]);
+    until(&mut events, &mut state, &mut seen, turn_ended).await;
+    assert_eq!(turn.await.unwrap().unwrap(), "end_turn");
+    let reply: String = state.items.iter().filter_map(|i| if let TranscriptItem::Agent(t) = i { Some(t.as_str()) } else { None }).collect();
+    assert!(reply.contains("Steered: also check the tests."), "{reply}");
+
+    // Taken back before the next step: never delivered.
+    let s = session.clone();
+    let turn = tokio::spawn(async move { s.prompt("slow again").await });
+    until(&mut events, &mut state, &mut seen, |e| matches!(e, HostEvent::Session { event: SessionEvent::TurnStarted, .. })).await;
+    session.steer("s2".into(), "never mind".into(), vec![], vec![]).await.unwrap();
+    assert_eq!(session.unsteer().await.unwrap(), ["s2"]);
+    until(&mut events, &mut state, &mut seen, turn_ended).await;
+    turn.await.unwrap().unwrap();
+    assert!(!seen.iter().any(|e| matches!(e, HostEvent::Steered { steer_id, .. } if steer_id == "s2")));
+    agent.stop();
+}
