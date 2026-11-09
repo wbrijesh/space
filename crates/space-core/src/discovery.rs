@@ -118,12 +118,16 @@ fn plugin_dirs(root: &Path) -> Vec<PathBuf> {
 
 /// Directories to scan for bundled plugins.
 ///
-/// `SPACE_PLUGIN_DIRS` wins if set. Otherwise look for a repo checkout (a directory with
+/// `SPACE_PLUGIN_DIRS` wins if set. An installed app (see [`installed_app_contents`]) has its
+/// plugins in `Contents/Resources/plugins`. Otherwise look for a repo checkout (a directory with
 /// `Cargo.toml` and `plugins/`) above the executable, then fall back to the repo this crate
 /// was compiled from (development builds).
 pub fn bundled_plugin_roots() -> Vec<PathBuf> {
     if let Some(v) = std::env::var_os(PLUGIN_DIRS_ENV) {
         return std::env::split_paths(&v).filter(|p| !p.as_os_str().is_empty()).collect();
+    }
+    if let Some(contents) = std::env::current_exe().ok().and_then(|exe| installed_app_contents(&exe)) {
+        return vec![contents.join("Resources/plugins")];
     }
     if let Some(root) = std::env::current_exe().ok().and_then(|exe| find_repo_root(&exe)) {
         return vec![root.join("plugins")];
@@ -132,6 +136,21 @@ pub fn bundled_plugin_roots() -> Vec<PathBuf> {
         return vec![root.join("plugins")];
     }
     Vec::new()
+}
+
+/// The `Contents` folder of the app `exe` runs from, when it's an installed app: inside a
+/// `….app/Contents/MacOS/` and not under a `target/` folder (the dev builds dx and the release
+/// step put there are still development: their plugins come from the repo). An installed app
+/// carries its plugins: binaries in `Contents/Helpers`, manifests in `Contents/Resources/plugins`.
+pub fn installed_app_contents(exe: &Path) -> Option<PathBuf> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let app = contents.parent()?;
+    let is_app = macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && app.extension().is_some_and(|e| e == "app");
+    let in_target = exe.ancestors().any(|d| d.file_name().is_some_and(|n| n == "target"));
+    (is_app && !in_target).then(|| contents.to_path_buf())
 }
 
 /// Walk up from `start` to find a directory containing both `Cargo.toml` and `plugins/`.
@@ -147,6 +166,19 @@ pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn an_installed_app_is_one_outside_target() {
+        let app = |p: &str| installed_app_contents(Path::new(p));
+        assert_eq!(app("/Applications/Space.app/Contents/MacOS/Space"), Some(PathBuf::from("/Applications/Space.app/Contents")));
+        assert_eq!(app("/opt/homebrew/Caskroom/space/0.1.0/Space.app/Contents/MacOS/Space"), Some(PathBuf::from("/opt/homebrew/Caskroom/space/0.1.0/Space.app/Contents")));
+        // Builds under target/ are development builds (the repo's plugins).
+        assert_eq!(app("/Users/me/space/target/release/Space.app/Contents/MacOS/Space"), None);
+        assert_eq!(app("/Users/me/space/target/dx/space-app/debug/macos/Space.app/Contents/MacOS/Space"), None);
+        // A bare binary isn't an app.
+        assert_eq!(app("/Users/me/space/target/debug/Space"), None);
+        assert_eq!(app("/usr/local/bin/Space"), None);
+    }
 
     fn write_plugin(root: &Path, dir: &str, id: &str, name: &str) {
         let d = root.join(dir);

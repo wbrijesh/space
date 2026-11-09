@@ -3,7 +3,6 @@
 // stdout carries newline-delimited JSON-RPC only; every log line goes to stderr.
 
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
@@ -27,15 +26,10 @@ import { contextFromMeta, type HostLink } from "./host.js";
 import { createPiSession, type PiSession } from "./pi.js";
 import { completeOnce, configureSession, parseCompleteParams, parseConfigureParams, sessionStatus } from "./status.js";
 import { promptInput, textToolContent, toolKind, toolResultText, toolTitle, turnUsage } from "./translate.js";
+// Built in (a single-file executable has no package.json next to it).
+import pkg from "../package.json" with { type: "json" };
 
-const VERSION: string = (() => {
-	try {
-		const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: string };
-		return pkg.version ?? "0.0.0";
-	} catch {
-		return "0.0.0";
-	}
-})();
+const VERSION: string = pkg.version;
 
 interface SessionState {
 	pi: PiSession;

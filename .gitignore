@@ -7,3 +7,4 @@ dist/
 .env.*
 __pycache__/
 .claude/worktrees/
+*.bun-build

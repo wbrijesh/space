@@ -7,7 +7,7 @@
 // outside the allowed folder fails); context sections reach the system prompt and leave it again;
 // a session given a data folder is kept there and loads again with its messages.
 //
-// Run: pnpm test-host   (or: node scripts/host-test.ts after `pnpm build`)
+// Run: bun scripts/host-test.ts (or `bun run test-host`)
 
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,10 +21,10 @@ const agentDir = mkdtempSync(join(tmpdir(), "pi-agent-host-test-"));
 process.env.SPACE_PI_AGENT_DIR = agentDir;
 process.env.SPACE_PI_MODEL = "faux/m";
 
-const { isolatePiConfig, loadConfig } = await import(join(pluginDir, "dist/env.js"));
-const { createPiSession } = await import(join(pluginDir, "dist/pi.js"));
-const { contextFromMeta, sectionName, shellQuote } = await import(join(pluginDir, "dist/host.js"));
-const { completeOnce } = await import(join(pluginDir, "dist/status.js"));
+const { isolatePiConfig, loadConfig } = await import(join(pluginDir, "src/env.ts"));
+const { createPiSession } = await import(join(pluginDir, "src/pi.ts"));
+const { contextFromMeta, sectionName, shellQuote } = await import(join(pluginDir, "src/host.ts"));
+const { completeOnce } = await import(join(pluginDir, "src/status.ts"));
 
 const failures: string[] = [];
 function check(ok: boolean, what: string): void {

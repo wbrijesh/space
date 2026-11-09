@@ -5,14 +5,13 @@
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "types": ["node"],
+    "resolveJsonModule": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
-    "sourceMap": true,
-    "rootDir": "src",
-    "outDir": "dist"
+    "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src", "scripts"]
 }

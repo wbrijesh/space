@@ -177,11 +177,15 @@ pub const TARGET_PLACEHOLDER: &str = "${target}";
 /// Env var overriding what `${target}` expands to.
 pub const TARGET_DIR_ENV: &str = "SPACE_TARGET_DIR";
 
-/// What `${target}` expands to: `SPACE_TARGET_DIR`, else the `target/<profile>` directory
-/// above this executable (also inside `Space.app`), else this repo's `target/debug`.
+/// What `${target}` expands to: `SPACE_TARGET_DIR`, else an installed app's `Contents/Helpers`
+/// (see [`crate::discovery::installed_app_contents`]), else the `target/<profile>` directory
+/// above this executable (also inside a dev `Space.app`), else this repo's `target/debug`.
 pub fn target_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os(TARGET_DIR_ENV).filter(|d| !d.is_empty()) {
         return PathBuf::from(dir);
+    }
+    if let Some(contents) = std::env::current_exe().ok().and_then(|exe| crate::discovery::installed_app_contents(&exe)) {
+        return contents.join("Helpers");
     }
     let from_exe = std::env::current_exe().ok().and_then(|exe| {
         exe.ancestors()

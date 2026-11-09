@@ -13,7 +13,7 @@ v0 delivers the foundation: a Rust/GPUI **harness** that hosts out-of-process **
 └──────┬──────────────────────────────────────────┬────────────────────┘
        │ ACP (JSON-RPC over stdio)                │ service protocol (JSON-RPC over stdio)
 ┌──────▼───────────────────────┐   ┌──────────────▼──────────────────────────┐
-│ plugins/pi-agent (Node, TS)  │   │ plugins/permissions (Rust)               │
+│ plugins/pi-agent (TS, Bun)   │   │ plugins/permissions (Rust)               │
 │ pi SDK + claude-cli          │   │ modes · macOS sandbox · decision model   │
 └──────────────────────────────┘   │ plugins/alerts · session-store · titles  │
                                    └──────────────────────────────────────────┘
@@ -78,7 +78,13 @@ confine fail closed; a crashed provider is started again after the restart backo
 that was already replaced changes nothing. When Space quits, agents stop first, then services, each after
 its dependents.
 
-Discovery order: `<repo>/plugins/*`, `~/.space/plugins/*`, `<project>/.space/plugins/*`. A project
+Discovery order: the bundled plugins (`<repo>/plugins/*` when developing; inside an installed
+`Space.app`, `Contents/Resources/plugins/*`), then `~/.space/plugins/*`, `<project>/.space/plugins/*`.
+A bundled plugin's manifest runs `${target}/<binary>`: `target/<profile>` when developing,
+`Contents/Helpers` in an installed app, so one manifest works in both. Rust plugins are their own
+binaries; every bundled TypeScript plugin runs from one Bun executable, `space-ts <plugin id>`
+(`plugins/space-ts.ts`, compiled by `just build`). An app is "installed" when it runs from a
+`….app/Contents/MacOS/` outside any `target/` folder. A project
 plugin replaces a user plugin with the same `id`; neither may use the `id` of a bundled plugin (it's
 refused, so it can't inherit that plugin's settings, secrets or trust). Writing one: [plugins.md](plugins.md).
 
@@ -94,7 +100,7 @@ refused, so it can't inherit that plugin's settings, secrets or trust). Writing 
 - a clean environment: `PATH`, `HOME`, `USER`, `TMPDIR`, `LANG` and `SHELL`, the variables it names in `env`,
   `[run.env]`, and `SPACE_PLUGIN_DIR`/`SPACE_PROJECT_DIR`.
 
-Bundled plugins (`<repo>/plugins`, or `SPACE_PLUGIN_DIRS`) are trusted. Plugins from `~/.space/plugins`
+Bundled plugins (`<repo>/plugins`, the app's own, or `SPACE_PLUGIN_DIRS`) are trusted. Plugins from `~/.space/plugins`
 and `<project>/.space/plugins` don't start until you approve them in Settings → Plugins, which lists their
 permissions in plain words. Until then they count as not installed, and the composer shows "… needs your
 approval" and won't send.

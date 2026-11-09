@@ -291,6 +291,8 @@ pub struct SpaceApp {
     /// being idle (it starts again when you write).
     pub(crate) agent_activity: std::time::Instant,
     pub(crate) agent_asleep: bool,
+    /// The `claude` CLI pi-agent needs was found (checked at launch and on each restart).
+    pub(crate) claude_cli: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -451,6 +453,7 @@ impl SpaceApp {
             pending_confirm: None,
             agent_activity: std::time::Instant::now(),
             agent_asleep: false,
+            claude_cli: claude_cli_installed(),
             _subscriptions: vec![sub, activation, quit],
         };
         this.watch_agent_idle(cx);
@@ -531,6 +534,10 @@ impl SpaceApp {
                 }
                 if matches!(status, PluginStatus::Stopped | PluginStatus::Crashed(_) | PluginStatus::NotStarted(_)) {
                     self.agent = None;
+                }
+                // The agent failing may be the Claude CLI gone missing: look again.
+                if matches!(status, PluginStatus::Crashed(_)) {
+                    self.claude_cli = claude_cli_installed();
                 }
                 self.agent_status = status;
             }
@@ -959,6 +966,7 @@ impl SpaceApp {
     }
 
     pub(crate) fn restart_agent(&mut self, cx: &mut Context<Self>) {
+        self.claude_cli = claude_cli_installed();
         if let Some(agent) = self.agent.take() {
             agent.stop();
         }
@@ -1036,6 +1044,23 @@ impl Render for SpaceApp {
         self.host.set_watching(watching.filter(|_| !self.show_settings && window.is_window_active()));
         crate::view::render_root(self, window, cx)
     }
+}
+
+/// Whether the Claude CLI is installed where pi-agent looks for it: on `PATH`, or in the usual
+/// install folders (a GUI app gets a minimal `PATH`).
+pub(crate) fn claude_cli_installed() -> bool {
+    let home = dirs_home();
+    let fallbacks = [home.join(".local/bin"), home.join(".claude/local"), "/opt/homebrew/bin".into(), "/usr/local/bin".into()];
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .chain(fallbacks)
+        .any(|dir| dir.join("claude").is_file())
+}
+
+fn dirs_home() -> PathBuf {
+    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
 }
 
 #[cfg(test)]

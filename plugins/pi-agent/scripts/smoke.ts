@@ -1,7 +1,7 @@
-// End-to-end smoke test: acts as an ACP client, spawns `node dist/main.js`, and runs a few tiny
+// End-to-end smoke test: acts as an ACP client, spawns `bun src/main.ts`, and runs a few tiny
 // prompts against the real claude-cli provider (bills the signed-in Claude subscription).
 //
-// Run: pnpm smoke   (or: node scripts/smoke.ts after `pnpm build`)
+// Run: bun scripts/smoke.ts (or `bun run smoke`)
 // Set SMOKE_SKIP_CANCEL=1 to skip the cancellation check, SMOKE_NO_PROMPTS=1 to run only the
 // checks that make no model requests (handshake, _space/status, _space/session/configure).
 // As the client it answers the tool pipeline like a host without guard plugins: every
@@ -32,7 +32,7 @@ function check(ok: boolean, what: string): void {
 	if (!ok) failures.push(what);
 }
 
-const child = spawn(process.execPath, ["dist/main.js"], { cwd: pluginDir, stdio: ["pipe", "pipe", "pipe"] });
+const child = spawn(process.execPath, ["src/main.ts"], { cwd: pluginDir, stdio: ["pipe", "pipe", "pipe"] });
 child.stderr.on("data", (chunk: Buffer) => {
 	for (const line of chunk.toString().split("\n")) if (line) console.log(`  [agent stderr] ${line}`);
 });

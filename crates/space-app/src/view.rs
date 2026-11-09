@@ -753,6 +753,11 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
 const CONTEXT_PANEL: &str = "composer:context";
 /// The agent could not start or exited: say so, with Restart.
 fn agent_problem(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
+    // pi-agent talks to Claude through the Claude CLI; without it nothing works.
+    if app.agent_id.as_deref() == Some("pi-agent") && !app.claude_cli {
+        let message = "Space needs the Claude CLI: install it (brew install --cask claude-code) and run `claude` once to sign in.";
+        return Some(problem_card(message, Some(click(cx, |this, _, cx| this.restart_agent(cx)))).into_any_element());
+    }
     let message = match (&app.agent_status, &thread.error) {
         (PluginStatus::Crashed(msg), _) => format!("The agent exited: {}", format::one_line(msg)),
         (PluginStatus::NotStarted(msg), _) => format!("The agent can't run: {}", format::one_line(msg)),

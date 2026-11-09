@@ -6,6 +6,8 @@
 //!                                     headless: start an agent, prompt once, print events
 //! Space --gallery                     dev: open the component gallery
 //! Space --scenario NAME|list [DIR]    dev: boot into a scripted state (stub agent)
+//! Space --check-plugins [DIR]         start every bundled plugin, report, exit non-zero on failure
+//! Space --version                     print the version
 //! ```
 //!
 //! The app starts the agent plugin (`pi-agent`, or `SPACE_AGENT=<plugin id>`) on launch and
@@ -16,6 +18,7 @@
 
 mod app;
 mod attach;
+mod check;
 mod idle;
 mod images;
 #[cfg(feature = "dev")]
@@ -51,6 +54,8 @@ struct Args {
     permission_mode: Option<String>,
     gallery: bool,
     scenario: Option<String>,
+    /// Start every bundled plugin, report, exit (`check.rs`).
+    check_plugins: bool,
 }
 
 fn parse_args() -> Result<Args> {
@@ -61,6 +66,7 @@ fn parse_args() -> Result<Args> {
     let mut permission_mode = None;
     let mut gallery = false;
     let mut scenario = None;
+    let mut check_plugins = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -71,11 +77,17 @@ fn parse_args() -> Result<Args> {
                 permission_mode = Some(args.next().context("--permission-mode needs a mode id (e.g. read-only)")?)
             }
             "--gallery" => gallery = true,
+            "--check-plugins" => check_plugins = true,
+            "-V" | "--version" => {
+                println!("Space {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             "--scenario" => scenario = Some(args.next().context("--scenario needs a name (or `list`)")?),
             "-h" | "--help" => {
                 println!(
                     "usage: Space [PROJECT_DIR]\n       Space --smoke PROMPT [--plugin ID] [--allow] [--permission-mode ID] [PROJECT_DIR]\n       \
-                     Space --gallery\n       Space --scenario NAME|list [PROJECT_DIR]"
+                     Space --gallery\n       Space --scenario NAME|list [PROJECT_DIR]\n       \
+                     Space --check-plugins [PROJECT_DIR]\n       Space --version"
                 );
                 std::process::exit(0);
             }
@@ -91,7 +103,7 @@ fn parse_args() -> Result<Args> {
             None => std::env::current_dir()?,
         },
     };
-    Ok(Args { project_dir, smoke, plugin, allow, permission_mode, gallery, scenario })
+    Ok(Args { project_dir, smoke, plugin, allow, permission_mode, gallery, scenario, check_plugins })
 }
 
 fn main() -> Result<()> {
@@ -141,6 +153,14 @@ fn main() -> Result<()> {
         }
         let scenario = scenarios::resolve(name)?;
         (host_options, options) = scenarios::prepare(&scenario, &args.project_dir)?;
+    }
+
+    if args.check_plugins {
+        // Nothing is kept: no approvals or threads are written.
+        host_options.space_dir = None;
+        let (host, _events) = Host::new(runtime.handle().clone(), host_options);
+        let ok = runtime.block_on(check::run(&host, &args.project_dir, options.agent.clone()));
+        std::process::exit(if ok { 0 } else { 1 });
     }
 
     let (host, events) = Host::new(runtime.handle().clone(), host_options);

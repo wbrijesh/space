@@ -24,6 +24,8 @@ const SETTLE: Duration = Duration::from_millis(400);
 const AGENT_RETRY: Duration = Duration::from_secs(2);
 /// Shared crates every Rust plugin is built from.
 const SHARED: &[&str] = &["crates/space-protocol", "crates/space-plugin"];
+/// What every TypeScript plugin is built from: the `space-ts` entry and the workspace's packages.
+const SHARED_TS: &[&str] = &["plugins/space-ts.ts", "package.json", "bun.lock"];
 
 /// A bundled plugin and how it's built.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,8 +41,9 @@ pub struct Bundled {
 pub enum Build {
     /// `cargo build -p <crate>`.
     Cargo(String),
-    /// `pnpm -C <dir> build` (TypeScript).
-    Pnpm,
+    /// TypeScript: every bundled TypeScript plugin is in one Bun executable, `space-ts`
+    /// (`plugins/space-ts.ts`), rebuilt with `bun build --compile`.
+    Bun,
 }
 
 /// The repo this build came from.
@@ -58,7 +61,7 @@ pub fn bundled(repo: &Path) -> Vec<Bundled> {
         let build = if let Some(name) = cargo_package(&dir.join("Cargo.toml")) {
             Build::Cargo(name)
         } else if dir.join("package.json").is_file() {
-            Build::Pnpm
+            Build::Bun
         } else {
             continue;
         };
@@ -83,8 +86,9 @@ fn cargo_package(path: &Path) -> Option<String> {
     None
 }
 
-/// The plugins a change to `path` (relative to the repo) calls for: its own plugin, or every Rust
-/// plugin for a shared crate. Build output, dependencies and VCS files call for none.
+/// The plugins a change to `path` (relative to the repo) calls for: its own plugin, every Rust
+/// plugin for a shared crate, every TypeScript plugin for the `space-ts` entry or the workspace's
+/// packages. Build output, dependencies and VCS files call for none.
 pub fn affected(path: &Path, plugins: &[Bundled]) -> Vec<usize> {
     let skipped = path.components().any(|c| {
         matches!(c, Component::Normal(n) if matches!(n.to_str(), Some("target" | "node_modules" | "dist" | ".git")))
@@ -92,8 +96,12 @@ pub fn affected(path: &Path, plugins: &[Bundled]) -> Vec<usize> {
     if skipped {
         return Vec::new();
     }
+    let all = |bun: bool| plugins.iter().enumerate().filter(|(_, p)| (p.build == Build::Bun) == bun).map(|(i, _)| i).collect();
     if SHARED.iter().any(|s| path.starts_with(s)) {
-        return plugins.iter().enumerate().filter(|(_, p)| matches!(p.build, Build::Cargo(_))).map(|(i, _)| i).collect();
+        return all(false);
+    }
+    if SHARED_TS.iter().any(|s| path == Path::new(s)) {
+        return all(true);
     }
     plugins.iter().position(|p| path.starts_with(&p.dir)).into_iter().collect()
 }
@@ -126,6 +134,10 @@ pub fn start(cx: &mut Context<SpaceApp>) {
         if let Err(e) = watcher.watch(&dir, RecursiveMode::Recursive) {
             tracing::warn!("plugin reload: can't watch {}: {e}", dir.display());
         }
+    }
+    // The workspace's package.json and bun.lock (the TypeScript plugins' dependencies).
+    if let Err(e) = watcher.watch(&repo, RecursiveMode::NonRecursive) {
+        tracing::warn!("plugin reload: can't watch {}: {e}", repo.display());
     }
     eprintln!("space: plugins are rebuilt and restarted when their sources change ({} watched)", plugins.len());
     cx.spawn(async move |this, cx| {
@@ -176,13 +188,27 @@ fn build(repo: &Path, plugin: &Bundled) -> Result<(), String> {
             c.args(["build", "-p", name]);
             c
         }
-        Build::Pnpm => {
-            let mut c = std::process::Command::new("pnpm");
-            c.arg("-C").arg(repo.join(&plugin.dir)).arg("build");
-            c
-        }
+        Build::Bun => return build_space_ts(repo),
     };
-    let out = command.current_dir(repo).output().map_err(|e| format!("couldn't run the build: {e}"))?;
+    run(command.current_dir(repo))
+}
+
+/// `bun install`, then compile `space-ts` to a temporary file and move it over the old one: a
+/// plugin still running keeps its copy, and nothing starts a half-written file.
+fn build_space_ts(repo: &Path) -> Result<(), String> {
+    run(std::process::Command::new("bun").arg("install").current_dir(repo))?;
+    let out = space_core::process::target_dir().join("space-ts");
+    let tmp = out.with_extension("new");
+    run(std::process::Command::new("bun")
+        .args(["build", "--compile", "plugins/space-ts.ts", "--outfile"])
+        .arg(&tmp)
+        .current_dir(repo))?;
+    std::fs::rename(&tmp, &out).map_err(|e| format!("moving {} into place: {e}", tmp.display()))
+}
+
+/// Run a build command; the error is its output.
+fn run(command: &mut std::process::Command) -> Result<(), String> {
+    let out = command.output().map_err(|e| format!("couldn't run the build: {e}"))?;
     if out.status.success() {
         Ok(())
     } else {
@@ -247,7 +273,12 @@ mod tests {
 
     fn plugins() -> Vec<Bundled> {
         let p = |id: &str, build: Build| Bundled { id: id.into(), name: id.into(), dir: PathBuf::from(format!("plugins/{id}")), build };
-        vec![p("pi-agent", Build::Pnpm), p("titles", Build::Cargo("space-titles".into())), p("trajectory", Build::Cargo("space-trajectory".into()))]
+        vec![
+            p("pi-agent", Build::Bun),
+            p("titles", Build::Cargo("space-titles".into())),
+            p("trajectory", Build::Cargo("space-trajectory".into())),
+            p("memory", Build::Bun),
+        ]
     }
 
     #[test]
@@ -258,6 +289,9 @@ mod tests {
         assert_eq!(hit("plugins/pi-agent/src/trace.ts"), [0]);
         assert_eq!(hit("crates/space-protocol/src/trace.rs"), [1, 2]);
         assert_eq!(hit("crates/space-plugin/src/lib.rs"), [1, 2]);
+        // The space-ts entry and the workspace's packages: every TypeScript plugin.
+        assert_eq!(hit("plugins/space-ts.ts"), [0, 3]);
+        assert_eq!(hit("bun.lock"), [0, 3]);
         // Build output, dependencies and other crates don't.
         for none in ["plugins/pi-agent/dist/main.js", "plugins/pi-agent/node_modules/x/y.js", "plugins/titles/target/a", "crates/space-ui/src/lib.rs"] {
             assert!(hit(none).is_empty(), "{none}");
@@ -269,7 +303,7 @@ mod tests {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let all = bundled(&repo);
         let pi = all.iter().find(|p| p.id == "pi-agent").expect("pi-agent");
-        assert_eq!(pi.build, Build::Pnpm);
+        assert_eq!(pi.build, Build::Bun);
         let titles = all.iter().find(|p| p.id == "titles").expect("titles");
         assert_eq!((titles.build.clone(), titles.dir.clone()), (Build::Cargo("space-titles".into()), PathBuf::from("plugins/titles")));
     }

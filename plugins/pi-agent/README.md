@@ -13,7 +13,7 @@ Rust types (`just protocol`; never edit it by hand). The contract with the harne
 ## How it works
 
 ```
-Space harness (ACP client) ──stdin/stdout NDJSON──▶ node dist/main.js
+Space harness (ACP client) ──stdin/stdout NDJSON──▶ space-ts pi-agent (src/main.ts)
                                                    ├─ @agentclientprotocol/sdk  agent() app, ACP v1
                                                    ├─ pi AgentSessionRuntime per ACP session (kept in the host's data folder)
                                                    │    tools: read, bash, edit, write (run in-process),
@@ -59,7 +59,7 @@ An inline pi extension and a replacement bash tool connect pi to it:
   (`space_<id>`) for that run, through `before_agent_start`. They're never part of the user's message and
   never sent back over ACP; the previous run's sections are removed first.
 
-`pnpm test-host` checks all of this, and that a session kept in a folder loads again with its messages, on a real pi session with no model requests: pi-ai's faux provider plays
+`bun run test-host` checks all of this, and that a session kept in a folder loads again with its messages, on a real pi session with no model requests: pi-ai's faux provider plays
 the model (including tool calls) and a fake host answers the requests.
 
 ### Traces (`src/trace.ts`)
@@ -82,7 +82,7 @@ built it.
 Events go out every 100 ms while some are pending and at once at request, response, tool and turn
 boundaries; the turn's answer waits until its trace was sent. Times are wall-clock ms measured with
 `performance.now()`. Requests outside a turn (title completions) aren't recorded, and recording never
-breaks a turn. `pnpm test` covers the helpers and the recorder fed hook events by hand.
+breaks a turn. `bun test` covers the helpers and the recorder fed hook events by hand.
 
 Not visible from here: what the Claude CLI adds to the request (a billing header and identity line)
 and the beta headers. A request's start includes starting the CLI when no spare process is waiting.
@@ -107,20 +107,24 @@ or on SIGINT/SIGTERM, the agent disposes all sessions (stopping claude-cli's spa
 
 ## Run
 
+Space runs it from one Bun executable shared by every bundled TypeScript plugin: `just build`
+compiles `plugins/space-ts.ts` into `target/debug/space-ts`, and the manifest runs
+`${target}/space-ts pi-agent` (inside the installed app, `Contents/Helpers/space-ts`). Bun runs the
+TypeScript directly; there's no `dist/`.
+
 ```bash
-pnpm install
-pnpm build        # tsc → dist/
-pnpm typecheck    # src + scripts
-pnpm start        # node dist/main.js (speaks ACP on stdio)
-pnpm smoke        # build, then run the end-to-end ACP client test (bills a few tiny requests)
-pnpm test-host    # the host pipeline on a real pi session: preExecute, confine, context (no model requests)
-pnpm test         # node --test: the trace recorder (no model requests)
-SMOKE_NO_PROMPTS=1 node scripts/smoke.ts   # only handshake/status/configure checks, no model requests
+bun install                  # from the repo root (a Bun workspace)
+bun run typecheck            # tsc --noEmit over src + scripts (part of `just lint`)
+bun src/main.ts              # speaks ACP on stdio
+bun test src                 # the trace recorder (no model requests)
+bun run test-host            # the host pipeline on a real pi session: preExecute, confine, context (no model requests)
+bun run smoke                # the end-to-end ACP client test (bills a few tiny requests)
+SMOKE_NO_PROMPTS=1 bun scripts/smoke.ts   # only handshake/status/configure checks, no model requests
 ```
 
-Requires Node ≥ 24 and the Claude Code CLI, signed in to a Pro or Max plan (`claude auth login`).
+Requires Bun and the Claude Code CLI, signed in to a Pro or Max plan (`claude auth login`).
 
-The smoke test (`scripts/smoke.ts`) is an ACP client. It starts `node dist/main.js` and runs these checks:
+The smoke test (`scripts/smoke.ts`) is an ACP client. It starts `bun src/main.ts` and runs these checks:
 initialize, `_space/status`, the "pong" prompt, a bash tool turn (`_space/tools/preExecute`, which it
 allows, then `tool_call` + `tool_call_update` + `end_turn`), cancelling a turn after its first chunk (`cancelled`), and a clean exit on EOF. Set
 `SMOKE_SKIP_CANCEL=1` to skip the cancel check.

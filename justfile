@@ -1,7 +1,7 @@
 # Space task runner (https://github.com/casey/just)
 
-plugin := "plugins/pi-agent"
 project := justfile_directory()
+version := `sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1`
 
 # Builds everything, then launches through dx with live Rust edits: saving a file patches the running
 # app in ~1 s (render code, layout, styles; struct fields or `main` need a rebuild: press `r` in
@@ -17,34 +17,46 @@ run *args: build
     SPACE_TARGET_DIR={{project}}/target/debug SPACE_PROJECT={{project}} SPACE_RELOAD_PLUGINS=1 \
         dx serve --hot-patch -p space-app --bin Space --features hot --macos --args="{{args}}"
 
-# Build the Rust workspace and the bundled pi-agent plugin
-build: build-rust build-plugin
+# Build the Rust workspace (app and Rust plugins) and the TypeScript plugins
+build: build-rust build-ts
 
 build-rust:
     cargo build --workspace
 
-build-plugin:
-    #!/usr/bin/env sh
-    if [ -f {{plugin}}/package.json ]; then
-        pnpm -C {{plugin}} install && pnpm -C {{plugin}} build
-    else
-        echo "skipping {{plugin}}: no package.json"
-    fi
+# Every bundled TypeScript plugin runs from one Bun executable, next to the Rust plugins
+build-ts:
+    bun install
+    bun build --compile plugins/space-ts.ts --outfile target/debug/space-ts
 
-# Without dev tooling (no gallery, scenarios, clock controls or hot reload): for shipping and for
-# judging real performance, not for running daily
-# Release build: target/release/Space.app
+# Without dev tooling (no gallery, scenarios, clock controls or hot reload); plugins inside the
+# app, ad-hoc signed, zipped for the cask. For shipping and judging real performance, not daily use
+# Release build: target/release/Space.app and Space-<version>-arm64.zip
 release:
-    cargo build --release -p space-app --no-default-features
+    cargo build --release --workspace --no-default-features
+    bun install
+    # (not --bytecode: Bun can't precompile the pi SDK's modules to bytecode)
+    bun build --compile --minify plugins/space-ts.ts --outfile target/release/space-ts
     scripts/bundle.sh release
 
-# Run all Rust tests (uses the space-stub-agent, no model calls)
-test:
+# Run the release app from a copy outside the repo and check every bundled plugin starts from it
+release-check: release
+    scripts/release-check.sh
+
+# Publish a release: build and check it, tag it, upload the zip to a GitHub release, and update the
+# cask in wbrijesh/homebrew-tools. Only when a release is meant to go out
+# Publish v<version> (the workspace version) to GitHub and the Homebrew tap
+publish: release-check
+    scripts/publish.sh {{version}}
+
+# Run all tests: Rust (with the space-stub-agent) and the TypeScript plugins; no model calls
+test: build-ts
     cargo test --workspace
+    cd plugins/pi-agent && bun test src && bun scripts/host-test.ts
 
 lint:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo clippy -p space-app --no-default-features --all-targets -- -D warnings
+    cd plugins/pi-agent && bun run typecheck
 
 # Headless end-to-end prompt against the real agent plugin (bills your Claude subscription)
 smoke prompt="Reply with exactly: pong": build

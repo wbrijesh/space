@@ -10,6 +10,8 @@ description = "Coding agent on the pi SDK, using the Claude CLI subscription."
 env = ["SPACE_PI_MODEL", "SPACE_PI_THINKING", "SPACE_PI_AGENT_DIR", "CLAUDE_CONFIG_DIR", "SSH_AUTH_SOCK", "LOGNAME"]
 
 [run]
-command = "node"
-args = ["dist/main.js"]
+# Every bundled TypeScript plugin runs from one Bun executable (plugins/space-ts.ts), built next
+# to the Rust plugins by `just build`; inside Space.app it's in Contents/Helpers.
+command = "${target}/space-ts"
+args = ["pi-agent"]
 cwd = "plugin"

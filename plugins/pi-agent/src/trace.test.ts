@@ -1,5 +1,5 @@
 // Tests of the trace recorder (no model, no pi session): the pure helpers, and the recorder fed
-// pi's hook events by hand. Run: pnpm test (node --test on the compiled dist/*.test.js).
+// pi's hook events by hand. Run: bun test (from plugins/pi-agent, or `just test`).
 
 import assert from "node:assert/strict";
 import { test } from "node:test";

@@ -6,12 +6,26 @@ foundation: a Rust/[GPUI](https://gpui.rs) **harness** that hosts out-of-process
 pi SDK. See [docs/architecture.md](docs/architecture.md) for the contract (manifest, discovery, ACP subset,
 `_space/*` extensions).
 
+## Install
+
+```
+brew install --cask wbrijesh/tools/space
+```
+
+Apple Silicon, macOS 13 or later. Space uses your Claude subscription through the Claude CLI: install
+it (`brew install --cask claude-code`) and run `claude` once to sign in. Everything else, the plugins
+included, is inside the app. The app isn't notarized yet; the cask clears macOS's download mark so it
+opens normally (a zip downloaded by hand needs System Settings ▸ Privacy & Security ▸ Open Anyway once).
+
+## Layout
+
 ```
 crates/space-protocol   manifest types (space-plugin.toml), _space/* extension types, ACP re-exports
 crates/space-core       discovery · process supervisor · ACP client · session model (no UI deps)
 crates/space-ui         design tokens · animation clock · components (+ previews and gallery, `dev`)
 crates/space-app        GPUI desktop app, binary `Space` (app state, wiring, dev scenarios)
 plugins/pi-agent        TypeScript ACP agent on the pi SDK (Claude CLI subscription)
+plugins/space-ts.ts     one Bun executable for every bundled TypeScript plugin (`space-ts <id>`)
 plugins/permissions     permission modes: macOS sandbox, decision-model guardrail
 plugins/alerts          a notification or sound when an agent finishes or pauses
 plugins/session-store   saved threads in ~/.space/threads
@@ -26,7 +40,7 @@ plugins/trajectory      every thread's trace of model requests and tool calls (T
   on the Command Line Tools. Check: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun metal --version`.
   If it is missing: `xcodebuild -downloadComponent MetalToolchain`.
 - Rust (stable, edition 2024; tested with 1.98).
-- Node ≥ 24 and pnpm (for `plugins/pi-agent`).
+- [Bun](https://bun.sh) (the TypeScript plugins: dependencies, tests, and the `space-ts` executable).
 - The `claude` CLI, signed in. pi-agent uses your Claude subscription through it, so prompts cost usage.
 - Optional: [`just`](https://github.com/casey/just).
 
@@ -50,8 +64,10 @@ plugins/trajectory      every thread's trace of model requests and tool calls (T
 | | |
 |---|---|
 | `just run [ARGS]` | build everything and run Space (above) |
-| `just build` | `cargo build --workspace` + `pnpm install && pnpm build` in `plugins/pi-agent` |
-| `just release` | release build without dev tooling (`target/release/Space.app`): for shipping, not daily use |
+| `just build` | `cargo build --workspace`, `bun install`, and `bun build --compile` of `target/debug/space-ts` |
+| `just release` | release build without dev tooling: `target/release/Space.app` with every plugin inside (`Contents/Helpers`, `Contents/Resources/plugins`), ad-hoc signed, zipped with its sha256 |
+| `just release-check` | `just release`, then unzip it outside the repo and run `Space --check-plugins` (every plugin and the agent must start from inside the app) |
+| `just publish` | release-check, tag `v<version>`, upload the zip to a GitHub release, update the cask in `wbrijesh/homebrew-tools` |
 | `just test` | all Rust tests; they use the scripted `space-stub-agent`, so they make no model calls |
 | `just lint` | clippy with `-D warnings` |
 | `just smoke ["PROMPT"]` | headless end-to-end run against pi-agent, printing events (billed); no window |
