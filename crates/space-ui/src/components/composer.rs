@@ -793,7 +793,7 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
         let is_open = menu_open == Some(ComposerMenu::Resume);
         trigger("resume-menu", is_open, true)
             .on_click(toggle_menu(ComposerMenu::Resume))
-            .child(Icon::new(Lucide::RotateCcw).size(size::ICON))
+            .child(Icon::new(Lucide::Play).size(size::ICON))
             .child("Resume")
             .child(chevron())
             .when(!is_open, |d| d.tip("Resume a closed thread"))
