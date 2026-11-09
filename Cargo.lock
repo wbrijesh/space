@@ -6771,6 +6771,7 @@ dependencies = [
  "libc",
  "portable-pty",
  "serde_json",
+ "space-core",
  "space-plugin",
  "tempfile",
  "tokio",

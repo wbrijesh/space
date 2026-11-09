@@ -12,7 +12,7 @@ use space_plugin::rpc::{self, Peer, RpcError};
 use space_protocol::service::{self as svc, SettingField, SettingKind, SettingValues};
 use space_protocol::manifest::EVENT_TRACE;
 use space_protocol::trace::{TRAJECTORY_CHANGED, TrajectoryChanged};
-use space_protocol::{CAP_CONTEXT, CAP_SANDBOX, CAP_SETTINGS, CAP_TRAJECTORY, Confine, ContextSection, USE_READ_TRACE};
+use space_protocol::{CAP_CONTEXT, CAP_SANDBOX, CAP_SETTINGS, CAP_TERMINAL, CAP_TRAJECTORY, Confine, ContextSection, USE_READ_TRACE};
 
 use super::observers::Observer;
 use super::traces::TraceSink;
@@ -33,7 +33,7 @@ const RESTART_BACKOFF: Duration = Duration::from_secs(3);
 /// A running service plugin.
 pub(super) struct Service {
     pub(super) plugin: DiscoveredPlugin,
-    peer: Peer,
+    pub(super) peer: Peer,
     _process: PluginProcess,
     dead: Arc<AtomicBool>,
     fields: Vec<SettingField>,
@@ -373,6 +373,7 @@ impl HostInner {
                         host.rt.clone().spawn(async move { host.refresh_catalogs(&id).await });
                     }
                     svc::HOOKS_READY if !plugin.manifest.hooks.is_empty() => host.wake_held(),
+                    m if m.starts_with("terminal/") && plugin.manifest.provides(CAP_TERMINAL) => host.terminal_notification(m, params),
                     TRAJECTORY_CHANGED if plugin.manifest.provides(CAP_TRAJECTORY) => {
                         match rpc::params::<TrajectoryChanged>(params) {
                             Ok(c) => host.emit(HostEvent::TrajectoryChanged { thread_id: c.thread_id, version: c.version }),

@@ -18,3 +18,4 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile.workspace = true
+space-core.workspace = true

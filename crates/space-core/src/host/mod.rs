@@ -50,6 +50,7 @@ mod pipeline;
 mod registry;
 mod services;
 mod store;
+mod terminals;
 mod titles;
 mod traces;
 
@@ -71,6 +72,7 @@ use crate::session::{SessionEvent, SessionId};
 
 pub use agents::{AgentHandle, Session};
 pub use store::{ThreadDirs, ThreadSave};
+pub use terminals::TerminalSink;
 pub use titles::TITLE_TIMEOUT;
 use agents::AgentInner;
 use pipeline::SessionMeta;
@@ -118,6 +120,13 @@ pub enum HostEvent {
     /// A thread's trajectory changed (`trajectory/changed` from the trajectory plugin): the
     /// Trajectory tab reads it again.
     TrajectoryChanged { thread_id: String, version: u64 },
+    /// A terminal's screen changed (its output went to the [`TerminalSink`], which asked for
+    /// this): draw it again.
+    TerminalOutput { terminal_id: String },
+    /// The program in front of a terminal changed (its tab's title).
+    TerminalTitle { terminal_id: String, title: String },
+    /// A terminal's shell ended.
+    TerminalExited { terminal_id: String, exit_code: Option<i32> },
 }
 
 /// One plugin setting as the Settings page shows it.
@@ -221,6 +230,8 @@ struct HostInner {
     agents: Mutex<HashMap<String, Weak<AgentInner>>>,
     /// The session Space is frontmost on ([`Host::set_watching`]).
     watching: Mutex<Option<SessionId>>,
+    /// Where terminal output goes ([`Host::set_terminal_sink`]).
+    terminal_sink: Mutex<Option<TerminalSink>>,
 }
 
 impl Host {
@@ -248,6 +259,7 @@ impl Host {
                 launches: Mutex::new(HashMap::new()),
                 agents: Mutex::new(HashMap::new()),
                 watching: Mutex::new(None),
+                terminal_sink: Mutex::new(None),
             }),
         };
         host.discover();
