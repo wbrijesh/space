@@ -396,7 +396,9 @@ async fn a_steered_message_joins_the_running_turn_at_its_next_step() {
     // Taken back before the next step: never delivered.
     let s = session.clone();
     let turn = tokio::spawn(async move { s.prompt("slow again").await });
+    // Once the agent is replying (Space reports the turn started before the prompt reaches it).
     until(&mut events, &mut state, &mut seen, |e| matches!(e, HostEvent::Session { event: SessionEvent::TurnStarted, .. })).await;
+    until(&mut events, &mut state, &mut seen, |e| matches!(e, HostEvent::Session { event: SessionEvent::AgentText { .. }, .. })).await;
     session.steer("s2".into(), "never mind".into(), vec![], vec![]).await.unwrap();
     assert_eq!(session.unsteer().await.unwrap(), ["s2"]);
     until(&mut events, &mut state, &mut seen, turn_ended).await;
