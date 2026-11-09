@@ -77,7 +77,7 @@ pub fn model_picker(
             })
             .child(div().text_color(color::text_2()).child(model_label.clone()))
             .children(effort_label.clone().map(|e| div().text_color(color::text_3()).child(e)))
-            .child(Icon::new(IconName::ChevronUp).size(size::ICON_SM).text_color(color::text_3()))
+            .child(Icon::new(IconName::ChevronDown).size(size::ICON_SM).text_color(color::text_3()))
             .when_some(open, |d, pane| {
                 let menu = match pane {
                     PickerPane::Root => root_pane(&model_label, effort_label.as_deref(), on_pane.clone()),
