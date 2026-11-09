@@ -228,27 +228,33 @@ fn with_terminal(app: &mut SpaceApp, key: u64, body: AnyElement, sidebar: f32, w
         .min_h_0()
         .flex()
         .child(div().flex_1().min_w_0().flex().flex_col().when(maximized, |d| d.hidden()).child(body))
-        .when(!maximized, |d| {
-            d.child(
-                div()
-                    .id("terminal-divider")
-                    .flex_none()
-                    .w(px(5.))
-                    .h_full()
-                    .ml(px(-2.))
-                    .mr(px(-3.))
-                    .cursor_col_resize()
-                    .flex()
-                    .justify_center()
-                    .child(div().w(px(1.)).h_full().bg(color::border()))
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                        this.terminals.dragging = true;
-                        cx.stop_propagation();
-                        cx.notify();
-                    })),
-            )
-        })
-        .child(div().h_full().flex().flex_col().map(|d| if maximized { d.flex_1().min_w_0() } else { d.flex_none().w(width) }).child(pane))
+        .child(
+            div()
+                .relative()
+                .h_full()
+                .flex()
+                .flex_col()
+                .map(|d| if maximized { d.flex_1().min_w_0() } else { d.flex_none().w(width) })
+                .child(pane)
+                // Beside the chat: a hairline like the title bar's, and a handle on it to resize.
+                .when(!maximized, |d| {
+                    d.border_l_1().border_color(color::border()).child(
+                        div()
+                            .id("terminal-divider")
+                            .absolute()
+                            .top_0()
+                            .left(px(-4.))
+                            .w(px(7.))
+                            .h_full()
+                            .cursor_col_resize()
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                this.terminals.dragging = true;
+                                cx.stop_propagation();
+                                cx.notify();
+                            })),
+                    )
+                }),
+        )
         .into_any_element()
 }
 
