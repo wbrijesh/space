@@ -23,9 +23,17 @@ export function parseConfigureParams(raw: unknown): ConfigureSession {
 	return { sessionId, provider: str(p.provider), model: str(p.model), thinkingLevel: str(p.thinkingLevel) };
 }
 
-const FAMILY_ORDER = ["opus", "sonnet", "haiku", "fable"];
+const FAMILY_ORDER = ["fable", "opus", "sonnet", "haiku"];
 
-/** Sort key: model family (Opus, Sonnet, Haiku, Fable, others), then newest version first. */
+/** `claude-opus-5-5` -> `claude-opus`: the id without its version numbers. */
+export function modelFamily(id: string): string {
+	return id
+		.split("-")
+		.filter((part) => !/^\d+$/.test(part))
+		.join("-");
+}
+
+/** Sort key: model family (Fable, Opus, Sonnet, Haiku, others), then newest version first. */
 function modelSortKey(m: { id: string }): [number, number[]] {
 	const family = FAMILY_ORDER.findIndex((f) => m.id.includes(f));
 	const version = (m.id.match(/\d+/g) ?? []).map(Number);
@@ -44,17 +52,31 @@ function compareModels(a: { id: string }, b: { id: string }): number {
 }
 
 /**
- * Models of the session's provider, minus dated snapshots (`claude-opus-4-5-20251101`) that
- * duplicate an alias, sorted by family then newest first.
+ * The newest model of each family (`claude-fable-5-1`, `claude-opus-5-5`, ...), ignoring dated
+ * snapshots (`claude-opus-4-5-20251101`), sorted by family. `current` stays listed even when
+ * it's an older one, so a thread on it still shows what it uses.
  */
+export function latestModels<M extends { id: string }>(models: readonly M[], current?: string): M[] {
+	const seen = new Set<string>();
+	return models
+		.filter((m) => !/-\d{8}$/.test(m.id))
+		.sort(compareModels)
+		.filter((m) => {
+			const family = modelFamily(m.id);
+			const newest = !seen.has(family);
+			seen.add(family);
+			return newest || m.id === current;
+		});
+}
+
 export function availableModels(session: AgentSession): ModelInfo[] {
 	const provider = session.model?.provider;
 	if (!provider) return [];
-	return session.modelRuntime
-		.getModels(provider)
-		.filter((m) => !/-\d{8}$/.test(m.id))
-		.sort(compareModels)
-		.map((m) => ({ provider: m.provider, id: m.id, name: m.name }));
+	return latestModels(session.modelRuntime.getModels(provider), session.model?.id).map((m) => ({
+		provider: m.provider,
+		id: m.id,
+		name: m.name,
+	}));
 }
 
 export function sessionStatus(sessionId: string, session: AgentSession): SpaceStatus {

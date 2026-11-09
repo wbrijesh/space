@@ -1,5 +1,5 @@
 //! Composer: the input card (+ · text · send/stop) and the control row below it (project
-//! folder, permission mode, model, effort, context ring; a click on the ring opens the context
+//! folder, permission mode, model and effort picker, context ring; a click on the ring opens the context
 //! and the thread's totals above it). A mode that isn't set up yet blocks
 //! sending and says why, with a link to fix it.
 //!
@@ -12,15 +12,16 @@ use std::rc::Rc;
 use gpui::component::input::{Textarea, TextareaState};
 use gpui::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui::assets::IconName as Lucide;
-use gpui::component::{Disableable as _, Icon, IconName, Sizable as _};
+use gpui::component::{Icon, IconName, Sizable as _};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::protocol::service::CatalogEntry;
 use space_core::protocol::trace::TrajectoryStats;
-use space_core::protocol::{ConfigureSession, ModelInfo, SpaceStatus};
+use space_core::protocol::{ConfigureSession, SpaceStatus};
 
 use super::images::draft_thumb;
 use super::loaders::ContextRing;
+use super::model_picker::{PaneHandler, PickerPane, model_picker};
 use super::trajectory::duration_label;
 use super::transcript::attachment_chip;
 use super::tip::TipExt as _;
@@ -102,6 +103,8 @@ pub struct ComposerHandlers {
     pub on_paste: PasteHandler,
     /// Open (`true`) or close the context panel.
     pub on_context: BoolHandler,
+    /// Open the model picker at a pane, or close it.
+    pub on_picker: PaneHandler,
     /// ↑ on the text's first line, ↓ on its last.
     pub on_recall: RecallHandler,
 }
@@ -124,6 +127,7 @@ impl Default for ComposerHandlers {
             on_drop: Rc::new(|_, _, _| {}),
             on_paste: Rc::new(|_, _, _| false),
             on_context: Rc::new(|_, _, _| {}),
+            on_picker: Rc::new(|_, _, _| {}),
             on_recall: Rc::new(|_, _, _| false),
         }
     }
@@ -148,6 +152,8 @@ pub struct ComposerControls {
     pub stats: Option<TrajectoryStats>,
     /// The context panel is open.
     pub context_open: bool,
+    /// The model picker's menu is open, at this pane.
+    pub picker: Option<PickerPane>,
 }
 
 /// The thread's permission mode and the modes it can switch to (the `permission-modes` catalog).
@@ -528,39 +534,9 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers, window: &Window) -> Di
     };
 
     let mut right = div().flex().items_center().gap_0p5();
-    if let Some(model) = &status.model {
-        let models = status.available_models.clone().unwrap_or_default();
-        let locked = c.locked || models.is_empty();
-        let trigger = menu_trigger("model-menu", window)
-            .disabled(locked)
-            .child(div().text_color(color::text_2()).child(format::model_label(model, status.current_model())));
-        right = right.child(if locked {
-            trigger.into_any_element()
-        } else {
-            let (current, configure) = (model.clone(), h.on_configure.clone());
-            trigger
-                .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
-                    model_menu(menu, &models, &current, configure.clone())
-                })
-                .into_any_element()
-        });
-    }
-    if let Some(level) = &status.thinking_level {
-        let levels = status.thinking_levels.clone().unwrap_or_default();
-        let locked = c.locked || levels.is_empty();
-        let trigger = menu_trigger("effort-menu", window)
-            .disabled(locked)
-            .child(div().text_color(color::text_3()).child(format::effort_label(level)));
-        right = right.child(if locked {
-            trigger.into_any_element()
-        } else {
-            let (current, configure) = (level.clone(), h.on_configure.clone());
-            trigger
-                .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
-                    effort_menu(menu, &levels, &current, configure.clone())
-                })
-                .into_any_element()
-        });
+    let picker_locked = c.locked || status.available_models.as_ref().is_none_or(|m| m.is_empty());
+    if let Some(picker) = model_picker(&status, picker_locked, c.picker, h.on_picker.clone(), h.on_configure.clone()) {
+        right = right.child(picker);
     }
     let tokens = status.context_tokens.unwrap_or(0);
     let window_size = status.context_window.filter(|w| *w > 0);
@@ -730,42 +706,6 @@ pub fn mode_menu(menu: PopupMenu, entries: &[CatalogEntry], current: &str, on_mo
     menu
 }
 
-/// Model picker contents (used by the dropdown and the gallery).
-pub fn model_menu(
-    menu: PopupMenu,
-    models: &[ModelInfo],
-    current: &str,
-    on_configure: ConfigureHandler,
-) -> PopupMenu {
-    let mut menu = menu.min_w(px(200.)).max_h(px(420.)).scrollable(true).label("Model");
-    for m in models {
-        let (provider, id, f) = (m.provider.clone(), m.id.clone(), on_configure.clone());
-        menu = menu.item(PopupMenuItem::new(format::model_label(&m.id, Some(m))).checked(m.id == current).on_click(
-            move |_, w, cx| {
-                f(ConfigureSession { provider: Some(provider.clone()), model: Some(id.clone()), ..Default::default() }, w, cx)
-            },
-        ));
-    }
-    menu
-}
-
-/// Thinking-effort picker contents.
-pub fn effort_menu(
-    menu: PopupMenu,
-    levels: &[String],
-    current: &str,
-    on_configure: ConfigureHandler,
-) -> PopupMenu {
-    let mut menu = menu.min_w(px(160.)).label("Thinking effort");
-    for l in levels {
-        let (level, f) = (l.clone(), on_configure.clone());
-        menu = menu.item(PopupMenuItem::new(format::effort_label(l)).checked(l == current).on_click(move |_, w, cx| {
-            f(ConfigureSession { thinking_level: Some(level.clone()), ..Default::default() }, w, cx)
-        }));
-    }
-    menu
-}
-
 /// Folder picker: recent folders and "Choose folder…". For a non-empty thread, picking a
 /// folder starts a new thread there.
 pub fn folder_menu(
@@ -793,6 +733,7 @@ pub fn folder_menu(
 #[cfg(feature = "dev")]
 pub mod fixtures {
     use super::*;
+    use space_core::protocol::ModelInfo;
 
     pub fn status(tokens: u64) -> SpaceStatus {
         let m = |id: &str, name: &str| ModelInfo { provider: "claude-cli".into(), id: id.into(), name: Some(name.into()) };
@@ -825,6 +766,7 @@ pub mod fixtures {
             blocker: None,
             stats: None,
             context_open: false,
+            picker: None,
         }
     }
 
@@ -992,10 +934,6 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             }),
         ]),
         ComponentPreview::new(Area::Composer, "Menus", "Dropdown contents, rendered open.").examples([
-            menu("model", |m| model_menu(m, &fixtures::status(0).available_models.unwrap(), "claude-opus-5-5", Rc::new(|_, _, _| {}))),
-            menu("effort", |m| {
-                effort_menu(m, &fixtures::status(0).thinking_levels.unwrap(), "medium", Rc::new(|_, _, _| {}))
-            }),
             menu("permission mode", |m| {
                 let modes = fixtures::modes("workspace-write", true);
                 mode_menu(m, &modes.entries, &modes.current, Rc::new(|_, _, _| {}))

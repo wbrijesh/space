@@ -7,6 +7,7 @@ pub mod follow_scroll;
 pub mod images;
 pub mod loaders;
 pub mod message_actions;
+pub mod model_picker;
 pub mod settings;
 pub mod shell;
 pub mod thread_row;
