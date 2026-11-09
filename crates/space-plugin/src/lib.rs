@@ -30,6 +30,7 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json::Value;
 use space_protocol::service::*;
+use space_protocol::terminal::*;
 use space_protocol::trace::*;
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -150,6 +151,40 @@ pub trait Plugin: Send + Sync + 'static {
         async { Err(RpcError::method_not_found(TRAJECTORY_STATS)) }
     }
 
+    /// `provides = ["terminal"]`: start a shell.
+    fn terminal_open(&self, open: TerminalOpen) -> impl Future<Output = Result<TerminalOpened, RpcError>> + Send {
+        let _ = open;
+        async { Err(RpcError::method_not_found(TERMINAL_OPEN)) }
+    }
+
+    /// `provides = ["terminal"]`: keys or a paste for a terminal. Called in order, on the
+    /// connection's reader: return quickly (hand the bytes to a writer).
+    fn terminal_input(&self, input: TerminalInput) {
+        let _ = input;
+    }
+
+    /// `provides = ["terminal"]`: the terminal's view changed size.
+    fn terminal_resize(&self, resize: TerminalResize) {
+        let _ = resize;
+    }
+
+    /// `provides = ["terminal"]`: the output kept so far, to draw a terminal from scratch.
+    fn terminal_attach(&self, terminal: TerminalRef) -> impl Future<Output = Result<TerminalReplay, RpcError>> + Send {
+        let _ = terminal;
+        async { Err(RpcError::method_not_found(TERMINAL_ATTACH)) }
+    }
+
+    /// `provides = ["terminal"]`: the terminals it runs.
+    fn terminal_list(&self) -> impl Future<Output = Result<TerminalList, RpcError>> + Send {
+        async { Err(RpcError::method_not_found(TERMINAL_LIST)) }
+    }
+
+    /// `provides = ["terminal"]`: stop a terminal's shell and everything it started.
+    fn terminal_close(&self, terminal: TerminalRef) -> impl Future<Output = Result<(), RpcError>> + Send {
+        let _ = terminal;
+        async { Err(RpcError::method_not_found(TERMINAL_CLOSE)) }
+    }
+
     /// Hook `tools/pre-execute`: a verdict on the pending tool call.
     fn pre_execute(&self, call: HookCall) -> impl Future<Output = Result<HookDecision, RpcError>> + Send {
         let _ = call;
@@ -179,6 +214,21 @@ impl Host {
     /// Trajectory tab reads it again).
     pub fn trajectory_changed(&self, thread_id: &str, version: u64) {
         self.peer.notify(TRAJECTORY_CHANGED, TrajectoryChanged { thread_id: thread_id.to_string(), version });
+    }
+
+    /// `provides = ["terminal"]`: a terminal's output, numbered from 1 in order.
+    pub fn terminal_output(&self, terminal_id: &str, seq: u64, data: Vec<u8>) {
+        self.peer.notify(TERMINAL_OUTPUT, TerminalOutput { terminal_id: terminal_id.to_string(), seq, data: Bytes(data) });
+    }
+
+    /// `provides = ["terminal"]`: the program in front of a terminal changed.
+    pub fn terminal_title(&self, terminal_id: &str, title: &str) {
+        self.peer.notify(TERMINAL_TITLE, TerminalTitle { terminal_id: terminal_id.to_string(), title: title.to_string() });
+    }
+
+    /// `provides = ["terminal"]`: a terminal's shell ended.
+    pub fn terminal_exited(&self, terminal_id: &str, exit_code: Option<i32>) {
+        self.peer.notify(TERMINAL_EXITED, TerminalExited { terminal_id: terminal_id.to_string(), exit_code });
     }
 
     /// Call a host service (one the manifest lists in `uses`; others fail with
@@ -212,6 +262,14 @@ where
                 Err(e) => eprintln!("space-plugin: bad {SETTINGS_CHANGED}: {e}"),
             },
             PLUGIN_RETRY => plugin.retry(),
+            TERMINAL_INPUT => match rpc::params::<TerminalInput>(params) {
+                Ok(input) => plugin.terminal_input(input),
+                Err(e) => eprintln!("space-plugin: bad {TERMINAL_INPUT}: {e}"),
+            },
+            TERMINAL_RESIZE => match rpc::params::<TerminalResize>(params) {
+                Ok(resize) => plugin.terminal_resize(resize),
+                Err(e) => eprintln!("space-plugin: bad {TERMINAL_RESIZE}: {e}"),
+            },
             _ => {}
         })
     };
@@ -244,6 +302,10 @@ async fn handle<P: Plugin>(plugin: &P, host: &OnceLock<Host>, method: &str, para
         TRAJECTORY_READ => rpc::result(plugin.trajectory_read(rpc::params(params)?).await?),
         TRAJECTORY_DETAIL => rpc::result(plugin.trajectory_detail(rpc::params(params)?).await?),
         TRAJECTORY_STATS => rpc::result(plugin.trajectory_stats(rpc::params(params)?).await?),
+        TERMINAL_OPEN => rpc::result(plugin.terminal_open(rpc::params(params)?).await?),
+        TERMINAL_ATTACH => rpc::result(plugin.terminal_attach(rpc::params(params)?).await?),
+        TERMINAL_LIST => rpc::result(plugin.terminal_list().await?),
+        TERMINAL_CLOSE => rpc::result(plugin.terminal_close(rpc::params(params)?).await?),
         EVENTS_OBSERVE => {
             plugin.observe(rpc::params(params)?).await;
             rpc::result(())

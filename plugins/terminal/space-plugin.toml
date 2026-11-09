@@ -1,0 +1,10 @@
+id = "terminal"
+name = "Terminal"
+version = "0.1.0"
+description = "Runs the shells in the terminal pane (⌃`), one set per thread, in the thread's project folder."
+provides = ["terminal"]
+observes = ["thread/deleted"]
+
+[run]
+# Built with the workspace (`cargo build --workspace`); ${target} is the profile dir Space runs from.
+command = "${target}/space-terminal-plugin"

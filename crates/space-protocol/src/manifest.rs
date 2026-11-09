@@ -26,6 +26,9 @@ pub const CAP_SESSION_TITLE: &str = "session-title";
 /// Shows threads' trajectories (`trajectory/read`, `trajectory/detail`, `trajectory/stats`):
 /// the app's Trajectory tab. One provider at a time; it must also observe `trace`.
 pub const CAP_TRAJECTORY: &str = "trajectory";
+/// Runs terminals (shells on PTYs) for the app's terminal pane (`terminal/*`, see
+/// [`crate::terminal`]).
+pub const CAP_TERMINAL: &str = "terminal";
 /// Prefix of catalog capabilities: `catalog:<name>` publishes the named list (`catalog/get`).
 pub const CATALOG_PREFIX: &str = "catalog:";
 /// The catalog of permission modes the composer's mode menu shows.
@@ -198,6 +201,7 @@ impl Manifest {
             let known = matches!(
                 cap.as_str(),
                 CAP_AGENT | CAP_SANDBOX | CAP_CONTEXT | CAP_SETTINGS | CAP_SESSION_STORE | CAP_SESSION_TITLE | CAP_TRAJECTORY
+                    | CAP_TERMINAL
             )
                 || cap.strip_prefix(CATALOG_PREFIX).is_some_and(is_kebab_case);
             if !known {

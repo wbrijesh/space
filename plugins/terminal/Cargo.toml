@@ -1,0 +1,20 @@
+[package]
+name = "space-terminal-plugin"
+description = "Space terminal plugin: runs shells on PTYs for the app's terminal pane"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "space-terminal-plugin"
+path = "src/main.rs"
+
+[dependencies]
+space-plugin.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+portable-pty = "0.9"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile.workspace = true

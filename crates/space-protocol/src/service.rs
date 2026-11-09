@@ -24,6 +24,9 @@
 //! | `trace/record` | host → plugin | `observes` `trace` (and `uses` `read:trace`): every trace batch, in order |
 //! | `trajectory/read`, `trajectory/detail`, `trajectory/stats` | host → plugin | `provides` `trajectory` |
 //! | `trajectory/changed` (notification) | plugin → host | `provides` `trajectory`: a thread's trajectory changed |
+//! | `terminal/open`, `terminal/attach`, `terminal/list`, `terminal/close` | host → plugin | `provides` `terminal` ([`crate::terminal`]) |
+//! | `terminal/input`, `terminal/resize` (notifications) | host → plugin | `provides` `terminal`: keys and pastes, size |
+//! | `terminal/output`, `terminal/title`, `terminal/exited` (notifications) | plugin → host | `provides` `terminal` |
 //!
 //! A plugin may call the host's services ([`HOST_SERVICES`]) that its manifest lists in `uses`;
 //! any other call is answered [`NOT_PERMITTED`]. Notifications a plugin sends about something

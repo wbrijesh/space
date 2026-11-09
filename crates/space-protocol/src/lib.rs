@@ -4,6 +4,7 @@
 //! * [`ext`] — Space-specific ACP extension methods (`_space/*`) and payloads.
 //! * [`service`] — the JSON-RPC protocol between the host and service plugins.
 //! * [`trace`] — traces of every model request and the trajectory seam built on them.
+//! * [`terminal`] — the terminal seam: shells a plugin runs for the app's terminal pane.
 //!
 //! These Rust types are the only definition of the protocol. TypeScript plugins use bindings
 //! generated from them (`plugins/pi-agent/src/generated/protocol.ts`; `just protocol`
@@ -14,6 +15,7 @@
 pub mod ext;
 pub mod manifest;
 pub mod service;
+pub mod terminal;
 pub mod trace;
 mod typescript;
 
@@ -32,6 +34,6 @@ pub use ext::{
     TurnUsage, Verdict,
 };
 pub use manifest::{
-    CAP_AGENT, CAP_CONTEXT, CAP_SANDBOX, CAP_SESSION_STORE, CAP_SESSION_TITLE, CAP_SETTINGS, CAP_TRAJECTORY, CATALOG_PERMISSION_MODES, CATALOG_PREFIX, EVENTS,
+    CAP_AGENT, CAP_CONTEXT, CAP_SANDBOX, CAP_SESSION_STORE, CAP_SESSION_TITLE, CAP_SETTINGS, CAP_TERMINAL, CAP_TRAJECTORY, CATALOG_PERMISSION_MODES, CATALOG_PREFIX, EVENTS,
     HOOK_TOOLS_PRE_EXECUTE, HookSpec, MANIFEST_FILE, Manifest, ManifestError, RunConfig, RunCwd, USE_READ_TRACE, USE_READ_TRANSCRIPT,
 };
