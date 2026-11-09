@@ -197,6 +197,9 @@ pub struct SettingsPage {
     plugin_settings: Vec<PluginSettingsView>,
     plugins: Vec<PluginRow>,
     handlers: SettingsHandlers,
+    /// The days closed threads are kept (saved on ⏎ or when it loses focus); `None`: threads
+    /// aren't saved, so no row.
+    keep_closed: Option<Entity<InputState>>,
 }
 
 impl SettingsPage {
@@ -211,7 +214,13 @@ impl SettingsPage {
             plugin_settings: Vec::new(),
             plugins: Vec::new(),
             handlers: SettingsHandlers::default(),
+            keep_closed: None,
         }
+    }
+
+    pub fn keep_closed(mut self, input: Option<Entity<InputState>>) -> Self {
+        self.keep_closed = input;
+        self
     }
 
     pub fn modes(mut self, modes: Vec<CatalogEntry>, default: Option<String>) -> Self {
@@ -263,7 +272,7 @@ fn model_name(m: &ModelInfo) -> String {
 
 impl RenderOnce for SettingsPage {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        let Self { catalog, model, thinking, permission, modes, mode, plugin_settings, plugins, handlers: h } = self;
+        let Self { catalog, model, thinking, permission, modes, mode, plugin_settings, plugins, handlers: h, keep_closed } = self;
 
         // Model: "Agent default" + the agent's models.
         let (model_row, thinking_row) = match &catalog {
@@ -340,6 +349,7 @@ impl RenderOnce for SettingsPage {
             .gap_8()
             .child(div().text_size(text::HEADING).font_weight(FontWeight::SEMIBOLD).child("Settings"))
             .child(section("New threads", Some("Applies to threads you start from now on."), new_threads))
+            .when_some(keep_closed, |d, input| d.child(section("Threads", None, vec![keep_closed_row(&input).into_any_element()])))
             .children(plugin_sections)
             .child(section("Notifications", None, notifications))
             .when(!plugin_rows.is_empty(), |d| {
@@ -559,6 +569,21 @@ pub fn permission_row(permission: NotificationPermission, h: &SettingsHandlers) 
         NotificationPermission::Unbundled => ("Unavailable in this build. Launch Space with just run to turn them on.", None),
     };
     row("macOS permission", desc, control)
+}
+
+/// How many days closed threads are kept: a short number field and "days".
+pub fn keep_closed_row(input: &Entity<InputState>) -> Div {
+    let control = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(div().w(px(64.)).child(Input::new(input).small()))
+        .child(div().text_size(text::MD).text_color(color::text_2()).child("days"));
+    row(
+        "Keep closed threads",
+        "Closed threads can be resumed from a new thread in their folder, then they're deleted.",
+        Some(control.into_any_element()),
+    )
 }
 
 /// A titled card of rows, with an optional hint under the title.

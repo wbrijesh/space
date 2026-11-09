@@ -15,7 +15,7 @@ use std::hash::{BuildHasher as _, Hasher as _};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui::{Context, Window};
+use gpui::{Context, PromptLevel, Window};
 use space_core::protocol::service::ThreadMeta;
 use space_core::{SessionEvent, ThreadSave};
 
@@ -64,6 +64,7 @@ impl SpaceApp {
             created_ms: thread.created_ms,
             updated_ms: now_ms(),
             titled: thread.name.is_some(),
+            closed_ms: None,
         }
     }
 
@@ -91,13 +92,8 @@ impl SpaceApp {
         cx.spawn(async move |this, cx| {
             let result = host.save_thread(&id, Some(meta.clone()), first, &events).await;
             let _ = this.update(cx, |this, cx| {
-                let Some(thread) = this.thread_mut(key) else {
-                    // Deleted while this save was in flight: delete what it wrote.
-                    if let Some(id) = this.deleted_while_saving.remove(&key) {
-                        this.remove_saved(id, cx);
-                    }
-                    return;
-                };
+                // Closed while this save was in flight (the close wrote it).
+                let Some(thread) = this.thread_mut(key) else { return };
                 thread.saving = false;
                 let sent = std::mem::take(&mut thread.inflight);
                 match result {
@@ -121,8 +117,7 @@ impl SpaceApp {
     }
 
     /// Before quitting: save what every thread has waiting, the events of a save still in
-    /// flight included (the store skips what it already has), then delete the threads deleted
-    /// during a save. Blocks briefly.
+    /// flight included (the store skips what it already has). Blocks briefly.
     pub(crate) fn save_all_now(&mut self) {
         if !self.saving_threads() {
             return;
@@ -139,8 +134,7 @@ impl SpaceApp {
                 events: t.inflight.iter().chain(&t.unsaved).cloned().collect(),
             })
             .collect();
-        let deletes = self.deleted_while_saving.drain().map(|(_, id)| id).collect();
-        self.host.save_threads_blocking(saves, deletes, QUIT_SAVE_TIMEOUT);
+        self.host.save_threads_blocking(saves, Vec::new(), QUIT_SAVE_TIMEOUT);
     }
 
     /// At launch: list the saved threads in the sidebar, below the launch threads.
@@ -158,18 +152,12 @@ impl SpaceApp {
                 }
             };
             let _ = this.update(cx, |this, cx| {
+                let (closed, open): (Vec<_>, Vec<_>) = saved.into_iter().partition(|m| m.closed_ms.is_some());
+                this.closed_threads = closed;
+                this.purge_closed_threads(cx);
                 // Oldest first, like `threads`; before the ones opened at launch.
-                for (ix, meta) in saved.into_iter().rev().enumerate() {
-                    let key = this.next_key;
-                    this.next_key += 1;
-                    let mut thread = Thread::new(key, PathBuf::from(&meta.project));
-                    thread.id.clone_from(&meta.id);
-                    thread.created_ms = meta.created_ms;
-                    thread.mode.clone_from(&meta.mode);
-                    thread.resume = meta.agent.clone().zip(meta.session_id.clone());
-                    thread.name = meta.titled.then(|| meta.title.clone());
-                    thread.unloaded = true;
-                    thread.meta = Some(meta);
+                for (ix, meta) in open.into_iter().rev().enumerate() {
+                    let thread = this.saved_thread(meta);
                     this.threads.insert(ix, thread);
                 }
                 cx.notify();
@@ -218,28 +206,76 @@ impl SpaceApp {
         .detach();
     }
 
-    /// Delete a thread: stop its turn, forget it, and remove what was saved of it.
-    pub(crate) fn delete_thread(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(ix) = self.threads.iter().position(|t| t.key == key) else { return };
-        let thread = self.threads.remove(ix);
-        self.forget_thread_terminals(key);
-        if let Some(session) = &thread.session {
-            // Stops a running turn and answers any open permission card.
-            if session.is_running() {
-                let _ = session.cancel();
+    /// ⌘W or the row's menu: close a thread, after asking (a thread with nothing in it just
+    /// goes).
+    pub(crate) fn confirm_close_thread(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(thread) = self.thread(key) else { return };
+        if thread.is_empty() {
+            // ⌘W on a new thread: nothing to close (the empty thread would only come back).
+            if self.threads.iter().any(|t| t.key != key) {
+                self.close_thread(key, window, cx);
             }
-            self.session_threads.remove(session.id());
+            return;
         }
-        if thread.saving {
-            // After the save in flight, so it can't write the thread back.
-            self.deleted_while_saving.insert(key, thread.id.clone());
-        } else if self.saving_threads() {
-            self.remove_saved(thread.id.clone(), cx);
+        let title = thread.title();
+        let folder = space_ui::format::dir_name(&thread.cwd);
+        let mut detail = if self.saving_threads() {
+            let days = self.settings.settings.threads.keep_closed_days;
+            format!("You can resume it from a new thread in {folder} for {days} {}.", if days == 1 { "day" } else { "days" })
+        } else {
+            "Threads aren't being saved, so it can't be resumed.".to_string()
+        };
+        if thread.state.running {
+            detail = format!("Its turn is stopped. {detail}");
         }
-        self.back.retain(|k| *k != key);
-        self.forward.retain(|k| *k != key);
-        if self.selected == Some(key) {
-            self.selected = None;
+        let answer = window.prompt(PromptLevel::Warning, &format!("Close \u{201c}{title}\u{201d}?"), Some(&detail), &["Close Thread", "Cancel"], cx);
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await == Ok(0) {
+                let _ = this.update_in(cx, |this, window, cx| this.close_thread(key, window, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// ⌘W: close the selected thread.
+    pub(crate) fn close_current_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(key) = self.selected.filter(|_| !self.show_settings) {
+            self.confirm_close_thread(key, window, cx);
+        }
+    }
+
+    /// Close a thread: stop its turn and terminals and take it off the sidebar. A saved thread
+    /// is kept, marked closed, to be resumed (until it's older than the setting says).
+    pub(crate) fn close_thread(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let keep = self.saving_threads() && self.thread(key).is_some_and(|t| !t.is_empty());
+        let Some(thread) = self.drop_thread(key, cx) else { return };
+        if keep {
+            // A thread whose events haven't been read keeps the summary it was saved with.
+            let (meta, events) = if thread.unloaded || thread.loading {
+                (thread.meta.clone(), Vec::new())
+            } else {
+                (Some(self.thread_meta(&thread)), thread.inflight.iter().chain(&thread.unsaved).cloned().collect())
+            };
+            if let Some(mut meta) = meta {
+                let now = now_ms();
+                meta.closed_ms = Some(now);
+                // Newer than a save still in flight, so that one doesn't reopen it.
+                meta.updated_ms = meta.updated_ms.max(now);
+                self.closed_threads.push(meta.clone());
+                self.purge_closed_threads(cx);
+                let (host, first) = (self.host.clone(), thread.saved);
+                cx.spawn(async move |this, cx| {
+                    if let Err(e) = host.save_thread(&meta.id, Some(meta.clone()), first, &events).await {
+                        let _ = this.update(cx, |this, cx| {
+                            this.banner = Some(format!("Couldn't save that the thread was closed: {e:#}"));
+                            cx.notify();
+                        });
+                    }
+                })
+                .detach();
+            }
+        }
+        if self.selected.is_none() {
             match self.threads.last().map(|t| t.key) {
                 Some(next) => self.select_inner(next, false, window, cx),
                 None => self.new_thread(None, window, cx),
@@ -247,6 +283,102 @@ impl SpaceApp {
         }
         cx.notify();
     }
+
+    /// Take a thread off the list: stop its turn (answering any open permission card) and its
+    /// terminals, and forget it.
+    fn drop_thread(&mut self, key: u64, cx: &mut Context<Self>) -> Option<Thread> {
+        let ix = self.threads.iter().position(|t| t.key == key)?;
+        let thread = self.threads.remove(ix);
+        self.close_thread_terminals(key, cx);
+        if let Some(session) = &thread.session {
+            if session.is_running() {
+                let _ = session.cancel();
+            }
+            self.session_threads.remove(session.id());
+        }
+        self.back.retain(|k| *k != key);
+        self.forward.retain(|k| *k != key);
+        if self.selected == Some(key) {
+            self.selected = None;
+        }
+        Some(thread)
+    }
+
+    /// The closed threads of `dir` that can be resumed, last closed first.
+    pub(crate) fn closed_threads_in(&self, dir: &std::path::Path) -> Vec<&ThreadMeta> {
+        let dir = dir.display().to_string();
+        let cutoff = self.closed_cutoff();
+        let mut closed: Vec<_> = self.closed_threads.iter().filter(|m| m.project == dir && !expired(m, cutoff)).collect();
+        closed.sort_by_key(|m| std::cmp::Reverse(m.closed_ms));
+        closed
+    }
+
+    /// Reopen a closed thread, in place of the new thread it was resumed from (unless that one
+    /// has terminals open).
+    pub(crate) fn resume_thread(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ix) = self.closed_threads.iter().position(|m| m.id == id) else { return };
+        let mut meta = self.closed_threads.remove(ix);
+        meta.closed_ms = None;
+        meta.updated_ms = now_ms();
+        let host = self.host.clone();
+        let saved = meta.clone();
+        cx.spawn(async move |this, cx| {
+            if let Err(e) = host.save_thread(&saved.id, Some(saved.clone()), 0, &[]).await {
+                let _ = this.update(cx, |this, cx| {
+                    this.banner = Some(format!("Couldn't save that the thread was reopened: {e:#}"));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+        let replace = self.selected.filter(|k| self.thread(*k).is_some_and(Thread::is_empty) && !self.has_terminals(*k));
+        let at = replace.and_then(|k| self.threads.iter().position(|t| t.key == k)).unwrap_or(self.threads.len());
+        let thread = self.saved_thread(meta);
+        let key = thread.key;
+        self.threads.insert(at, thread);
+        if let Some(old) = replace {
+            self.drop_thread(old, cx);
+        }
+        self.select_thread(key, window, cx);
+    }
+
+    /// A thread for a saved summary, its events read when it's opened.
+    fn saved_thread(&mut self, meta: ThreadMeta) -> Thread {
+        let key = self.next_key;
+        self.next_key += 1;
+        let mut thread = Thread::new(key, PathBuf::from(&meta.project));
+        thread.id.clone_from(&meta.id);
+        thread.created_ms = meta.created_ms;
+        thread.mode.clone_from(&meta.mode);
+        thread.resume = meta.agent.clone().zip(meta.session_id.clone());
+        thread.name = meta.titled.then(|| meta.title.clone());
+        thread.unloaded = true;
+        thread.meta = Some(meta);
+        thread
+    }
+
+    /// Delete the closed threads kept longer than the setting says.
+    pub(crate) fn purge_closed_threads(&mut self, cx: &mut Context<Self>) {
+        let cutoff = self.closed_cutoff();
+        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.closed_threads).into_iter().partition(|m| expired(m, cutoff));
+        self.closed_threads = kept;
+        for meta in gone {
+            self.remove_saved(meta.id, cx);
+        }
+    }
+
+    /// Threads closed before this (Unix ms) are past keeping.
+    fn closed_cutoff(&self) -> u64 {
+        let days = u64::from(self.settings.settings.threads.keep_closed_days.max(1));
+        now_ms().saturating_sub(days * DAY_MS)
+    }
+}
+
+const DAY_MS: u64 = 24 * 3600 * 1000;
+
+/// A closed thread kept past `cutoff`.
+fn expired(meta: &ThreadMeta, cutoff: u64) -> bool {
+    meta.closed_ms.is_some_and(|closed| closed < cutoff)
 }
 
 impl SpaceApp {
@@ -271,6 +403,15 @@ mod tests {
     use space_core::protocol::SpaceStatus;
 
     use super::*;
+
+    #[test]
+    fn closed_threads_expire_after_the_cutoff() {
+        let closed = |at: Option<u64>| ThreadMeta { closed_ms: at, ..Default::default() };
+        let cutoff = 100 * DAY_MS;
+        assert!(expired(&closed(Some(cutoff - 1)), cutoff));
+        assert!(!expired(&closed(Some(cutoff)), cutoff));
+        assert!(!expired(&closed(None), cutoff), "open threads never expire");
+    }
 
     #[test]
     fn chunks_merge_and_holds_are_left_out() {

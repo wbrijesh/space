@@ -1,5 +1,5 @@
 //! Sidebar thread row: one line with the thread title and an activity indicator; right-click
-//! for Delete Thread.
+//! for Close Thread.
 
 use gpui::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui::prelude::FluentBuilder as _;
@@ -57,7 +57,7 @@ pub struct ThreadRow {
     /// nothing else shows.
     terminal: bool,
     on_click: Option<ClickHandler>,
-    on_delete: Option<ClickHandler>,
+    on_close: Option<ClickHandler>,
 }
 
 impl ThreadRow {
@@ -70,7 +70,7 @@ impl ThreadRow {
             force_hover: false,
             terminal: false,
             on_click: None,
-            on_delete: None,
+            on_close: None,
         }
     }
 
@@ -99,9 +99,9 @@ impl ThreadRow {
         self
     }
 
-    /// The row's context menu offers Delete Thread.
-    pub fn on_delete(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
-        self.on_delete = Some(std::rc::Rc::new(f));
+    /// The row's context menu offers Close Thread.
+    pub fn on_close(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
+        self.on_close = Some(std::rc::Rc::new(f));
         self
     }
 }
@@ -152,11 +152,11 @@ impl RenderOnce for ThreadRow {
             .child(div().flex_1().min_w_0().truncate().child(self.title))
             .children(indicator)
             .when_some(self.on_click, |d, f| d.on_click(move |e, w, cx| f(e, w, cx)));
-        match self.on_delete {
+        match self.on_close {
             Some(f) => row
                 .context_menu(move |menu, _, _| {
                     let f = f.clone();
-                    menu.item(PopupMenuItem::new("Delete Thread").on_click(move |e, w, cx| f(e, w, cx)))
+                    menu.item(PopupMenuItem::new("Close Thread").on_click(move |e, w, cx| f(e, w, cx)))
                 })
                 .into_any_element(),
             None => row.into_any_element(),

@@ -11,7 +11,7 @@ use gpui::component::input::InputState;
 use space_core::protocol::service::SettingKind;
 use space_ui::components::model_picker::PickerPane;
 use space_ui::components::composer::{
-    Composer, ComposerBlocker, ComposerControls, ComposerHandlers, ComposerMenu, Handler, ModeChoice,
+    ClosedThread, Composer, ComposerBlocker, ComposerControls, ComposerHandlers, ComposerMenu, Handler, ModeChoice,
 };
 use space_ui::components::settings::{
     Catalog, FieldView, ModelChoice, PluginApproval, PluginRow, PluginSettingsView, SettingsHandlers, SettingsPage,
@@ -31,7 +31,7 @@ use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
 
 use crate::app::{
-    CloseSettings, CloseTerminal, CyclePermissionMode, FocusComposer, GoBack, GoForward, MaximizeTerminal, NewTerminal, NewThread,
+    CloseSettings, CloseTerminal, CloseThread, CyclePermissionMode, FocusComposer, GoBack, GoForward, MaximizeTerminal, NewTerminal, NewThread,
     NextTerminal, OpenSettings, PreviousTerminal, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleTerminal, ToggleTrajectory,
 };
 use crate::settings::SaveKind;
@@ -101,6 +101,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         // Focus sink: a click on anything non-focusable lands here and blurs the composer.
         .track_focus(&app.focus)
         .on_action(cx.listener(|this, _: &NewThread, window, cx| this.new_thread(None, window, cx)))
+        .on_action(cx.listener(|this, _: &CloseThread, window, cx| this.close_current_thread(window, cx)))
         .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
         .on_action(cx.listener(|this, _: &ToggleTrajectory, window, cx| this.toggle_trajectory(window, cx)))
         .on_action(cx.listener(|this, _: &GoBack, window, cx| this.go_back(window, cx)))
@@ -229,7 +230,7 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
                 .indicator(indicator)
                 .terminal(!selected && app.terminals.active(key))
                 .on_click(cx.listener(move |this, _, w, cx| this.select_thread(key, w, cx)))
-                .on_delete(cx.listener(move |this, _, w, cx| this.delete_thread(key, w, cx)))
+                .on_close(cx.listener(move |this, _, w, cx| this.confirm_close_thread(key, w, cx)))
                 .into_any_element()
         })
         .collect();
@@ -601,6 +602,7 @@ fn trajectory_view(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> Option<AnyElem
 fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
     let plugin_sections = plugin_settings(app, window, cx);
     let plugin_rows = plugin_rows(app);
+    let keep_closed = app.saving_threads().then(|| app.keep_closed_input(window, cx));
     let app = &*app;
     let catalog = match &app.agent_models {
         Some(models) => Catalog::Ready { models: models.clone(), levels: app.agent_levels.clone().unwrap_or_default() },
@@ -675,6 +677,7 @@ fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>)
     };
     let s = &app.settings.settings;
     let page = SettingsPage::new(catalog)
+        .keep_closed(keep_closed)
         .model(s.new_threads.model.clone().map(|m| (m.provider, m.id)))
         .thinking(s.new_threads.thinking_level.clone())
         .permission(app.permission)
@@ -898,6 +901,30 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
                 let _ = this.update(cx, |this, cx| this.show_usage(menu.map(menu_slot), cx));
             })
         },
+        on_resume: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |id, w: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| this.resume_thread(&id, w, cx));
+            })
+        },
+    };
+    // A new thread with nothing typed offers this folder's closed threads.
+    let untouched = thread.is_empty()
+        && thread.attachments.is_empty()
+        && thread.images.is_empty()
+        && app.input.read(cx).value().trim().is_empty();
+    let now = crate::app::now_ms();
+    let resumable = if untouched {
+        app.closed_threads_in(&thread.cwd)
+            .into_iter()
+            .map(|m| ClosedThread {
+                id: m.id.clone(),
+                title: m.title.clone().into(),
+                closed: format::time_ago(m.closed_ms.unwrap_or(now), now).into(),
+            })
+            .collect()
+    } else {
+        Vec::new()
     };
     let mode = app
         .effective_mode(thread)
@@ -936,6 +963,7 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
             stats: app.host.has_trajectory().then(|| app.trajectories.stats.get(&thread.id).cloned()).flatten(),
             context_open: app.usage_open.as_deref() == Some(CONTEXT_PANEL),
             menu: app.usage_open.as_deref().and_then(composer_menu),
+            resumable,
         })
         .handlers(handlers)
         .into_any_element()
@@ -950,6 +978,7 @@ fn menu_slot(menu: ComposerMenu) -> String {
     match menu {
         ComposerMenu::Folder => "composer:folder",
         ComposerMenu::Mode => "composer:mode",
+        ComposerMenu::Resume => "composer:resume",
         ComposerMenu::Model(PickerPane::Root) => "composer:picker",
         ComposerMenu::Model(PickerPane::Models) => "composer:picker:models",
         ComposerMenu::Model(PickerPane::Efforts) => "composer:picker:efforts",
@@ -961,7 +990,7 @@ pub(crate) fn composer_menu(slot: &str) -> Option<ComposerMenu> {
     [PickerPane::Root, PickerPane::Models, PickerPane::Efforts]
         .map(ComposerMenu::Model)
         .into_iter()
-        .chain([ComposerMenu::Folder, ComposerMenu::Mode])
+        .chain([ComposerMenu::Folder, ComposerMenu::Mode, ComposerMenu::Resume])
         .find(|m| menu_slot(*m) == slot)
 }
 

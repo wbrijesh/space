@@ -126,6 +126,19 @@ async fn a_saved_thread_comes_back_after_a_restart_and_continues() {
     drain(&mut events).await.iter().for_each(|e| state.apply(e));
     assert_eq!(last_agent_text(&state), Some("I remember 1 earlier prompt(s)."));
 
+    // Closing keeps it, marked closed (an older summary sent late doesn't reopen it), and
+    // resuming clears the mark.
+    let mut closed = host.load_thread("t1").await.unwrap().0;
+    let stale = closed.clone();
+    closed.closed_ms = Some(closed.updated_ms + 10);
+    closed.updated_ms += 10;
+    host.save_thread("t1", Some(closed.clone()), count, &[]).await.unwrap();
+    host.save_thread("t1", Some(stale), count, &[]).await.unwrap();
+    assert_eq!(host.list_threads().await.unwrap()[0].closed_ms, closed.closed_ms);
+    let reopened = ThreadMeta { closed_ms: None, updated_ms: closed.updated_ms + 10, ..closed };
+    host.save_thread("t1", Some(reopened), count, &[]).await.unwrap();
+    assert_eq!(host.list_threads().await.unwrap()[0].closed_ms, None);
+
     // Deleting removes the folder, the agent's files with it.
     host.delete_thread("t1").await.unwrap();
     assert!(!root.path().join("space/threads/t1").exists());

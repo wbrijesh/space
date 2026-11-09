@@ -564,12 +564,19 @@ impl SpaceApp {
     }
 
     /// A thread was deleted: its pane goes (the plugin closes its shells).
-    pub(crate) fn forget_thread_terminals(&mut self, key: u64) {
-        if let Some(pane) = self.terminals.panes.remove(&key) {
-            for id in pane.tabs {
-                self.drop_session(&id);
-            }
+    /// Stop a thread's terminals (it was closed) and forget them.
+    pub(crate) fn close_thread_terminals(&mut self, key: u64, cx: &mut Context<Self>) {
+        let Some(pane) = self.terminals.panes.remove(&key) else { return };
+        for id in pane.tabs {
+            self.drop_session(&id);
+            let host = self.host.clone();
+            cx.background_spawn(async move { host.terminal_close(&id).await }).detach();
         }
+    }
+
+    /// The thread has terminals open.
+    pub(crate) fn has_terminals(&self, key: u64) -> bool {
+        self.terminals.panes.get(&key).is_some_and(|p| !p.tabs.is_empty())
     }
 
     /// ⌘Q: ask first when something runs in a terminal.

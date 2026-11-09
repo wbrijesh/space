@@ -24,7 +24,7 @@ use super::model_picker::{PaneHandler, PickerPane, model_picker};
 use super::trajectory::duration_label;
 use super::transcript::attachment_chip;
 use super::tip::TipExt as _;
-use super::menu::{chevron, choice, heading, popover, separator, surface, trigger};
+use super::menu::{chevron, choice, heading, popover, row, separator, surface, trigger};
 use super::widgets::icon_button;
 use crate::actions::{RecallNext, RecallPrevious};
 use crate::format;
@@ -111,6 +111,8 @@ pub struct ComposerHandlers {
     pub on_send_after_step: Handler,
     /// A queued message's row: edit, remove, or send what's queued now.
     pub on_queued: QueuedHandler,
+    /// A closed thread was picked to resume (its id).
+    pub on_resume: StringHandler,
 }
 
 /// A message waiting for the agent, as its row above the composer shows it.
@@ -154,6 +156,7 @@ impl Default for ComposerHandlers {
             on_recall: Rc::new(|_, _, _| false),
             on_send_after_step: Rc::new(|_, _| {}),
             on_queued: Rc::new(|_, _, _, _| {}),
+            on_resume: Rc::new(|_, _, _| {}),
         }
     }
 }
@@ -179,6 +182,18 @@ pub struct ComposerControls {
     pub context_open: bool,
     /// The control-row menu that's open.
     pub menu: Option<ComposerMenu>,
+    /// Closed threads in this folder that can be resumed, last closed first. Offered on a new
+    /// thread with nothing typed (empty: no Resume menu).
+    pub resumable: Vec<ClosedThread>,
+}
+
+/// A closed thread in the Resume menu.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClosedThread {
+    pub id: String,
+    pub title: SharedString,
+    /// When it was closed: "2 days ago".
+    pub closed: SharedString,
 }
 
 /// The control row's menus.
@@ -186,6 +201,8 @@ pub struct ComposerControls {
 pub enum ComposerMenu {
     Folder,
     Mode,
+    /// Closed threads to resume.
+    Resume,
     /// The model picker, at this pane.
     Model(PickerPane),
 }
@@ -772,14 +789,45 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
             })
     });
 
+    let resume = (!c.resumable.is_empty()).then(|| {
+        let is_open = menu_open == Some(ComposerMenu::Resume);
+        trigger("resume-menu", is_open, true)
+            .on_click(toggle_menu(ComposerMenu::Resume))
+            .child(Icon::new(Lucide::RotateCcw).size(size::ICON))
+            .child("Resume")
+            .child(chevron())
+            .when(!is_open, |d| d.tip("Resume a closed thread"))
+            .when(is_open, |d| {
+                let menu = resume_menu(&c.resumable, h.on_resume.clone(), close_menu.clone());
+                let close = close_menu.clone();
+                d.child(popover(false, menu, move |w, cx| close(w, cx)))
+            })
+    });
+
     div()
         .flex()
         .items_center()
         .justify_between()
         .pl(px(ROW_INSET_LEFT))
         .pr(px(ROW_INSET_RIGHT))
-        .child(div().flex().items_center().gap_1().min_w_0().child(folder).children(mode))
+        .child(div().flex().items_center().gap_1().min_w_0().child(folder).children(mode).children(resume))
         .child(right)
+}
+
+/// Closed threads of this folder, last closed first: the title and when it was closed.
+pub fn resume_menu(threads: &[ClosedThread], on_resume: StringHandler, close: Handler) -> Div {
+    surface().min_w(px(300.)).child(heading("Closed threads")).child(
+        div().id("resume-list").flex().flex_col().max_h(px(320.)).overflow_y_scroll().children(threads.iter().enumerate().map(|(ix, t)| {
+            let (id, f, close) = (t.id.clone(), on_resume.clone(), close.clone());
+            row(("resume", ix))
+                .child(div().flex_1().min_w_0().truncate().child(t.title.clone()))
+                .child(div().flex_none().text_size(text::SM).text_color(color::text_3()).child(t.closed.clone()))
+                .on_click(move |_, w, cx| {
+                    close(w, cx);
+                    f(id.clone(), w, cx)
+                })
+        })),
+    )
 }
 
 /// The context window's use and, with a trajectory plugin, the thread's totals.
@@ -949,6 +997,7 @@ pub mod fixtures {
             stats: None,
             context_open: false,
             menu: None,
+            resumable: Vec::new(),
         }
     }
 
@@ -1118,6 +1167,15 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             menu("folder", || {
                 let c = fixtures::controls(0, false);
                 folder_menu(&c.dirs, &c.cwd, true, Rc::new(|_, _, _| {}), Rc::new(|_, _| {}), Rc::new(|_, _| {}))
+            }),
+            menu("resume", || {
+                let t = |id: &str, title: &str, closed: &str| ClosedThread { id: id.into(), title: title.to_string().into(), closed: closed.to_string().into() };
+                let threads = [
+                    t("a", "Fix the failing smoke test in space-core", "2 hours ago"),
+                    t("b", "Terminal plugin with alacritty", "yesterday"),
+                    t("c", "Greeting exchange", "3 weeks ago"),
+                ];
+                resume_menu(&threads, Rc::new(|_, _, _| {}), Rc::new(|_, _| {}))
             }),
         ]),
     ]

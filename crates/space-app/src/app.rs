@@ -28,7 +28,7 @@ use space_core::{
 use space_ui::components::settings::FieldCheck;
 
 pub use space_ui::actions::{
-    CloseSettings, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious,
+    CloseSettings, CloseThread, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious,
     ScrollToBottom,
     ToggleSidebar,
     ToggleTrajectory,
@@ -152,6 +152,8 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("ctrl-`", ToggleTerminal, None),
             KeyBinding::new("cmd-shift-enter", MaximizeTerminal, Some("Terminal")),
             KeyBinding::new("cmd-t", NewTerminal, Some("Terminal")),
+            KeyBinding::new("cmd-w", CloseThread, None),
+            // In the terminal, ⌘W closes the terminal tab instead.
             KeyBinding::new("cmd-w", CloseTerminal, Some("Terminal")),
             KeyBinding::new("ctrl-tab", NextTerminal, Some("Terminal")),
             KeyBinding::new("ctrl-shift-tab", PreviousTerminal, Some("Terminal")),
@@ -180,7 +182,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             },
             Menu {
                 name: "File".into(),
-                items: vec![MenuItem::action("New Thread", NewThread)],
+                items: vec![MenuItem::action("New Thread", NewThread), MenuItem::action("Close Thread", CloseThread)],
                 disabled: false,
             },
             Menu {
@@ -295,9 +297,10 @@ pub struct SpaceApp {
     pub(crate) usage_open: Option<String>,
     /// Draft images are told apart by this (they're prepared in the background).
     pub(crate) next_image_id: u64,
-    /// Threads deleted while a save of theirs was in flight (by key): their saved folder is
-    /// removed once it lands.
-    pub(crate) deleted_while_saving: HashMap<u64, String>,
+    /// Settings: the days closed threads are kept (made when the page is first shown).
+    pub(crate) keep_closed_input: Option<Entity<gpui::component::input::InputState>>,
+    /// Closed threads kept to be resumed (their saved summaries).
+    pub(crate) closed_threads: Vec<space_core::protocol::service::ThreadMeta>,
     pub(crate) settings: SettingsStore,
     /// The Settings page replaces the thread view.
     pub(crate) show_settings: bool,
@@ -491,7 +494,8 @@ impl SpaceApp {
             sidebar_open: true,
             sidebar_shown: space_ui::theme::motion::Spring::new(1., space_ui::theme::motion::SIDEBAR_SLIDE),
             banner,
-            deleted_while_saving: HashMap::new(),
+            closed_threads: Vec::new(),
+            keep_closed_input: None,
             settings: SettingsStore::load(options.settings_path),
             show_settings: false,
             agent_models: None,

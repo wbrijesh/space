@@ -559,6 +559,10 @@ pub struct ThreadMeta {
     /// `title` was generated (`session-title`), not taken from the first message.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub titled: bool,
+    /// When the thread was closed (Unix milliseconds): it's kept, off the sidebar, to be resumed
+    /// until Space deletes it. `None`: open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_ms: Option<u64>,
 }
 
 /// `title/generate` params: the thread's first message.
