@@ -10,6 +10,7 @@ pub mod message_actions;
 pub mod settings;
 pub mod shell;
 pub mod thread_row;
+pub mod tip;
 pub mod title_bar;
 pub mod trajectory;
 pub mod transcript;

@@ -23,7 +23,8 @@ use super::images::draft_thumb;
 use super::loaders::ContextRing;
 use super::trajectory::duration_label;
 use super::transcript::attachment_chip;
-use super::widgets::{icon_button, menu_trigger, tip};
+use super::tip::TipExt as _;
+use super::widgets::{icon_button, menu_trigger};
 use crate::actions::{RecallNext, RecallPrevious};
 use crate::format;
 use crate::theme::{color, radius, size, space, text};
@@ -292,7 +293,7 @@ impl RenderOnce for Composer {
                 .cursor_pointer()
                 .hover(|s| s.opacity(0.85))
                 .child(div().size(px(10.)).rounded(px(2.)).bg(color::bg()))
-                .tooltip(tip("Stop"))
+                .tip("Stop")
                 .on_click(move |_, w, cx| stop(w, cx))
                 .into_any_element()
         } else {
@@ -313,9 +314,9 @@ impl RenderOnce for Composer {
                     }
                 })
                 .child(Icon::new(IconName::ArrowUp).size(size::ICON_MD))
-                .when(can_send, |d| d.tooltip(tip("Send  ⏎")).on_click(move |_, w, cx| send(w, cx)))
-                .when(blocker.is_some(), |d| d.tooltip(tip("Can't send right now")))
-                .when(preparing && blocker.is_none(), |d| d.tooltip(tip("Preparing images…")))
+                .when(can_send, |d| d.tip("Send  ⏎").on_click(move |_, w, cx| send(w, cx)))
+                .when(blocker.is_some(), |d| d.tip("Can't send right now"))
+                .when(preparing && blocker.is_none(), |d| d.tip("Preparing images…"))
                 .into_any_element()
         };
 
@@ -323,7 +324,7 @@ impl RenderOnce for Composer {
         let attach = icon_button("attach", IconName::Plus, true, false)
             .size(px(BUTTON))
             .rounded_full()
-            .tooltip(tip("Attach images, files or folders"))
+            .tip("Attach images, files or folders")
             .on_click(move |_, w, cx| {
                 focus_fn(w, cx);
                 attach_fn(w, cx);
@@ -580,7 +581,7 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers, window: &Window) -> Di
             .when(open, |d| d.bg(color::hover()))
             .hover(|s| s.bg(color::hover()))
             .child(ContextRing::new(window_size.map_or(0., |w| tokens as f32 / w as f32)))
-            .when(!open, |d| d.tooltip(tip(format::context_usage(tokens, window_size))))
+            .when(!open, |d| d.tip(format::context_usage(tokens, window_size)))
             .on_click(move |_, w, cx| toggle(!open, w, cx))
             .when(open, |d| {
                 // Above the ring, kept inside the window.

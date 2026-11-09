@@ -1,6 +1,7 @@
 //! The ledger: one 30 px row per record, grouped by turn (a label in the gutter) and step (a
 //! header with the request's status dot), virtualized.
 
+use crate::components::tip::TipExt as _;
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
@@ -307,7 +308,7 @@ fn gutter(turn: u32, first_of_turn: bool, dot: Option<StepDot>, active_turn: boo
                 .cursor_pointer()
                 .when(dot.selected, |d| d.border_1().border_color(color::text()))
                 .child(div().size(px(6.)).rounded_full().bg(dot.color))
-                .tooltip(super::super::widgets::tip(dot.tip))
+                .tip(dot.tip)
                 .on_click(move |_, w, cx| {
                     cx.stop_propagation();
                     on_select(id.clone(), w, cx);

@@ -10,7 +10,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::protocol::TurnUsage;
 
-use super::widgets::tip;
+use super::tip::TipExt as _;
 use crate::format;
 use crate::theme::{color, radius, size, text};
 
@@ -72,7 +72,7 @@ pub fn message_actions(a: MessageActions, h: &ActionHandlers) -> Div {
             .hover(|s| s.bg(color::hover()).text_color(color::text()))
             .child(Icon::new(if copied { Lucide::Check } else { Lucide::Copy }).size(size::ICON))
             .when(copied, |d| d.child("Copied"))
-            .when(!copied, |d| d.tooltip(tip("Copy")))
+            .when(!copied, |d| d.tip("Copy"))
             .on_click(move |_, w, cx| on_copy(row.clone(), copy_text.clone(), w, cx))
             .into_any_element()
     });
@@ -82,7 +82,7 @@ pub fn message_actions(a: MessageActions, h: &ActionHandlers) -> Div {
             .id(ElementId::Name(format!("{id}-time").into()))
             .px_1()
             .child(format::time_ago(at, now_ms))
-            .tooltip(tip(format::exact_time(at)))
+            .tip(format::exact_time(at))
             .into_any_element()
     });
     let items: Vec<AnyElement> = if end { [time, copy].into_iter().flatten().collect() } else { [copy, usage, time].into_iter().flatten().collect() };

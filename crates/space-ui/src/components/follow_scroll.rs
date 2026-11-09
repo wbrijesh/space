@@ -26,7 +26,7 @@ use gpui::component::{Icon, IconName};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
-use super::widgets::tip_action;
+use super::tip::TipExt as _;
 use crate::actions::ScrollToBottom;
 use crate::clock::AnimationClock;
 use crate::theme::{color, motion, size};
@@ -454,7 +454,7 @@ fn scroll_button(state: FollowScroll, opacity: f32, clickable: bool, force_hover
             d.cursor_pointer()
                 .hover(|s| s.text_color(color::text()))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .tooltip(tip_action("Scroll to bottom", &ScrollToBottom))
+                .tip_action("Scroll to bottom", &ScrollToBottom)
                 .on_click(move |_, window, _| {
                     state.glide_to_bottom();
                     window.refresh();

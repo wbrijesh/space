@@ -30,6 +30,9 @@ pub const SCROLL_GLIDE: Duration = Duration::from_millis(200);
 pub const POP: Duration = Duration::from_millis(160);
 pub const POP_SCALE: f32 = 0.92;
 
+/// Hover labels fade in.
+pub const TIP_FADE: Duration = Duration::from_millis(120);
+
 /// Sidebar show/hide, start to settled: a critically damped spring (no overshoot), like the
 /// spring macOS and SwiftUI use for split views. Most of the travel happens in the first half;
 /// the rest settles softly. See [`Spring`].

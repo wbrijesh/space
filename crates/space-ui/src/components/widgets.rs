@@ -1,10 +1,9 @@
-//! Small building blocks: icon buttons, pill buttons, status dots, menu triggers, tooltips.
+//! Small building blocks: icon buttons, pill buttons, status dots, menu triggers.
 //!
 //! Clickable chrome is a plain styled `div` (no focus handle): mouse clicks never focus it,
 //! so no focus state can stick after a click.
 
 use gpui::component::button::{Button, ButtonVariants as _};
-use gpui::component::tooltip::Tooltip;
 use gpui::component::{FocusableExt as _, Icon, Sizable as _};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -72,16 +71,4 @@ pub fn menu_trigger(id: impl Into<ElementId>, window: &Window) -> Button {
         .px_2()
         .rounded(radius::MD)
         .text_size(text::SM)
-}
-
-pub fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    let text: SharedString = text.into();
-    move |window, cx| Tooltip::new(text.clone()).build(window, cx)
-}
-
-/// Tooltip that also shows `action`'s key binding.
-pub fn tip_action(text: impl Into<SharedString>, action: &dyn Action) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    let text: SharedString = text.into();
-    let action = action.boxed_clone();
-    move |window, cx| Tooltip::new(text.clone()).action(action.as_ref(), None).build(window, cx)
 }

@@ -14,6 +14,7 @@ pub mod timeline;
 #[cfg(feature = "dev")]
 pub mod fixtures;
 
+use crate::components::tip::TipExt as _;
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -29,7 +30,6 @@ pub use ledger::{LedgerItem, LedgerScroll, ledger_items};
 pub use timeline::{DurationMode, TimeRange};
 
 use crate::components::images::OpenPicsHandler;
-use crate::components::widgets::tip;
 use crate::format;
 use crate::theme::{color, radius, size, text};
 
@@ -318,7 +318,7 @@ impl RenderOnce for TrajectoryView {
                         .text_color(color::accent_hover())
                         .cursor_pointer()
                         .child("Time filter ×")
-                        .tooltip(tip("Clear (right-click or Esc on the overview)"))
+                        .tip("Clear (right-click or Esc on the overview)")
                         .on_click(move |_, w, cx| clear(None, w, cx)),
                 )
             })

@@ -131,6 +131,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         })
         .child(main)
         .child(nav.overlay())
+        .child(space_ui::components::tip::layer(window, cx))
         .children(app.viewer.as_ref().map(|(pics, ix)| {
             viewer(pics, *ix, &app.viewer_focus, ViewerHandlers {
                 on_close: handler(cx, |this, w, cx| this.close_viewer(w, cx)),

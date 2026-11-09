@@ -322,5 +322,6 @@ impl Render for Gallery {
                     .child(self.toolbar(cx))
                     .child(div().id("gallery-body").flex_1().min_h_0().overflow_y_scroll().p_8().child(body)),
             )
+            .child(crate::components::tip::layer(window, cx))
     }
 }

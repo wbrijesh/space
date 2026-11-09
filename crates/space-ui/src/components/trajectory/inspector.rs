@@ -16,7 +16,8 @@ use super::{Handler, IdHandler, duration_label, full_time};
 use crate::components::images::{OpenPicsHandler, Pic, message_images};
 use crate::components::loaders::Spinner;
 use crate::components::message_actions::usage_panel;
-use crate::components::widgets::{icon_button, tip};
+use crate::components::tip::TipExt as _;
+use crate::components::widgets::icon_button;
 use crate::format;
 use crate::theme::{color, radius, size, text};
 
@@ -323,7 +324,7 @@ fn tab_body(subject: Subject, tab: &str, data: &InspectorData<'_>, d: &Trajector
             d.child(
                 div().absolute().top_2().right_2().child(
                     icon_button("inspector-copy", Lucide::Copy, true, false)
-                        .tooltip(tip("Copy"))
+                        .tip("Copy")
                         .on_click(move |_, w, cx| on_copy(text_.clone().into(), w, cx)),
                 ),
             )

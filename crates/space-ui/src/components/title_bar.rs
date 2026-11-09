@@ -8,7 +8,8 @@ use gpui::component::IconName;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
-use super::widgets::{icon_button, tip_action};
+use super::tip::TipExt as _;
+use super::widgets::icon_button;
 use crate::ClickHandler;
 use crate::actions::{GoBack, GoForward, NewThread, ToggleSidebar};
 use crate::theme::{color, size, text};
@@ -73,15 +74,15 @@ impl TitleBarNav {
             .gap_0p5()
             .child(
                 icon_button("toggle-sidebar", IconName::PanelLeft, true, false)
-                    .tooltip(tip_action(toggle_tip, &ToggleSidebar))
+                    .tip_action(toggle_tip, &ToggleSidebar)
                     .on_click(move |e, w, cx| toggle(e, w, cx)),
             )
             .child(icon_button("go-back", IconName::ArrowLeft, self.can_back, false).when(self.can_back, |b| {
-                b.tooltip(tip_action("Back", &GoBack)).on_click(move |e, w, cx| back(e, w, cx))
+                b.tip_action("Back", &GoBack).on_click(move |e, w, cx| back(e, w, cx))
             }))
             .child(icon_button("go-forward", IconName::ArrowRight, self.can_forward, false).when(
                 self.can_forward,
-                |b| b.tooltip(tip_action("Forward", &GoForward)).on_click(move |e, w, cx| fwd(e, w, cx)),
+                |b| b.tip_action("Forward", &GoForward).on_click(move |e, w, cx| fwd(e, w, cx)),
             ))
     }
 
@@ -95,7 +96,7 @@ impl TitleBarNav {
     fn new_thread(&self) -> Stateful<Div> {
         let f = self.on_new_thread.clone();
         icon_button("new-thread", Lucide::SquarePen, true, false)
-            .tooltip(tip_action("New thread", &NewThread))
+            .tip_action("New thread", &NewThread)
             .on_click(move |e, w, cx| f(e, w, cx))
     }
 }
