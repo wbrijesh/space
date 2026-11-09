@@ -1,7 +1,8 @@
 #!/usr/bin/env sh
 # Publish release v<version> (run by `just publish` after `just release-check` passed):
 #   1. tag v<version> and push the tag,
-#   2. create the GitHub release on wbrijesh/space with the zip,
+#   2. create the GitHub release on wbrijesh/space with the zip and its notes
+#      (packaging/release-notes/<version>.md: what changed, for people updating),
 #   3. update Casks/space.rb in wbrijesh/homebrew-tools (from packaging/homebrew/space.rb, with
 #      this version and the zip's sha256), commit and push.
 # Needs `gh` signed in with push access to both repos. Refuses to run twice for one version.
@@ -10,7 +11,9 @@ version="$1"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 zip="$root/target/release/Space-$version-arm64.zip"
 tag="v$version"
+notes="$root/packaging/release-notes/$version.md"
 [ -f "$zip" ] || { echo "missing $zip (run: just release-check)" >&2; exit 1; }
+[ -s "$notes" ] || { echo "missing release notes: write what changed in packaging/release-notes/$version.md" >&2; exit 1; }
 cd "$root"
 [ -z "$(git status --porcelain)" ] || { echo "the working tree has uncommitted changes; commit them first" >&2; exit 1; }
 if git rev-parse -q --verify "refs/tags/$tag" >/dev/null || git ls-remote --exit-code --tags origin "$tag" >/dev/null 2>&1; then
@@ -21,8 +24,7 @@ sha="$(shasum -a 256 "$zip" | cut -d' ' -f1)"
 
 git tag -a "$tag" -m "Space $version"
 git push origin "$tag"
-gh release create "$tag" "$zip" --repo wbrijesh/space --title "Space $version" \
-    --notes "Install: \`brew install --cask wbrijesh/tools/space\` (Apple Silicon). Needs the Claude CLI, signed in."
+gh release create "$tag" "$zip" --repo wbrijesh/space --title "Space $version" --notes-file "$notes"
 
 tap="$(mktemp -d)"
 trap 'rm -rf "$tap"' EXIT
