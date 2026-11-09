@@ -5,7 +5,7 @@ members = ["crates/*", "plugins/permissions", "plugins/alerts", "plugins/session
 [workspace.package]
 edition = "2024"
 license = "MIT"
-version = "0.1.0"
+version = "0.2.0"
 
 [workspace.dependencies]
 space-protocol = { path = "crates/space-protocol" }
