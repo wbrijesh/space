@@ -148,8 +148,10 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("up", RecallPrevious, Some("Composer > Input")),
             KeyBinding::new("down", RecallNext, Some("Composer > Input")),
             KeyBinding::new("cmd-q", Quit, None),
-            // The terminal pane. ⌃` from anywhere; the rest while a terminal has focus.
+            // The terminal pane. ⌘J (or ⌃`, as in VS Code) from anywhere; the rest while a
+            // terminal has focus. ⌘J is bound last, so menus and tooltips show it.
             KeyBinding::new("ctrl-`", ToggleTerminal, None),
+            KeyBinding::new("cmd-j", ToggleTerminal, None),
             KeyBinding::new("cmd-shift-enter", MaximizeTerminal, Some("Terminal")),
             KeyBinding::new("cmd-t", NewTerminal, Some("Terminal")),
             KeyBinding::new("cmd-w", CloseThread, None),

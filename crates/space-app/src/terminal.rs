@@ -274,7 +274,7 @@ impl SpaceApp {
         Some(view)
     }
 
-    /// ⌃`: open the thread's pane (a shell the first time) and focus it; from the terminal,
+    /// ⌘J (or ⌃`): open the thread's pane (a shell the first time) and focus it; from the terminal,
     /// hide it and go back to the composer.
     pub(crate) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.show_settings || !self.host.has_terminal() {
