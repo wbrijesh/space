@@ -3,7 +3,7 @@
 //! Clickable chrome is a plain styled `div` (no focus handle): mouse clicks never focus it,
 //! so no focus state can stick after a click.
 
-use gpui::component::button::{Button, ButtonVariants as _};
+use gpui::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui::component::{FocusableExt as _, Icon, Sizable as _};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -61,14 +61,21 @@ pub fn status_dot(color: Hsla) -> Div {
     div().size(size::DOT).flex_none().rounded_full().bg(color)
 }
 
-/// Ghost button used as a dropdown trigger in the composer's control row.
-pub fn menu_trigger(id: impl Into<ElementId>, window: &Window) -> Button {
+/// Quiet button used as a dropdown trigger in the composer's control row: the same look as the
+/// model picker (a hover fill, no pressed flash).
+pub fn menu_trigger(id: impl Into<ElementId>, window: &Window, cx: &App) -> Button {
+    let variant = ButtonCustomVariant::new(cx)
+        .color(transparent_black())
+        .foreground(color::text_2())
+        .hover(color::hover())
+        .active(color::hover());
     Button::new(id)
-        .ghost()
+        .custom(variant)
         .small()
         // Menus hand focus back to their trigger on close; only show a ring for keyboard users.
         .focus_ring(window.last_input_was_keyboard())
-        .px_2()
+        .pl_2()
+        .pr_1()
         .rounded(radius::MD)
         .text_size(text::SM)
 }

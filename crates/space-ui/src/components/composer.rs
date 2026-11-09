@@ -420,7 +420,7 @@ impl RenderOnce for Composer {
             })
             .children(blocker.map(|b| blocker_row(b, h.on_blocker_action.clone())))
             .child(card)
-            .children(controls.map(|c| control_row(c, &h, window)))
+            .children(controls.map(|c| control_row(c, &h, window, cx)))
     }
 }
 
@@ -512,12 +512,12 @@ fn is_expanded(input: &Entity<TextareaState>, was_expanded: bool, window: &mut W
     window.text_system().shape_line(value, text::BODY, &[run], None).width > available
 }
 
-fn control_row(c: ComposerControls, h: &ComposerHandlers, window: &Window) -> Div {
+fn control_row(c: ComposerControls, h: &ComposerHandlers, window: &Window, cx: &App) -> Div {
     let status = c.status.clone();
     let folder = {
         let (dirs, cwd, empty) = (c.dirs.clone(), c.cwd.clone(), c.thread_empty);
         let (pick, choose) = (h.on_pick_dir.clone(), h.on_choose_folder.clone());
-        menu_trigger("project-menu", window)
+        menu_trigger("project-menu", window, cx)
             .child(
                 div()
                     .flex()
@@ -577,7 +577,7 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers, window: &Window) -> Di
         let alert = icon == Lucide::ShieldAlert;
         let name = current.map_or_else(|| SharedString::from("Permissions"), |e| e.name.into());
         let on_mode = h.on_mode.clone();
-        menu_trigger("mode-menu", window)
+        menu_trigger("mode-menu", window, cx)
             .child(
                 div()
                     .flex()
