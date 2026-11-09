@@ -656,7 +656,7 @@ pub fn select(
     };
     trigger
         .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-            let mut menu = menu.min_w(size::SETTINGS_SELECT_W).max_h(px(420.)).scrollable(true);
+            let mut menu = menu.min_w(size::SETTINGS_SELECT_W).max_h(px(420.)).scrollable(true).check_side(gpui::component::Side::Right);
             for (ix, label) in options.iter().enumerate() {
                 let f = on_select.clone();
                 let item = PopupMenuItem::new(label.clone()).checked(selected == Some(ix));
@@ -691,7 +691,7 @@ pub fn select_plain(
         .text_size(text::MD)
         .child(select_label(label.into(), true))
         .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-            let mut menu = menu.min_w(size::SETTINGS_SELECT_W).max_h(px(420.)).scrollable(true);
+            let mut menu = menu.min_w(size::SETTINGS_SELECT_W).max_h(px(420.)).scrollable(true).check_side(gpui::component::Side::Right);
             for (ix, label) in options.iter().enumerate() {
                 let f = on_select.clone();
                 menu = menu.item(PopupMenuItem::new(label.clone()).checked(selected == Some(ix)).on_click(move |_, w, cx| f(ix, w, cx)));

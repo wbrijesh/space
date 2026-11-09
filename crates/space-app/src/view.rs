@@ -11,7 +11,7 @@ use gpui::component::input::InputState;
 use space_core::protocol::service::SettingKind;
 use space_ui::components::model_picker::PickerPane;
 use space_ui::components::composer::{
-    Composer, ComposerBlocker, ComposerControls, ComposerHandlers, Handler, ModeChoice,
+    Composer, ComposerBlocker, ComposerControls, ComposerHandlers, ComposerMenu, Handler, ModeChoice,
 };
 use space_ui::components::settings::{
     Catalog, FieldView, ModelChoice, PluginApproval, PluginRow, PluginSettingsView, SettingsHandlers, SettingsPage,
@@ -98,13 +98,13 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.toggle_settings(window, cx)))
         .on_action(cx.listener(|this, _: &ScrollToBottom, _, cx| this.scroll_to_bottom(cx)))
         .on_action(cx.listener(|this, _: &CyclePermissionMode, _, cx| this.cycle_mode(cx)))
-        // Esc closes a message's usage panel, the context panel or the model picker (from one
-        // of its lists, back to its rows first).
+        // Esc closes a message's usage panel, the context panel or a composer menu (the model
+        // picker steps back from one of its lists first).
         .when(app.usage_open.is_some(), |d| {
             d.on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                 if e.keystroke.key == "escape" {
-                    let back = this.usage_open.as_deref().and_then(picker_pane).and_then(|p| p.back());
-                    this.show_usage(back.map(picker_slot), cx);
+                    let back = this.usage_open.as_deref().and_then(composer_menu).and_then(|m| m.back());
+                    this.show_usage(back.map(menu_slot), cx);
                 }
             }))
         })
@@ -722,10 +722,10 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
                 let _ = this.update(cx, |this, cx| this.show_usage(open.then(|| CONTEXT_PANEL.to_string()), cx));
             })
         },
-        on_picker: {
+        on_menu: {
             let this = cx.entity().downgrade();
-            Rc::new(move |pane, _: &mut Window, cx: &mut App| {
-                let _ = this.update(cx, |this, cx| this.show_usage(pane.map(picker_slot), cx));
+            Rc::new(move |menu, _: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| this.show_usage(menu.map(menu_slot), cx));
             })
         },
     };
@@ -753,7 +753,7 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
             blocker,
             stats: app.host.has_trajectory().then(|| app.trajectories.stats.get(&thread.id).cloned()).flatten(),
             context_open: app.usage_open.as_deref() == Some(CONTEXT_PANEL),
-            picker: app.usage_open.as_deref().and_then(picker_pane),
+            menu: app.usage_open.as_deref().and_then(composer_menu),
         })
         .handlers(handlers)
         .into_any_element()
@@ -763,19 +763,26 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
 /// `usage_open` while the context ring's panel is open (rows use their ids).
 const CONTEXT_PANEL: &str = "composer:context";
 
-/// `usage_open` while the model picker is open, at each pane.
-fn picker_slot(pane: PickerPane) -> String {
-    match pane {
-        PickerPane::Root => "composer:picker",
-        PickerPane::Models => "composer:picker:models",
-        PickerPane::Efforts => "composer:picker:efforts",
+/// `usage_open` while one of the composer's menus is open.
+fn menu_slot(menu: ComposerMenu) -> String {
+    match menu {
+        ComposerMenu::Folder => "composer:folder",
+        ComposerMenu::Mode => "composer:mode",
+        ComposerMenu::Model(PickerPane::Root) => "composer:picker",
+        ComposerMenu::Model(PickerPane::Models) => "composer:picker:models",
+        ComposerMenu::Model(PickerPane::Efforts) => "composer:picker:efforts",
     }
     .into()
 }
 
-pub(crate) fn picker_pane(slot: &str) -> Option<PickerPane> {
-    [PickerPane::Root, PickerPane::Models, PickerPane::Efforts].into_iter().find(|p| picker_slot(*p) == slot)
+pub(crate) fn composer_menu(slot: &str) -> Option<ComposerMenu> {
+    [PickerPane::Root, PickerPane::Models, PickerPane::Efforts]
+        .map(ComposerMenu::Model)
+        .into_iter()
+        .chain([ComposerMenu::Folder, ComposerMenu::Mode])
+        .find(|m| menu_slot(*m) == slot)
 }
+
 /// The agent could not start or exited: say so, with Restart.
 fn agent_problem(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
     // pi-agent talks to Claude through the Claude CLI; without it nothing works.

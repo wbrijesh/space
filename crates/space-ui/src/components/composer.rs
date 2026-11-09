@@ -10,7 +10,6 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui::component::input::{Textarea, TextareaState};
-use gpui::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui::assets::IconName as Lucide;
 use gpui::component::{Icon, IconName, Sizable as _};
 use gpui::prelude::FluentBuilder as _;
@@ -25,7 +24,8 @@ use super::model_picker::{PaneHandler, PickerPane, model_picker};
 use super::trajectory::duration_label;
 use super::transcript::attachment_chip;
 use super::tip::TipExt as _;
-use super::widgets::{icon_button, menu_trigger};
+use super::menu::{chevron, choice, heading, popover, separator, surface, trigger};
+use super::widgets::icon_button;
 use crate::actions::{RecallNext, RecallPrevious};
 use crate::format;
 use crate::theme::{color, radius, size, space, text};
@@ -103,8 +103,8 @@ pub struct ComposerHandlers {
     pub on_paste: PasteHandler,
     /// Open (`true`) or close the context panel.
     pub on_context: BoolHandler,
-    /// Open the model picker at a pane, or close it.
-    pub on_picker: PaneHandler,
+    /// Open one of the control row's menus, or close it.
+    pub on_menu: MenuHandler,
     /// ↑ on the text's first line, ↓ on its last.
     pub on_recall: RecallHandler,
 }
@@ -127,7 +127,7 @@ impl Default for ComposerHandlers {
             on_drop: Rc::new(|_, _, _| {}),
             on_paste: Rc::new(|_, _, _| false),
             on_context: Rc::new(|_, _, _| {}),
-            on_picker: Rc::new(|_, _, _| {}),
+            on_menu: Rc::new(|_, _, _| {}),
             on_recall: Rc::new(|_, _, _| false),
         }
     }
@@ -152,9 +152,30 @@ pub struct ComposerControls {
     pub stats: Option<TrajectoryStats>,
     /// The context panel is open.
     pub context_open: bool,
-    /// The model picker's menu is open, at this pane.
-    pub picker: Option<PickerPane>,
+    /// The control-row menu that's open.
+    pub menu: Option<ComposerMenu>,
 }
+
+/// The control row's menus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposerMenu {
+    Folder,
+    Mode,
+    /// The model picker, at this pane.
+    Model(PickerPane),
+}
+
+impl ComposerMenu {
+    /// Esc from here: the model picker steps back from a list; everything else closes.
+    pub fn back(self) -> Option<ComposerMenu> {
+        match self {
+            ComposerMenu::Model(p) => p.back().map(ComposerMenu::Model),
+            _ => None,
+        }
+    }
+}
+
+pub type MenuHandler = Rc<dyn Fn(Option<ComposerMenu>, &mut Window, &mut App)>;
 
 /// The thread's permission mode and the modes it can switch to (the `permission-modes` catalog).
 #[derive(Clone, Default)]
@@ -420,7 +441,7 @@ impl RenderOnce for Composer {
             })
             .children(blocker.map(|b| blocker_row(b, h.on_blocker_action.clone())))
             .child(card)
-            .children(controls.map(|c| control_row(c, &h, window, cx)))
+            .children(controls.map(|c| control_row(c, &h)))
     }
 }
 
@@ -512,30 +533,43 @@ fn is_expanded(input: &Entity<TextareaState>, was_expanded: bool, window: &mut W
     window.text_system().shape_line(value, text::BODY, &[run], None).width > available
 }
 
-fn control_row(c: ComposerControls, h: &ComposerHandlers, window: &Window, cx: &App) -> Div {
+fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
     let status = c.status.clone();
+    let menu_open = c.menu;
+    let on_menu = h.on_menu.clone();
+    let toggle_menu = move |m: ComposerMenu| {
+        let on_menu = on_menu.clone();
+        move |_: &ClickEvent, w: &mut Window, cx: &mut App| on_menu((menu_open != Some(m)).then_some(m), w, cx)
+    };
+    let close_menu: Handler = {
+        let on_menu = h.on_menu.clone();
+        Rc::new(move |w, cx| on_menu(None, w, cx))
+    };
     let folder = {
-        let (dirs, cwd, empty) = (c.dirs.clone(), c.cwd.clone(), c.thread_empty);
-        let (pick, choose) = (h.on_pick_dir.clone(), h.on_choose_folder.clone());
-        menu_trigger("project-menu", window, cx)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .text_color(color::text_2())
-                    .child(Icon::new(IconName::Folder).size(size::ICON))
-                    .child(div().max_w(px(220.)).truncate().child(format::dir_name(&c.cwd)))
-                    .child(Icon::new(IconName::ChevronDown).size(size::ICON_SM).text_color(color::text_3())),
-            )
-            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
-                folder_menu(menu, &dirs, &cwd, empty, pick.clone(), choose.clone())
+        let is_open = menu_open == Some(ComposerMenu::Folder);
+        trigger("project-menu", is_open, true)
+            .on_click(toggle_menu(ComposerMenu::Folder))
+            .child(Icon::new(IconName::Folder).size(size::ICON))
+            .child(div().max_w(px(220.)).truncate().child(format::dir_name(&c.cwd)))
+            .child(chevron())
+            .when(is_open, |d| {
+                let menu = folder_menu(&c.dirs, &c.cwd, c.thread_empty, h.on_pick_dir.clone(), h.on_choose_folder.clone(), close_menu.clone());
+                let close = close_menu.clone();
+                d.child(popover(false, menu, move |w, cx| close(w, cx)))
             })
     };
 
     let mut right = div().flex().items_center().gap_0p5();
     let picker_locked = c.locked || status.available_models.as_ref().is_none_or(|m| m.is_empty());
-    if let Some(picker) = model_picker(&status, picker_locked, c.picker, h.on_picker.clone(), h.on_configure.clone()) {
+    let picker_open = match menu_open {
+        Some(ComposerMenu::Model(pane)) => Some(pane),
+        _ => None,
+    };
+    let on_pane: PaneHandler = {
+        let on_menu = h.on_menu.clone();
+        Rc::new(move |pane, w, cx| on_menu(pane.map(ComposerMenu::Model), w, cx))
+    };
+    if let Some(picker) = model_picker(&status, picker_locked, picker_open, on_pane, h.on_configure.clone()) {
         right = right.child(picker);
     }
     let tokens = status.context_tokens.unwrap_or(0);
@@ -576,20 +610,16 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers, window: &Window, cx: &
         let icon = mode_icon(current.as_ref().and_then(|e| e.icon.as_deref()));
         let alert = icon == Lucide::ShieldAlert;
         let name = current.map_or_else(|| SharedString::from("Permissions"), |e| e.name.into());
-        let on_mode = h.on_mode.clone();
-        menu_trigger("mode-menu", window, cx)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .text_color(color::text_2())
-                    .child(Icon::new(icon).size(size::ICON).text_color(if alert { color::yellow() } else { color::text_2() }))
-                    .child(name)
-                    .child(Icon::new(IconName::ChevronDown).size(size::ICON_SM).text_color(color::text_3())),
-            )
-            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
-                mode_menu(menu, &m.entries, &m.current, on_mode.clone())
+        let is_open = menu_open == Some(ComposerMenu::Mode);
+        trigger("mode-menu", is_open, true)
+            .on_click(toggle_menu(ComposerMenu::Mode))
+            .child(Icon::new(icon).size(size::ICON).text_color(if alert { color::yellow() } else { color::text_2() }))
+            .child(name)
+            .child(chevron())
+            .when(is_open, |d| {
+                let menu = mode_menu(&m.entries, &m.current, h.on_mode.clone(), close_menu.clone());
+                let close = close_menu.clone();
+                d.child(popover(false, menu, move |w, cx| close(w, cx)))
             })
     });
 
@@ -689,45 +719,48 @@ pub fn context_panel(tokens: u64, window: Option<u64>, stats: Option<&Trajectory
 }
 
 /// Permission mode picker contents: one item per catalog entry, the current one checked.
-pub fn mode_menu(menu: PopupMenu, entries: &[CatalogEntry], current: &str, on_mode: StringHandler) -> PopupMenu {
-    // The check goes on the right. Each row draws its own shield: the menu's icon slot is fixed
-    // at xsmall and would indent the "Permissions" label to the text column.
-    let mut menu = menu.min_w(px(220.)).check_side(gpui::component::Side::Right).label("Permissions");
-    for e in entries {
-        let (id, f) = (e.id.clone(), on_mode.clone());
-        let (name, icon) = (SharedString::from(e.name.clone()), mode_icon(e.icon.as_deref()));
-        let item = PopupMenuItem::element(move |_, _| {
-            div().flex().items_center().gap_2().child(Icon::new(icon).size(size::ICON_MD)).child(name.clone())
-        })
-            .checked(e.id == current)
-            .on_click(move |_, w, cx| f(id.clone(), w, cx));
-        menu = menu.item(item);
-    }
-    menu
+pub fn mode_menu(entries: &[CatalogEntry], current: &str, on_mode: StringHandler, close: Handler) -> Div {
+    surface().child(heading("Permissions")).children(entries.iter().map(|e| {
+        let (id, f, close) = (e.id.clone(), on_mode.clone(), close.clone());
+        let icon = Icon::new(mode_icon(e.icon.as_deref())).size(size::ICON_MD).into_any_element();
+        choice(ElementId::Name(format!("mode-{}", e.id).into()), Some(icon), e.name.clone(), e.id == current).on_click(
+            move |_, w, cx| {
+                close(w, cx);
+                f(id.clone(), w, cx)
+            },
+        )
+    }))
 }
 
 /// Folder picker: recent folders and "Choose folder…". For a non-empty thread, picking a
 /// folder starts a new thread there.
 pub fn folder_menu(
-    menu: PopupMenu,
     dirs: &[PathBuf],
     cwd: &PathBuf,
     thread_empty: bool,
     on_pick: PathHandler,
     on_choose: Handler,
-) -> PopupMenu {
-    let mut menu = menu.min_w(px(260.)).label(if thread_empty { "Project folder" } else { "New thread in…" });
-    for dir in dirs {
-        let (d, f) = (dir.clone(), on_pick.clone());
-        menu = menu.item(
-            PopupMenuItem::new(format::abbreviate_home(dir))
-                .icon(IconName::Folder)
-                .checked(thread_empty && dir == cwd)
-                .on_click(move |_, w, cx| f(d.clone(), w, cx)),
-        );
-    }
-    menu.separator()
-        .item(PopupMenuItem::new("Choose folder…").icon(IconName::FolderOpen).on_click(move |_, w, cx| on_choose(w, cx)))
+    close: Handler,
+) -> Div {
+    let folder = |i: IconName| Some(Icon::new(i).size(size::ICON).into_any_element());
+    let choose_close = close.clone();
+    surface()
+        .min_w(px(260.))
+        .child(heading(if thread_empty { "Project folder" } else { "New thread in…" }))
+        .children(dirs.iter().enumerate().map(|(ix, dir)| {
+            let (d, f, close) = (dir.clone(), on_pick.clone(), close.clone());
+            choice(("folder", ix), folder(IconName::Folder), format::abbreviate_home(dir), thread_empty && dir == cwd).on_click(
+                move |_, w, cx| {
+                    close(w, cx);
+                    f(d.clone(), w, cx)
+                },
+            )
+        }))
+        .child(separator())
+        .child(choice("choose-folder", folder(IconName::FolderOpen), "Choose folder…", false).on_click(move |_, w, cx| {
+            choose_close(w, cx);
+            on_choose(w, cx)
+        }))
 }
 
 #[cfg(feature = "dev")]
@@ -766,7 +799,7 @@ pub mod fixtures {
             blocker: None,
             stats: None,
             context_open: false,
-            picker: None,
+            menu: None,
         }
     }
 
@@ -878,13 +911,8 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     }
     let twelve = "1 Collect the failing cases\n2 Reproduce locally\n3 Bisect\n4 Patch\n5 Test\n6 Clippy\n7 Docs\n8 Changelog\n9 Review\n10 Merge\n11 Tag\n12 Release";
 
-    fn menu(name: &'static str, build: fn(PopupMenu) -> PopupMenu) -> Example {
-        Example::new(name, move |window, cx| {
-            let menu = window.use_keyed_state(SharedString::from(format!("menu-{name}")), cx, |window, cx| {
-                PopupMenu::build(window, cx, move |m, _, _| build(m))
-            });
-            menu.read(cx).clone().into_any_element()
-        })
+    fn menu(name: &'static str, build: fn() -> Div) -> Example {
+        Example::new(name, move |_, _| div().flex().child(build()).into_any_element())
     }
 
     vec![
@@ -934,13 +962,13 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             }),
         ]),
         ComponentPreview::new(Area::Composer, "Menus", "Dropdown contents, rendered open.").examples([
-            menu("permission mode", |m| {
+            menu("permission mode", || {
                 let modes = fixtures::modes("workspace-write", true);
-                mode_menu(m, &modes.entries, &modes.current, Rc::new(|_, _, _| {}))
+                mode_menu(&modes.entries, &modes.current, Rc::new(|_, _, _| {}), Rc::new(|_, _| {}))
             }),
-            menu("folder", |m| {
+            menu("folder", || {
                 let c = fixtures::controls(0, false);
-                folder_menu(m, &c.dirs, &c.cwd, true, Rc::new(|_, _, _| {}), Rc::new(|_, _| {}))
+                folder_menu(&c.dirs, &c.cwd, true, Rc::new(|_, _, _| {}), Rc::new(|_, _| {}), Rc::new(|_, _| {}))
             }),
         ]),
     ]
