@@ -12,6 +12,7 @@ space-protocol = { path = "crates/space-protocol" }
 space-core = { path = "crates/space-core" }
 space-ui = { path = "crates/space-ui" }
 space-plugin = { path = "crates/space-plugin" }
+space-terminal = { path = "crates/space-terminal" }
 agent-client-protocol = "5.0.0"
 anyhow = "1"
 thiserror = "2"

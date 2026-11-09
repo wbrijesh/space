@@ -169,6 +169,7 @@ source is on crates.io.
 | agent-client-protocol-schema | 1.15.1 | Apache-2.0 |
 | ahash | 0.8.12 | MIT OR Apache-2.0 |
 | aho-corasick | 1.1.5 | Unlicense OR MIT |
+| alacritty_terminal | 0.26.0 | Apache-2.0 |
 | aligned | 0.4.3 | MIT OR Apache-2.0 |
 | aligned-vec | 0.6.4 | MIT |
 | allocator-api2 | 0.2.21 | MIT OR Apache-2.0 |
@@ -238,6 +239,7 @@ source is on crates.io.
 | cbindgen | 0.28.0 | MPL-2.0 |
 | cc | 1.11.0 | MIT OR Apache-2.0 |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 |
+| cfg_aliases | 0.1.1 | MIT |
 | cfg_aliases | 0.2.2 | MIT |
 | chacha20 | 0.10.2 | MIT OR Apache-2.0 |
 | chrono | 0.4.45 | MIT OR Apache-2.0 |
@@ -275,6 +277,7 @@ source is on crates.io.
 | crypto-common | 0.1.7 | MIT OR Apache-2.0 |
 | crypto-common | 0.2.2 | MIT OR Apache-2.0 |
 | ctor | 1.0.13 | Apache-2.0 OR MIT |
+| cursor-icon | 1.2.0 | MIT OR Apache-2.0 OR Zlib |
 | darling | 0.24.1 | MIT |
 | darling_core | 0.24.1 | MIT |
 | darling_macro | 0.24.1 | MIT |
@@ -411,6 +414,7 @@ source is on crates.io.
 | hex | 0.4.3 | MIT OR Apache-2.0 |
 | hkdf | 0.12.4 | MIT OR Apache-2.0 |
 | hmac | 0.12.1 | MIT OR Apache-2.0 |
+| home | 0.5.12 | MIT OR Apache-2.0 |
 | html5ever | 0.27.0 | MIT OR Apache-2.0 |
 | http | 1.5.0 | MIT OR Apache-2.0 |
 | http-body | 1.1.0 | MIT |
@@ -516,12 +520,14 @@ source is on crates.io.
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
 | mio | 1.2.4 | MIT |
+| miow | 0.6.1 | MIT OR Apache-2.0 |
 | moxcms | 0.8.1 | BSD-3-Clause OR Apache-2.0 |
 | multiversion_no_op | 1.0.0 | Apache-2.0 OR MIT |
 | naga | 30.0.1 | MIT OR Apache-2.0 |
 | naga-types | 30.0.1 | MIT OR Apache-2.0 |
 | ndk-sys | 0.6.0+11769913 | MIT OR Apache-2.0 |
 | new_debug_unreachable | 1.0.6 | MIT |
+| nix | 0.28.0 | MIT |
 | no_std_io2 | 0.9.4 | Apache-2.0 OR MIT |
 | nohash-hasher | 0.2.0 | Apache-2.0 OR MIT |
 | nom | 8.0.0 | MIT |
@@ -614,6 +620,7 @@ source is on crates.io.
 | polycool | 0.4.0 | MIT OR Apache-2.0 |
 | portable-atomic | 1.15.0 | Apache-2.0 OR MIT |
 | portable-atomic-util | 0.2.8 | Apache-2.0 OR MIT |
+| portable-pty | 0.9.0 | MIT |
 | potential_utf | 0.1.6 | Unicode-3.0 |
 | powerfmt | 0.2.1 | MIT OR Apache-2.0 |
 | ppv-lite86 | 0.2.21 | MIT OR Apache-2.0 |
@@ -684,6 +691,7 @@ source is on crates.io.
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 |
 | rustix | 1.1.6 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| rustix-openpty | 0.2.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT |
 | rustls-native-certs | 0.8.5 | Apache-2.0 OR ISC OR MIT |
 | rustls-pemfile | 2.2.0 | Apache-2.0 OR ISC OR MIT |
@@ -721,12 +729,16 @@ source is on crates.io.
 | serde_urlencoded | 0.7.1 | MIT/Apache-2.0 |
 | serde_with | 3.24.0 | MIT OR Apache-2.0 |
 | serde_with_macros | 3.24.0 | MIT OR Apache-2.0 |
+| serial2 | 0.2.39 | BSD-2-Clause OR Apache-2.0 |
 | sha1_smol | 1.0.1 | BSD-3-Clause |
 | sha2 | 0.10.9 | MIT OR Apache-2.0 |
 | sha2 | 0.11.1 | MIT OR Apache-2.0 |
 | sharded-slab | 0.1.7 | MIT |
+| shared_library | 0.1.9 | Apache-2.0/MIT |
+| shell-words | 1.1.1 | MIT/Apache-2.0 |
 | shellexpand | 3.1.2 | MIT/Apache-2.0 |
 | shlex | 2.0.1 | MIT OR Apache-2.0 |
+| signal-hook | 0.4.6 | MIT OR Apache-2.0 |
 | signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 |
 | simd-adler32 | 0.3.10 | MIT |
 | simd_cesu8 | 1.2.0 | Apache-2.0 OR MIT |
@@ -844,6 +856,7 @@ source is on crates.io.
 | version_check | 0.9.5 | MIT/Apache-2.0 |
 | vswhom | 0.1.0 | MIT |
 | vswhom-sys | 0.1.3 | MIT |
+| vte | 0.15.0 | Apache-2.0 OR MIT |
 | waker-fn | 1.2.0 | Apache-2.0 OR MIT |
 | walkdir | 2.5.0 | Unlicense/MIT |
 | want | 0.3.2 | MIT |
@@ -917,6 +930,7 @@ source is on crates.io.
 | windows-strings | 0.5.1 | MIT OR Apache-2.0 |
 | windows-sys | 0.48.0 | MIT OR Apache-2.0 |
 | windows-sys | 0.52.0 | MIT OR Apache-2.0 |
+| windows-sys | 0.59.0 | MIT OR Apache-2.0 |
 | windows-sys | 0.61.2 | MIT OR Apache-2.0 |
 | windows-targets | 0.48.5 | MIT OR Apache-2.0 |
 | windows-targets | 0.52.6 | MIT OR Apache-2.0 |
@@ -949,6 +963,7 @@ source is on crates.io.
 | windows_x86_64_msvc | 0.53.1 | MIT OR Apache-2.0 |
 | winnow | 0.7.15 | MIT |
 | winnow | 1.0.5 | MIT |
+| winreg | 0.10.1 | MIT |
 | winreg | 0.56.0 | MIT |
 | wio | 0.2.2 | MIT/Apache-2.0 |
 | wit-bindgen | 0.57.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |

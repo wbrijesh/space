@@ -31,8 +31,8 @@ use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
 
 use crate::app::{
-    CloseSettings, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, ScrollToBottom, SpaceApp,
-    ToggleSidebar, ToggleTrajectory,
+    CloseSettings, CloseTerminal, CyclePermissionMode, FocusComposer, GoBack, GoForward, MaximizeTerminal, NewTerminal, NewThread,
+    NextTerminal, OpenSettings, PreviousTerminal, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleTerminal, ToggleTrajectory,
 };
 use crate::settings::SaveKind;
 use crate::threads::Thread;
@@ -67,22 +67,31 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         on_new_thread: click(cx, |this, w, cx| this.new_thread(None, w, cx)),
     };
 
-    let main = div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_w_0()
-        .h_full()
-        .bg(color::bg())
-        .child(
-            MainTitleBar::new(if app.show_settings {
-                "Settings".to_string()
-            } else {
-                app.current().map(|t| t.title()).unwrap_or_default()
-            })
-            .sidebar(shown, nav.clone()),
-        )
-        .child(if app.show_settings { settings(app, window, cx) } else { body(app, window, cx) });
+    // The terminal pane, when the current thread has it open (and a terminal plugin runs).
+    let terminal_key = app.selected.filter(|k| {
+        !app.show_settings && app.host.has_terminal() && app.terminals.pane(*k).is_some_and(|p| p.open)
+    });
+    app.terminals.set_visible(terminal_key.and_then(|k| app.terminals.selected(k)).map(|s| s.id.clone()).as_deref());
+    let terminal_open = terminal_key.is_some();
+    let title_bar = MainTitleBar::new(if app.show_settings {
+        "Settings".to_string()
+    } else {
+        app.current().map(|t| t.title()).unwrap_or_default()
+    })
+    .sidebar(shown, nav.clone())
+    .when(!app.show_settings && app.host.has_terminal(), |b| {
+        b.terminal(terminal_open, click(cx, |this, w, cx| this.toggle_terminal(w, cx)))
+    });
+    let content = if app.show_settings {
+        settings(app, window, cx)
+    } else {
+        let body = body(app, window, cx);
+        match terminal_key {
+            Some(key) => with_terminal(app, key, body, shown, window, cx),
+            None => body,
+        }
+    };
+    let main = div().flex().flex_col().flex_1().min_w_0().h_full().bg(color::bg()).child(title_bar).child(content);
 
     div()
         .id("space-root")
@@ -98,6 +107,29 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.toggle_settings(window, cx)))
         .on_action(cx.listener(|this, _: &ScrollToBottom, _, cx| this.scroll_to_bottom(cx)))
         .on_action(cx.listener(|this, _: &CyclePermissionMode, _, cx| this.cycle_mode(cx)))
+        .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| this.toggle_terminal(window, cx)))
+        .on_action(cx.listener(|this, _: &NewTerminal, window, cx| this.new_terminal(window, cx)))
+        .on_action(cx.listener(|this, _: &CloseTerminal, window, cx| this.close_current_terminal(window, cx)))
+        .on_action(cx.listener(|this, _: &NextTerminal, window, cx| this.step_terminal(1, window, cx)))
+        .on_action(cx.listener(|this, _: &PreviousTerminal, window, cx| this.step_terminal(-1, window, cx)))
+        .on_action(cx.listener(|this, _: &MaximizeTerminal, _, cx| this.toggle_terminal_maximized(cx)))
+        .on_action(cx.listener(|this, _: &Quit, window, cx| this.quit(window, cx)))
+        // Dragging the terminal pane's divider.
+        .when(app.terminals.dragging, |d| {
+            d.cursor_col_resize()
+                .on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, window, cx| {
+                    let left = f32::from(size::SIDEBAR_W) * this.sidebar_shown.target();
+                    let width = f32::from(window.viewport_size().width) - left;
+                    if width > 0. {
+                        this.terminals.set_width((f32::from(window.viewport_size().width) - f32::from(e.position.x)) / width);
+                        cx.notify();
+                    }
+                }))
+                .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                    this.terminals.dragging = false;
+                    cx.notify();
+                }))
+        })
         // Esc closes a message's usage panel, the context panel or a composer menu (the model
         // picker steps back from one of its lists first).
         .when(app.usage_open.is_some(), |d| {
@@ -174,6 +206,7 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
             ThreadRow::new(("thread", key as usize), t.title())
                 .selected(selected)
                 .indicator(indicator)
+                .terminal(!selected && app.terminals.active(key))
                 .on_click(cx.listener(move |this, _, w, cx| this.select_thread(key, w, cx)))
                 .on_delete(cx.listener(move |this, _, w, cx| this.delete_thread(key, w, cx)))
                 .into_any_element()
@@ -181,6 +214,103 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
         .collect();
 
     sidebar_column(SidebarTitleBar::new(nav).shown(shown), rows)
+}
+
+/// The thread's body with the terminal pane beside it (or instead of it, maximized).
+fn with_terminal(app: &mut SpaceApp, key: u64, body: AnyElement, sidebar: f32, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
+    let Some(pane) = app.terminals.pane(key) else { return body };
+    let maximized = pane.maximized;
+    let main_width = f32::from(window.viewport_size().width) - f32::from(size::SIDEBAR_W) * sidebar;
+    let width = px((main_width * app.terminals.width).round());
+    let pane = terminal_pane(app, key, window, cx);
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .child(div().flex_1().min_w_0().flex().flex_col().when(maximized, |d| d.hidden()).child(body))
+        .when(!maximized, |d| {
+            d.child(
+                div()
+                    .id("terminal-divider")
+                    .flex_none()
+                    .w(px(5.))
+                    .h_full()
+                    .ml(px(-2.))
+                    .mr(px(-3.))
+                    .cursor_col_resize()
+                    .flex()
+                    .justify_center()
+                    .child(div().w(px(1.)).h_full().bg(color::border()))
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                        this.terminals.dragging = true;
+                        cx.stop_propagation();
+                        cx.notify();
+                    })),
+            )
+        })
+        .child(div().h_full().flex().flex_col().map(|d| if maximized { d.flex_1().min_w_0() } else { d.flex_none().w(width) }).child(pane))
+        .into_any_element()
+}
+
+/// The pane: tabs, then the selected terminal (or why there's none).
+fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
+    use space_ui::components::terminal::{StripHandlers, stopped_notice, tab_strip};
+    let (tabs, selected, maximized, opening, error) = {
+        let pane = app.terminals.pane(key).expect("open pane");
+        let tabs: Vec<_> = pane.tabs.iter().filter_map(|id| app.terminals.session(id)).map(|s| s.tab()).collect();
+        (tabs, pane.selected, pane.maximized, pane.opening, pane.error.clone())
+    };
+    let handlers = StripHandlers {
+        on_select: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |ix, w, cx| {
+                let _ = this.update(cx, |this, cx| this.select_terminal(ix, w, cx));
+            })
+        },
+        on_close: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |ix, w, cx| {
+                let _ = this.update(cx, |this, cx| this.close_terminal(ix, w, cx));
+            })
+        },
+        on_new: handler(cx, |this, w, cx| this.new_terminal(w, cx)),
+        on_maximize: handler(cx, |this, _, cx| this.toggle_terminal_maximized(cx)),
+        on_hide: handler(cx, |this, w, cx| this.hide_terminal(w, cx)),
+    };
+    let session = app.terminals.selected(key);
+    let stopped = session.as_ref().is_some_and(|s| s.state.lock().unwrap().stopped);
+    let content = match session {
+        Some(s) if stopped => {
+            let id = s.id.clone();
+            stopped_notice(
+                "The terminal plugin stopped, and this terminal's shell with it.",
+                handler(cx, move |this, w, cx| this.restart_terminal(&id, w, cx)),
+            )
+            .into_any_element()
+        }
+        Some(s) => match app.terminal_view(&s.id, window, cx) {
+            Some(view) => div().flex_1().min_h_0().child(view).into_any_element(),
+            None => div().flex_1().into_any_element(),
+        },
+        None => match error {
+            Some(e) => stopped_notice(e, handler(cx, |this, w, cx| this.new_terminal(w, cx))).into_any_element(),
+            None => div()
+                .flex_1()
+                .p_3()
+                .text_size(text::SM)
+                .text_color(color::text_3())
+                .child(if opening > 0 { "Starting a shell…" } else { "" })
+                .into_any_element(),
+        },
+    };
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .bg(color::bg())
+        .child(tab_strip(&tabs, selected, maximized, &handlers))
+        .child(content)
+        .into_any_element()
 }
 
 fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {

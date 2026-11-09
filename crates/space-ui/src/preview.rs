@@ -105,6 +105,7 @@ pub fn registry() -> Vec<ComponentPreview> {
     let mut all: Vec<ComponentPreview> = [
         title_bar::previews(),
         shell::previews(),
+        terminal::previews(),
         tip::previews(),
         settings::previews(),
         thread_row::previews(),

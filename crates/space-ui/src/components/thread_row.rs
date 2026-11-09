@@ -53,6 +53,9 @@ pub struct ThreadRow {
     indicator: RowIndicator,
     /// Preview only: paint the hover state without a pointer.
     force_hover: bool,
+    /// Something runs in one of its terminals (or has new output): a terminal mark when
+    /// nothing else shows.
+    terminal: bool,
     on_click: Option<ClickHandler>,
     on_delete: Option<ClickHandler>,
 }
@@ -65,6 +68,7 @@ impl ThreadRow {
             selected: false,
             indicator: RowIndicator::None,
             force_hover: false,
+            terminal: false,
             on_click: None,
             on_delete: None,
         }
@@ -77,6 +81,11 @@ impl ThreadRow {
 
     pub fn indicator(mut self, indicator: RowIndicator) -> Self {
         self.indicator = indicator;
+        self
+    }
+
+    pub fn terminal(mut self, terminal: bool) -> Self {
+        self.terminal = terminal;
         self
     }
 
@@ -112,6 +121,11 @@ impl RenderOnce for ThreadRow {
             RowIndicator::Unread => Some(status_dot(color::blue()).into_any_element()),
             RowIndicator::UnreadError => Some(status_dot(color::red()).into_any_element()),
         };
+        let indicator = indicator.or_else(|| {
+            self.terminal.then(|| {
+                gpui::component::Icon::new(gpui::assets::IconName::SquareTerminal).size(size::ICON).text_color(color::text_3()).into_any_element()
+            })
+        });
         let hover_bg = color::surface();
         let row = div()
             .id(self.id)
@@ -172,6 +186,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 row("paused (waiting for the guardrail)", |r| r.indicator(RowIndicator::Paused)),
                 row("error", |r| r.indicator(RowIndicator::UnreadError)),
                 row("waiting for input", |r| r.indicator(RowIndicator::NeedsInput)),
+                row("terminal running", |r| r.terminal(true)),
             ]),
     ]
 }

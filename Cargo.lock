@@ -6680,6 +6680,7 @@ dependencies = [
  "sha2 0.10.9",
  "space-core",
  "space-protocol",
+ "space-terminal",
  "space-ui",
  "tempfile",
  "tokio",
@@ -6808,6 +6809,7 @@ dependencies = [
  "serde_json",
  "similar",
  "space-core",
+ "space-terminal",
 ]
 
 [[package]]

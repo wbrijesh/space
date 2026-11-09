@@ -222,6 +222,7 @@ impl SpaceApp {
     pub(crate) fn delete_thread(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ix) = self.threads.iter().position(|t| t.key == key) else { return };
         let thread = self.threads.remove(ix);
+        self.forget_thread_terminals(key);
         if let Some(session) = &thread.session {
             // Stops a running turn and answers any open permission card.
             if session.is_running() {

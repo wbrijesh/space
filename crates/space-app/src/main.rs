@@ -33,6 +33,8 @@ mod reload;
 #[cfg(feature = "dev")]
 mod scenarios;
 mod settings;
+mod terminal;
+mod terminal_view;
 mod threads;
 mod trajectory;
 mod view;
@@ -144,6 +146,7 @@ fn main() -> Result<()> {
         settings_path: settings::default_path(),
         open_settings: false,
         open_trajectory: false,
+        open_terminal: false,
     };
     #[cfg(feature = "dev")]
     if let Some(name) = &args.scenario {

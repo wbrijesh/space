@@ -83,8 +83,40 @@ pub mod color {
         trajectory_hover = 0x2b2b2bff;
         /// Selected row on the Trajectory background.
         trajectory_selected = 0x333333ff;
+        /// Terminal colors: GitHub Dark's ANSI palette (Space's accents are its values). The
+        /// terminal's background is `bg`, the thread's; its text is `text`.
+        term_black = 0x484f58ff;
+        term_red = 0xff7b72ff;
+        term_green = 0x3fb950ff;
+        term_yellow = 0xd29922ff;
+        term_blue = 0x58a6ffff;
+        term_magenta = 0xbc8cffff;
+        term_cyan = 0x39c5cfff;
+        term_white = 0xb1bac4ff;
+        term_bright_black = 0x6e7681ff;
+        term_bright_red = 0xffa198ff;
+        term_bright_green = 0x56d364ff;
+        term_bright_yellow = 0xe3b341ff;
+        term_bright_blue = 0x79c0ffff;
+        term_bright_magenta = 0xd2a8ffff;
+        term_bright_cyan = 0x56d4ddff;
+        term_bright_white = 0xffffffff;
     }
 }
+
+/// The terminal's palette (`0xRRGGBB`), from the tokens: the background is the thread's.
+pub fn terminal_palette() -> space_terminal::Palette {
+    let hex = |name: &str| ALL_COLORS.iter().find(|(n, _, _)| *n == name).map_or(0, |(_, v, _)| v >> 8);
+    let ansi = [
+        "term_black", "term_red", "term_green", "term_yellow", "term_blue", "term_magenta", "term_cyan", "term_white",
+        "term_bright_black", "term_bright_red", "term_bright_green", "term_bright_yellow", "term_bright_blue",
+        "term_bright_magenta", "term_bright_cyan", "term_bright_white",
+    ]
+    .map(hex);
+    space_terminal::Palette { ansi, foreground: hex("text"), background: hex("bg"), cursor: hex("text") }
+}
+
+use color::ALL as ALL_COLORS;
 
 /// Spacing scale (4px base) for computed layout values.
 pub mod space {

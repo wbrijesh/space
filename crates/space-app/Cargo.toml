@@ -28,6 +28,7 @@ schemars = { workspace = true, optional = true }
 # `just run`: watch plugin sources to rebuild and restart them (src/reload.rs).
 notify = { version = "8", optional = true }
 space-protocol.workspace = true
+space-terminal.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 tokio.workspace = true

@@ -15,7 +15,16 @@ gpui::actions!(
         ScrollToBottom,
         RecallPrevious,
         RecallNext,
-        Quit
+        Quit,
+        ToggleTerminal,
+        NewTerminal,
+        CloseTerminal,
+        NextTerminal,
+        PreviousTerminal,
+        MaximizeTerminal,
+        TerminalCopy,
+        TerminalPaste,
+        TerminalClear
     ]
 );
 

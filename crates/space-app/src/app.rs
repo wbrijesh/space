@@ -32,6 +32,8 @@ pub use space_ui::actions::{
     ScrollToBottom,
     ToggleSidebar,
     ToggleTrajectory,
+    CloseTerminal, MaximizeTerminal, NewTerminal, NextTerminal, PreviousTerminal, TerminalClear, TerminalCopy, TerminalPaste,
+    ToggleTerminal,
 };
 use space_ui::assets::SpaceAssets;
 use space_ui::components::composer;
@@ -66,6 +68,8 @@ pub struct Options {
     pub open_settings: bool,
     /// Dev scenarios: open the selected thread's Trajectory tab.
     pub open_trajectory: bool,
+    /// Dev scenarios: open the selected thread's terminal pane.
+    pub open_terminal: bool,
 }
 
 /// A thread opened at launch: an optional prompt sent once its session exists and an
@@ -144,7 +148,23 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("up", RecallPrevious, Some("Composer > Input")),
             KeyBinding::new("down", RecallNext, Some("Composer > Input")),
             KeyBinding::new("cmd-q", Quit, None),
+            // The terminal pane. ⌃` from anywhere; the rest while a terminal has focus.
+            KeyBinding::new("ctrl-`", ToggleTerminal, None),
+            KeyBinding::new("cmd-shift-enter", MaximizeTerminal, Some("Terminal")),
+            KeyBinding::new("cmd-t", NewTerminal, Some("Terminal")),
+            KeyBinding::new("cmd-w", CloseTerminal, Some("Terminal")),
+            KeyBinding::new("ctrl-tab", NextTerminal, Some("Terminal")),
+            KeyBinding::new("ctrl-shift-tab", PreviousTerminal, Some("Terminal")),
+            KeyBinding::new("cmd-c", TerminalCopy, Some("Terminal")),
+            KeyBinding::new("cmd-v", TerminalPaste, Some("Terminal")),
+            KeyBinding::new("cmd-k", TerminalClear, Some("Terminal")),
+            // These go to the shell: the window root takes Tab and Shift-Tab to move focus, and
+            // Esc closes things in the app.
+            KeyBinding::new("tab", gpui::NoAction, Some("Terminal")),
+            KeyBinding::new("shift-tab", gpui::NoAction, Some("Terminal")),
+            KeyBinding::new("escape", gpui::NoAction, Some("Terminal")),
         ]);
+        // Without a window to ask in (the window's own handler asks about running terminals).
         cx.on_action(|_: &Quit, cx| cx.quit());
         ignore_held_shortcuts(cx);
         #[allow(unused_mut)]
@@ -172,6 +192,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
                     MenuItem::action("Forward", GoForward),
                     MenuItem::separator(),
                     MenuItem::action("Trajectory", ToggleTrajectory),
+                    MenuItem::action("Terminal", ToggleTerminal),
                     MenuItem::separator(),
                     MenuItem::action("Scroll to Bottom", ScrollToBottom),
                     MenuItem::action("Focus Composer", FocusComposer),
@@ -206,8 +227,15 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             }
         };
 
+        // A window an input script drives (test runs) never takes the keyboard: scripted keys
+        // go through GPUI, and your typing stays where you are.
+        #[cfg(feature = "dev")]
+        let scripted = devscript::active();
+        #[cfg(not(feature = "dev"))]
+        let scripted = false;
         let bounds = Bounds::centered(None, size(px(1280.), px(820.)), cx);
         let window_options = WindowOptions {
+            focus: !scripted,
             titlebar: Some(TitlebarOptions {
                 title: Some("Space".into()),
                 appears_transparent: true,
@@ -227,7 +255,9 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
         #[cfg(feature = "dev")]
         devscript::spawn_from_env(handle, cx);
         let _ = handle;
-        cx.activate(true);
+        if !scripted {
+            cx.activate(true);
+        }
     });
 }
 
@@ -293,7 +323,8 @@ pub struct SpaceApp {
     pub(crate) agent_asleep: bool,
     /// The `claude` CLI pi-agent needs was found (checked at launch and on each restart).
     pub(crate) claude_cli: bool,
-    _subscriptions: Vec<Subscription>,
+    pub(crate) _subscriptions: Vec<Subscription>,
+    pub(crate) terminals: crate::terminal::Terminals,
 }
 
 impl SpaceApp {
@@ -390,10 +421,20 @@ impl SpaceApp {
                     batch.push(e);
                 }
                 let alive = this.update(cx, |this, cx| {
+                    let mut app_changed = false;
                     for e in batch {
-                        this.on_host_event(e, cx);
+                        match e {
+                            // Output of a terminal on screen redraws just that terminal.
+                            HostEvent::TerminalOutput { terminal_id } => app_changed |= this.terminal_output(&terminal_id, cx),
+                            e => {
+                                this.on_host_event(e, cx);
+                                app_changed = true;
+                            }
+                        }
                     }
-                    cx.notify();
+                    if app_changed {
+                        cx.notify();
+                    }
                 });
                 if alive.is_err() {
                     break;
@@ -412,6 +453,7 @@ impl SpaceApp {
             _ => None,
         };
 
+        let host_for_terminals = host.clone();
         let mut this = Self {
             agent_id: agent_plugin.map(|p| p.id().to_string()),
             notify: options.notify,
@@ -455,6 +497,7 @@ impl SpaceApp {
             agent_asleep: false,
             claude_cli: claude_cli_installed(),
             _subscriptions: vec![sub, activation, quit],
+            terminals: crate::terminal::Terminals::new(&host_for_terminals),
         };
         this.watch_agent_idle(cx);
         #[cfg(feature = "dev")]
@@ -474,6 +517,9 @@ impl SpaceApp {
         } else {
             let input = this.input.clone();
             input.update(cx, |s, cx| s.focus(window, cx));
+        }
+        if options.open_terminal {
+            this.toggle_terminal(window, cx);
         }
         this
     }
@@ -521,6 +567,13 @@ impl SpaceApp {
     fn on_host_event(&mut self, event: HostEvent, cx: &mut Context<Self>) {
         match event {
             HostEvent::PluginStatus { plugin_id, status } => {
+                if self.host.terminal_plugin().as_deref() == Some(plugin_id.as_str()) {
+                    match status {
+                        PluginStatus::Running => self.terminal_plugin_status(true, cx),
+                        PluginStatus::Stopped | PluginStatus::Crashed(_) | PluginStatus::NotStarted(_) => self.terminal_plugin_status(false, cx),
+                        PluginStatus::Starting => {}
+                    }
+                }
                 if Some(&plugin_id) != self.agent_id.as_ref() {
                     // The agent was waiting for this plugin (`requires`): start it now.
                     if status == PluginStatus::Running
@@ -563,6 +616,10 @@ impl SpaceApp {
             HostEvent::OpenUrl { url, .. } => open_url(url),
             // The Trajectory tab isn't wired yet.
             HostEvent::TrajectoryChanged { thread_id, .. } => self.trajectory_changed(thread_id, cx),
+            // Handled before the batch (see the event loop); here only when it needs the app.
+            HostEvent::TerminalOutput { .. } => {}
+            HostEvent::TerminalTitle { terminal_id, title } => self.terminal_title(&terminal_id, title),
+            HostEvent::TerminalExited { terminal_id, exit_code } => self.terminal_exited(&terminal_id, exit_code, cx),
             HostEvent::Session { session_id, event } => {
                 self.touch_agent();
                 let Some(&key) = self.session_threads.get(&session_id) else {

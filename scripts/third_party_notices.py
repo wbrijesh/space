@@ -12,7 +12,7 @@ import json
 import os
 import subprocess
 
-SHIPPED_CRATES = {"space-app", "space-alerts", "space-permissions", "space-session-store", "space-titles", "space-trajectory"}
+SHIPPED_CRATES = {"space-app", "space-alerts", "space-permissions", "space-session-store", "space-titles", "space-trajectory", "space-terminal-plugin"}
 
 
 def rust_crates():

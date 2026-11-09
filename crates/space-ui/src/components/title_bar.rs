@@ -11,7 +11,7 @@ use gpui::*;
 use super::tip::TipExt as _;
 use super::widgets::icon_button;
 use crate::ClickHandler;
-use crate::actions::{GoBack, GoForward, NewThread, ToggleSidebar};
+use crate::actions::{GoBack, GoForward, NewThread, ToggleSidebar, ToggleTerminal};
 use crate::theme::{color, size, text};
 
 /// Makes `el` a window drag region: dragging moves the window, a double click zooms or
@@ -150,11 +150,19 @@ pub struct MainTitleBar {
     nav: Option<TitleBarNav>,
     /// How far the sidebar is shown (0 hidden, 1 shown).
     sidebar: f32,
+    /// The terminal button: whether the pane is open, and the toggle.
+    terminal: Option<(bool, ClickHandler)>,
 }
 
 impl MainTitleBar {
     pub fn new(title: impl Into<SharedString>) -> Self {
-        Self { title: title.into(), nav: None, sidebar: 1. }
+        Self { title: title.into(), nav: None, sidebar: 1., terminal: None }
+    }
+
+    /// A terminal button at the right (filled while the pane is open).
+    pub fn terminal(mut self, open: bool, on_toggle: ClickHandler) -> Self {
+        self.terminal = Some((open, on_toggle));
+        self
     }
 
     /// The sidebar's shown fraction (0 hidden … 1 shown) and the nav, for the new-thread button.
@@ -207,6 +215,13 @@ impl RenderOnce for MainTitleBar {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(self.title),
             )
+            .when_some(self.terminal, |d, (open, toggle)| {
+                d.child(
+                    icon_button("toggle-terminal", Lucide::SquareTerminal, true, open)
+                        .tip_action("Terminal", &ToggleTerminal)
+                        .on_click(move |e, w, cx| toggle(e, w, cx)),
+                )
+            })
     }
 }
 

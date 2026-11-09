@@ -30,6 +30,9 @@ pub struct Scenario {
     pub permissions: bool,
     /// Also run the real trajectory plugin, and open the selected thread's Trajectory tab.
     pub trajectory: bool,
+    /// Also run the real terminal plugin (with a scripted shell: a colour test, then `sh`), and
+    /// open the selected thread's terminal pane.
+    pub terminal: bool,
     /// With `permissions`: a decision-model key is set (in a scenario-only Keychain item) but
     /// OpenAI can't be reached, so Workspace Write and Full access calls are paused.
     pub model_offline: bool,
@@ -306,6 +309,14 @@ pub fn all() -> Vec<Scenario> {
             ..Default::default()
         },
         Scenario {
+            name: "terminal",
+            description: "The terminal pane beside a finished thread: the real terminal plugin running a scripted shell \
+                          (a colour test and a prompt, then sh).",
+            threads: vec![explain_thread()],
+            terminal: true,
+            ..Default::default()
+        },
+        Scenario {
             name: "settings",
             description: "The Settings page (⌘,) with the stub's models and a saved default.",
             threads: vec![explain_thread()],
@@ -463,6 +474,19 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         std::fs::create_dir_all(&trajectory)?;
         std::fs::copy(repo.join("plugins/trajectory/space-plugin.toml"), trajectory.join("space-plugin.toml"))?;
     }
+    let terminal = root.join("terminal");
+    let _ = std::fs::remove_dir_all(&terminal);
+    if scenario.terminal {
+        let repo = space_core::discovery::find_repo_root(&Path::new(env!("CARGO_MANIFEST_DIR")).join("x"))
+            .context("the terminal plugin lives in the repo; run scenarios from a checkout")?;
+        std::fs::create_dir_all(&terminal)?;
+        let shell = root.join("scenario-shell.sh");
+        std::fs::write(&shell, SCENARIO_SHELL)?;
+        std::fs::set_permissions(&shell, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
+        let mut manifest = std::fs::read_to_string(repo.join("plugins/terminal/space-plugin.toml"))?;
+        manifest.push_str(&format!("\n[run.env]\nSPACE_TERMINAL_SHELL = {:?}\n", shell.display().to_string()));
+        std::fs::write(terminal.join("space-plugin.toml"), manifest)?;
+    }
     if scenario.permissions {
         let repo = space_core::discovery::find_repo_root(&Path::new(env!("CARGO_MANIFEST_DIR")).join("x"))
             .context("the permissions plugin lives in the repo; run scenarios from a checkout")?;
@@ -520,9 +544,28 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         settings_path: Some(settings_path),
         open_settings: scenario.settings_page,
         open_trajectory: scenario.trajectory,
+        open_terminal: scenario.terminal,
     };
     Ok((host, options))
 }
+
+/// The `terminal` scenario's shell: a test run, the 16 colours and styles, then an interactive
+/// `sh` with a fixed prompt.
+const SCENARIO_SHELL: &str = r#"#!/bin/sh
+p() { printf '%b' "$1"; }
+prompt='\033[1;34m~/projects/space\033[0m \033[32mmain\033[0m \342\235\257 '
+p "${prompt}cargo test -p space-core\r\n"
+p "   \033[1;32mCompiling\033[0m space-core v0.1.0\r\n"
+p "    \033[1;32mFinished\033[0m test profile in 3.2s\r\n"
+p "test session::tests::reducer ... \033[32mok\033[0m\r\n"
+p "test result: \033[32mok\033[0m. 28 passed; 0 failed\r\n\r\n"
+for i in 0 1 2 3 4 5 6 7; do p "\033[3${i}m colour$i \033[0m"; done; p "\r\n"
+for i in 0 1 2 3 4 5 6 7; do p "\033[9${i}m bright$i \033[0m"; done; p "\r\n"
+p "\033[1mbold\033[0m \033[3mitalic\033[0m \033[4munderline\033[0m \033[9mstrike\033[0m \033[7m inverse \033[0m \033[48;5;24m 256-colour bg \033[0m\r\n\r\n"
+PS1="$(printf '%b' "$prompt")"
+export PS1
+exec /bin/sh -i
+"#;
 
 /// Resolve a `--scenario` argument.
 pub fn resolve(name: &str) -> Result<Scenario> {
@@ -552,6 +595,7 @@ mod tests {
             "guardrail",
             "guardrail-offline",
             "settings",
+            "terminal",
         ] {
             assert!(find(wanted).is_some(), "missing scenario {wanted}");
         }
