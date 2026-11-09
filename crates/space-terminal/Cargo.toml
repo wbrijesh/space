@@ -1,0 +1,9 @@
+[package]
+name = "space-terminal"
+description = "Space's terminal screen: alacritty's terminal state fed by the terminal plugin's bytes, key mapping, selection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+alacritty_terminal = "0.26"
