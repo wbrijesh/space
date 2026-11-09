@@ -107,3 +107,39 @@ async fn a_shell_through_the_host() {
     assert!(host.terminal_list().await.unwrap().is_empty());
     host.shutdown();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_flood_of_output_arrives_whole_and_in_order() {
+    let (tmp, host, _events) = setup();
+    host.start_services().await;
+    let seen: Arc<Mutex<Vec<u8>>> = Arc::default();
+    let batches = Arc::new(Mutex::new(0usize));
+    {
+        let (seen, batches) = (seen.clone(), batches.clone());
+        host.set_terminal_sink(Arc::new(move |_id, _seq, data| {
+            *batches.lock().unwrap() += 1;
+            seen.lock().unwrap().extend_from_slice(data);
+            false
+        }));
+    }
+    let id = host
+        .terminal_open(TerminalOpen { thread_id: "t1".into(), cwd: tmp.path().display().to_string(), cols: 80, rows: 24 })
+        .await
+        .unwrap()
+        .terminal_id;
+    let started = std::time::Instant::now();
+    host.terminal_input(&id, b"seq 1 300000; echo FLOOD-$((1+1))\n".to_vec());
+    let text = || String::from_utf8_lossy(&seen.lock().unwrap()).to_string();
+    wait_for("the end of the flood", || text().contains("FLOOD-2")).await;
+    let elapsed = started.elapsed();
+    let all = text();
+    // Every line, in order (the terminal turns \n into \r\n).
+    let numbers: Vec<u64> = all.split("\r\n").filter_map(|l| l.trim().parse().ok()).collect();
+    assert_eq!(numbers.len(), 300_000, "every line arrived");
+    assert!(numbers.windows(2).all(|w| w[1] == w[0] + 1), "in order");
+    let batches = *batches.lock().unwrap();
+    eprintln!("300k lines ({} KB) in {elapsed:?}, {batches} batches", all.len() / 1024);
+    assert!(batches < all.len() / 1024, "batched, not a message per read: {batches} batches");
+    assert!(elapsed < Duration::from_secs(10), "took {elapsed:?}");
+    host.shutdown();
+}
