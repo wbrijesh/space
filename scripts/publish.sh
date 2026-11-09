@@ -2,7 +2,8 @@
 # Publish release v<version> (run by `just publish` after `just release-check` passed):
 #   1. tag v<version> and push the tag,
 #   2. create the GitHub release on wbrijesh/space with the zip and its notes
-#      (packaging/release-notes/<version>.md: what changed, for people updating),
+#      (packaging/release-notes/<version>.md: what changed, for people updating; then
+#      packaging/release-notes/footer.md, the install and update commands, on every release),
 #   3. update Casks/space.rb in wbrijesh/homebrew-tools (from packaging/homebrew/space.rb, with
 #      this version and the zip's sha256), commit and push.
 # Needs `gh` signed in with push access to both repos. Refuses to run twice for one version.
@@ -24,7 +25,10 @@ sha="$(shasum -a 256 "$zip" | cut -d' ' -f1)"
 
 git tag -a "$tag" -m "Space $version"
 git push origin "$tag"
-gh release create "$tag" "$zip" --repo wbrijesh/space --title "Space $version" --notes-file "$notes"
+body="$(mktemp)"
+cat "$notes" "$root/packaging/release-notes/footer.md" > "$body"
+gh release create "$tag" "$zip" --repo wbrijesh/space --title "Space $version" --notes-file "$body"
+rm -f "$body"
 
 tap="$(mktemp -d)"
 trap 'rm -rf "$tap"' EXIT
