@@ -38,6 +38,15 @@ release:
     bun build --compile --minify plugins/space-ts.ts --outfile target/release/space-ts
     scripts/bundle.sh release
 
+# Copy the release app to ~/Applications, where Spotlight and Launchpad find it. It has the same
+# bundle id as `just run`'s app, so opening it while that one runs just brings that one forward
+# Install the current code as ~/Applications/Space.app
+install: release
+    mkdir -p ~/Applications
+    rm -rf ~/Applications/Space.app
+    ditto target/release/Space.app ~/Applications/Space.app
+    rm -rf target/release/Space.app
+
 # Run the release app from a copy outside the repo and check every bundled plugin starts from it
 release-check: release
     scripts/release-check.sh
