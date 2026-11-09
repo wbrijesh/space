@@ -432,16 +432,18 @@ pub fn turn_divider(reason: &str) -> Div {
 }
 
 /// Spinner + label at the end of a transcript while the agent works.
+/// Laid out exactly like a live [`thought_row`] (height, padding, spinner, gap, text), so
+/// "Working…" turning into "Thinking…" moves nothing.
 pub fn working_row(label: &str) -> Div {
     div()
         .flex()
         .items_center()
-        .gap_2p5()
+        .gap_1p5()
         .h(size::ROW_H)
-        .px_1p5()
+        .px_2()
         .text_size(text::SM)
         .text_color(color::text_3())
-        .child(Spinner::new(size::SPINNER_LG))
+        .child(Spinner::new(size::SPINNER_MD))
         .child(label.to_string())
 }
 
@@ -624,7 +626,14 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
         // A live thought shows the spinner in its own "Thinking…" row.
         && !matches!(items.last(), Some(TranscriptItem::Thought(_)))
     {
-        out.push(div().mt(px(14.)).child(working_row("Working…")).into_any_element());
+        // Spaced as a thought in its place would be.
+        let gap = match prev {
+            None => px(0.),
+            _ if after_row => px(6.),
+            Some(p) if compact(p) => GAP_TIGHT,
+            _ => GAP,
+        };
+        out.push(div().mt(gap).child(working_row("Working…")).into_any_element());
     }
     out
 }
