@@ -1,7 +1,7 @@
 //! Messages typed while the agent works.
 //!
-//! ⏎ queues a message for when the turn is done: Space keeps it and sends it (with any others
-//! queued, as one message) once the turn ends normally. ⌘⏎ sends it after the current step: it
+//! ⏎ queues a message for when the turn is done: Space keeps it and sends it once the turn ends
+//! normally. Each queued message is its own turn, oldest first. ⌘⏎ sends it after the current step: it
 //! goes to the agent at once (`Session::steer`), which hands it to the model before its next
 //! request; it joins the transcript then. An agent that can't steer gets it when done instead.
 //!
@@ -133,17 +133,15 @@ impl SpaceApp {
         cx.notify();
     }
 
-    /// Send everything queued as one message (steered ones the agent didn't get included).
+    /// Send the oldest queued message as its own turn (a steered one the agent didn't get counts
+    /// too). The rest follow one by one, each when the turn before it ends.
     pub(crate) fn flush_pending(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(thread) = self.thread_mut(key) else { return };
         if thread.pending.is_empty() || thread.state.running || thread.live_session().is_none() {
             return;
         }
-        let pending = std::mem::take(&mut thread.pending);
-        let text = pending.iter().map(|p| p.text.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n\n");
-        let attachments = pending.iter().flat_map(|p| p.attachments.clone()).collect();
-        let images = pending.into_iter().flat_map(|p| p.images).collect();
-        self.prompt(key, text, attachments, images, cx);
+        let p = thread.pending.remove(0);
+        self.prompt(key, p.text.trim().to_string(), p.attachments, p.images, cx);
         if self.selected == Some(key) {
             self.transcript_scroll.jump_to_bottom();
         }
