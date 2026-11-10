@@ -37,4 +37,9 @@ Links, in `src/text/style.rs` and `src/text/node.rs`: `TextViewStyle::with_link_
 and `with_link_weight`, applied by `apply_link_style` wherever a link is styled (underlined,
 at the text's weight, by default).
 
+HTML, in `src/text/format/html.rs`: `<mark>`'s default color is a faint amber
+(`default_mark_color`, was a solid pale yellow), and a `<details>` block's `<summary>` is a
+bold line (it was a plain paragraph; the block still doesn't collapse). Other unknown inline
+tags (`<kbd>`, `<sub>`, `<sup>`) already render as their text.
+
 To update gpui-base, copy the new version here and re-apply these changes.

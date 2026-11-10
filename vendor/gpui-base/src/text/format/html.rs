@@ -142,8 +142,10 @@ fn attr_value(attrs: &RefCell<Vec<html5ever::Attribute>>, name: LocalName) -> Op
 }
 
 /// Default `<mark>` background when the tag has no usable color.
+/// Space patch: a faint amber that keeps the text light on a dark thread (it was a solid
+/// pale yellow, #fef08a).
 pub(super) fn default_mark_color() -> Hsla {
-    gpui::rgb(0xfef08a).into()
+    gpui::rgba(0xbb800940).into()
 }
 
 /// Get the highlight background color for a `<mark>` element.
@@ -394,7 +396,7 @@ fn parse_paragraph(paragraph: &mut HtmlParagraph, node: &Rc<Node>) {
             local_name!("em") | local_name!("i") => {
                 merge_children_with_mark(node, paragraph, Some(TextMark::default().italic()));
             }
-            local_name!("strong") | local_name!("b") => {
+            local_name!("strong") | local_name!("b") | local_name!("summary") => {
                 merge_children_with_mark(node, paragraph, Some(TextMark::default().bold()));
             }
             local_name!("del") | local_name!("s") => {
@@ -654,6 +656,19 @@ fn parse_node(
                 })
             }
             local_name!("style") | local_name!("script") => None,
+            // Space patch: a `<details>` summary reads as a bold line above its content (the
+            // block doesn't collapse).
+            local_name!("summary") => {
+                let mut children: Vec<BlockNode> = vec![];
+                consume_paragraph(&mut children, paragraph);
+                // `parse_paragraph` marks a summary's text bold, like `<strong>`.
+                parse_paragraph(paragraph, node);
+                consume_paragraph(&mut children, paragraph);
+                (!children.is_empty()).then_some(BlockNode::Root {
+                    children,
+                    span: None,
+                })
+            }
             _ => {
                 if BLOCK_ELEMENTS.contains(&name.local.trim()) {
                     let mut children: Vec<BlockNode> = vec![];

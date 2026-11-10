@@ -2527,7 +2527,7 @@ mod tests {
         assert_eq!(
             highlight_runs(paragraph),
             [
-                ("highlighted".into(), gpui::rgb(0xfef08a).into()),
+                ("highlighted".into(), super::super::html::default_mark_color()),
                 (
                     "red".into(),
                     gpui::Rgba::try_from("#ff000059").unwrap().into()
