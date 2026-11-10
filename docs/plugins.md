@@ -36,6 +36,8 @@ command = "${target}/space-audit"   # or any executable; relative args resolve a
 | `sandbox` | `sandbox/confine` | gives agents your argv to spawn (one provider at a time) |
 | `session-store` | `store/list`, `store/load`, `store/write`, `store/delete`, `store/data-dir` | saves threads through you (one provider at a time; needs `uses = ["read:transcript"]`). `plugin/initialize`'s `spaceDir` is Space's folder; `plugins/session-store` is the bundled one |
 | `session-title` | `title/generate` | asks you to name a thread after its first message (one provider at a time; needs `uses = ["read:transcript"]`); keeps the first-line title if you fail or take over 15 s. `plugins/titles` is the bundled one |
+| `trajectory` | `trajectory/read`, `trajectory/detail`, `trajectory/stats`; send `trajectory/changed` | shows your rows in the Trajectory tab (one provider; must observe `trace`, which needs `uses = ["read:trace"]`). `plugins/trajectory` |
+| `terminal` | `terminal/open`, `attach`, `list`, `close`, `input`, `resize`; send `terminal/output`, `title`, `exited` | runs the terminal pane's shells through you and draws their output (one provider; `terminal_*` in the Rust SDK). `plugins/terminal` |
 
 Hook `tools/pre-execute`: answer `hooks/tools.preExecute` for every tool call of every agent.
 
@@ -48,8 +50,9 @@ stops while none runs. Without a provider it isn't started, and Settings says wh
 Declare everything else your plugin needs. Nothing undeclared is delivered or allowed:
 - `observes = ["turn/ended"]`: events you're told about (`events/observe`; `observe` in Rust):
   `session/created`, `turn/started`, `turn/ended` (with `stopReason` and whether the user is
-  `watching` the thread), `tool/held` (a guard can't decide; the reason), `tool/result` and
-  `thread/titled`. They come one at a time, in order, and nothing waits on you; fall too far behind
+  `watching` the thread), `tool/held` (a guard can't decide; the reason), `tool/result`,
+  `thread/titled` (generated or renamed) and `thread/deleted`. `trace` (every model request and tool
+  call, as `trace/record` batches; needs `read:trace`) is observed the same way but never dropped. They come one at a time, in order, and nothing waits on you; fall too far behind
   and your own newest events are dropped.
 - `uses = ["host/notify"]`: host services you call (`Host::request` in Rust). Other calls fail with
   `-32003` (not permitted). `host/notify {title, body?, sessionId?, banner, sound}` posts a macOS
