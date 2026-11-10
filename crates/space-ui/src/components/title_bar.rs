@@ -48,6 +48,8 @@ pub struct TitleBarNav {
     pub on_back: ClickHandler,
     pub on_forward: ClickHandler,
     pub on_new_thread: ClickHandler,
+    /// The current thread is a new one (nothing sent yet): the button shows it's where you are.
+    pub new_thread_active: bool,
 }
 
 impl TitleBarNav {
@@ -62,6 +64,7 @@ impl TitleBarNav {
             on_back: noop.clone(),
             on_forward: noop.clone(),
             on_new_thread: noop,
+            new_thread_active: false,
         }
     }
 
@@ -95,7 +98,7 @@ impl TitleBarNav {
 
     fn new_thread(&self) -> Stateful<Div> {
         let f = self.on_new_thread.clone();
-        icon_button("new-thread", Lucide::SquarePen, true, false)
+        icon_button("new-thread", Lucide::SquarePen, true, self.new_thread_active)
             .tip_action("New thread", &NewThread)
             .on_click(move |e, w, cx| f(e, w, cx))
     }

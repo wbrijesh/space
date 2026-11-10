@@ -682,6 +682,7 @@ impl SpaceApp {
         }
         self.show_settings = false;
         if self.selected != Some(key) {
+            let left = self.selected;
             let draft = self.input.read(cx).value().to_string();
             if let Some(prev) = self.selected {
                 if let Some(t) = self.thread_mut(prev) {
@@ -695,6 +696,14 @@ impl SpaceApp {
             self.selected = Some(key);
             let draft = self.thread(key).map(|t| t.draft.clone()).unwrap_or_default();
             self.input.update(cx, |s, cx| s.set_value(draft, window, cx));
+            // A new thread left untouched (nothing typed, attached or open in a terminal) goes:
+            // it isn't listed, so nothing would lead back to it.
+            if let Some(prev) = left
+                && self.thread(prev).is_some_and(|t| t.is_empty() && t.draft.trim().is_empty() && t.attachments.is_empty() && t.images.is_empty())
+                && !self.has_terminals(prev)
+            {
+                self.drop_thread(prev, cx);
+            }
         }
         if let Some(t) = self.thread_mut(key) {
             t.unread = 0;
@@ -747,6 +756,11 @@ impl SpaceApp {
                 self.close_settings(window, cx);
             }
             self.focus_composer(window, cx);
+            return;
+        }
+        // A new thread in this folder you started typing in and left: back to it.
+        if let Some(key) = self.threads.iter().rev().find(|t| t.is_empty() && t.cwd == dir).map(|t| t.key) {
+            self.select_thread(key, window, cx);
             return;
         }
         let key = self.add_thread(dir);

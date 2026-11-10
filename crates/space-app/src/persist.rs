@@ -286,7 +286,7 @@ impl SpaceApp {
 
     /// Take a thread off the list: stop its turn (answering any open permission card) and its
     /// terminals, and forget it.
-    fn drop_thread(&mut self, key: u64, cx: &mut Context<Self>) -> Option<Thread> {
+    pub(crate) fn drop_thread(&mut self, key: u64, cx: &mut Context<Self>) -> Option<Thread> {
         let ix = self.threads.iter().position(|t| t.key == key)?;
         let thread = self.threads.remove(ix);
         self.close_thread_terminals(key, cx);

@@ -67,6 +67,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         on_back: click(cx, |this, w, cx| this.go_back(w, cx)),
         on_forward: click(cx, |this, w, cx| this.go_forward(w, cx)),
         on_new_thread: click(cx, |this, w, cx| this.new_thread(None, w, cx)),
+        new_thread_active: !app.show_settings && app.current().is_some_and(Thread::is_empty),
     };
 
     // The terminal pane, when the current thread has it open (and a terminal plugin runs).
@@ -212,6 +213,9 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
         .threads
         .iter()
         .rev()
+        // A new thread isn't listed until its first message is sent (the new-thread button
+        // shows it's the current one).
+        .filter(|t| !t.is_empty())
         .map(|t| {
             let key = t.key;
             // On the Settings page no thread is shown, so none is highlighted.
