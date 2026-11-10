@@ -1227,6 +1227,8 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             ex("assistant markdown", Rc::new(|| agent_message("preview-md", MARKDOWN))),
             ex("code blocks", Rc::new(|| agent_message("preview-code", CODE_BLOCKS))),
             ex("every markdown element", Rc::new(|| agent_message("preview-md-all", MARKDOWN_ALL))),
+            Example::new("every markdown element, narrow", |_, _| agent_message("preview-md-all-narrow", MARKDOWN_ALL).into_any_element())
+                .width(px(380.)),
             Example::new("code blocks, narrow", |_, _| agent_message("preview-code-narrow", CODE_BLOCKS).into_any_element())
                 .width(px(380.)),
         ]),

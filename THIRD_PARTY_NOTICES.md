@@ -208,6 +208,8 @@ this repository at `vendor/gpui-base`, with the changes described in its `SPACE_
 | av-scenechange | 0.14.1 | MIT |
 | av1-grain | 0.2.5 | BSD-2-Clause |
 | avif-serialize | 0.8.9 | BSD-3-Clause |
+| aws-lc-rs | 1.19.0 | ISC AND (Apache-2.0 OR ISC) |
+| aws-lc-sys | 0.47.0 | ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0) |
 | backtrace | 0.3.77 | MIT OR Apache-2.0 |
 | base62 | 2.2.6 | MIT |
 | base64 | 0.22.1 | MIT OR Apache-2.0 |
@@ -248,6 +250,7 @@ this repository at `vendor/gpui-base`, with the changes described in its `SPACE_
 | chacha20 | 0.10.2 | MIT OR Apache-2.0 |
 | chrono | 0.4.45 | MIT OR Apache-2.0 |
 | cipher | 0.4.4 | MIT OR Apache-2.0 |
+| cmake | 0.1.58 | MIT OR Apache-2.0 |
 | cocoa | 0.25.0 | MIT OR Apache-2.0 |
 | cocoa-foundation | 0.1.2 | MIT OR Apache-2.0 |
 | codespan-reporting | 0.13.1 | Apache-2.0 |
@@ -350,6 +353,7 @@ this repository at `vendor/gpui-base`, with the changes described in its `SPACE_
 | foreign-types-shared | 0.3.1 | MIT/Apache-2.0 |
 | form_urlencoded | 1.2.2 | MIT OR Apache-2.0 |
 | freetype-sys | 0.20.1 | MIT |
+| fs_extra | 1.3.0 | MIT |
 | futf | 0.1.5 | MIT / Apache-2.0 |
 | futures | 0.3.34 | MIT OR Apache-2.0 |
 | futures-channel | 0.3.34 | MIT OR Apache-2.0 |
@@ -387,6 +391,7 @@ this repository at `vendor/gpui-base`, with the changes described in its `SPACE_
 | gpui-pre-collections | 0.3.11 | Apache-2.0 |
 | gpui-pre-derive-refineable | 0.3.11 | Apache-2.0 |
 | gpui-pre-http-client | 0.3.11 | Apache-2.0 |
+| gpui-pre-http-client-tls | 0.3.11 | Apache-2.0 |
 | gpui-pre-ios | 0.3.11 | Apache-2.0 |
 | gpui-pre-linux | 0.3.11 | Apache-2.0 |
 | gpui-pre-macos | 0.3.11 | Apache-2.0 |
@@ -394,6 +399,7 @@ this repository at `vendor/gpui-base`, with the changes described in its `SPACE_
 | gpui-pre-platform | 0.3.11 | Apache-2.0 |
 | gpui-pre-refineable | 0.3.11 | Apache-2.0 |
 | gpui-pre-reqwest | 0.12.15 | MIT OR Apache-2.0 |
+| gpui-pre-reqwest-client | 0.3.11 | Apache-2.0 |
 | gpui-pre-scheduler | 0.3.11 | Apache-2.0 |
 | gpui-pre-shared-string | 0.3.11 | Apache-2.0 |
 | gpui-pre-sum-tree | 0.3.11 | Apache-2.0 |
@@ -887,6 +893,7 @@ this repository at `vendor/gpui-base`, with the changes described in its `SPACE_
 | web-sys | 0.3.107 | MIT OR Apache-2.0 |
 | web-time | 1.1.0 | MIT OR Apache-2.0 |
 | webpki-root-certs | 1.0.11 | CDLA-Permissive-2.0 |
+| webpki-roots | 1.0.11 | CDLA-Permissive-2.0 |
 | weezl | 0.1.12 | MIT OR Apache-2.0 |
 | wgpu | 30.0.1 | MIT OR Apache-2.0 |
 | wgpu-core | 30.0.1 | MIT OR Apache-2.0 |
