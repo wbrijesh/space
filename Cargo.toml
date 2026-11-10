@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "plugins/permissions", "plugins/alerts", "plugins/session-store", "plugins/titles", "plugins/trajectory", "plugins/terminal"]
+exclude = ["vendor"]
 
 [workspace.package]
 edition = "2024"
@@ -27,3 +28,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
 tempfile = "3"
+
+# gpui-base 0.9.0 with one change: a code block's actions are a full-width header row above the
+# code (language and Copy in Space), instead of a box floating over its top-right corner. See
+# vendor/gpui-base/SPACE_PATCH.md.
+[patch.crates-io]
+gpui-base = { path = "vendor/gpui-base" }

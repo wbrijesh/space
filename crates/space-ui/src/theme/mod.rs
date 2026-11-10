@@ -261,5 +261,68 @@ pub fn install(cx: &mut App) {
         // Switches: accent track when on (`primary`), a quiet track when off, white thumb.
         t.switch = border_strong();
         t.switch_thumb = on_accent();
+        t.highlight_theme = syntax_theme();
     });
+}
+
+/// Code blocks' syntax colors: GitHub Dark, as the terminal uses.
+fn syntax_theme() -> std::sync::Arc<gpui::component::highlighter::HighlightTheme> {
+    use gpui::component::highlighter::HighlightTheme;
+    let c = |hex: &str| serde_json::json!({ "color": hex });
+    let (red, blue, light_blue, purple, orange, green, gray) =
+        ("#ff7b72", "#79c0ff", "#a5d6ff", "#d2a8ff", "#ffa657", "#7ee787", "#8b949e");
+    let style = serde_json::json!({
+        "editor.background": "#262626",
+        "editor.foreground": "#ececec",
+        "syntax": {
+            "attribute": c(blue),
+            "boolean": c(blue),
+            "comment": c(gray),
+            "comment.doc": c(gray),
+            "constant": c(blue),
+            "constructor": c(purple),
+            "embedded": c("#ececec"),
+            "enum": c(orange),
+            "function": c(purple),
+            "keyword": c(red),
+            "label": c(blue),
+            "link_text": c(light_blue),
+            "link_uri": c(light_blue),
+            "number": c(blue),
+            "operator": c(red),
+            "preproc": c(red),
+            "property": c(blue),
+            "punctuation.special": c(red),
+            "string": c(light_blue),
+            "string.escape": c(blue),
+            "string.regex": c(light_blue),
+            "string.special": c(light_blue),
+            "string.special.symbol": c(blue),
+            "tag": c(green),
+            "tag.doctype": c(gray),
+            "text.literal": c(light_blue),
+            "title": c(blue),
+            "type": c(orange),
+            "variable.special": c(blue),
+            "variant": c(blue),
+        },
+    });
+    let theme = serde_json::json!({ "name": "Space", "appearance": "dark", "style": style });
+    match serde_json::from_value::<HighlightTheme>(theme) {
+        Ok(theme) => std::sync::Arc::new(theme),
+        Err(e) => {
+            eprintln!("syntax theme: {e}");
+            HighlightTheme::default_dark()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn syntax_theme_parses() {
+        let theme = super::syntax_theme();
+        assert_eq!(theme.name, "Space", "fell back to the default theme");
+        assert!(theme.keyword.is_some() && theme.string.is_some());
+    }
 }

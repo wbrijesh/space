@@ -13,7 +13,7 @@ dev = []
 [dependencies]
 space-core.workspace = true
 space-terminal.workspace = true
-gpui = { package = "gpui-kit", version = "0.9.0" }
+gpui = { package = "gpui-kit", version = "0.9.0", features = ["syntect"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 serde_json.workspace = true
 similar = "2"

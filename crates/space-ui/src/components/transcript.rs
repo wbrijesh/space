@@ -244,7 +244,7 @@ pub fn agent_message(id: impl Into<ElementId>, markdown: &str) -> Div {
 
 /// An agent reply; `fade`: it's streaming, so text it gains fades in (word by word).
 pub fn agent_message_streaming(id: impl Into<ElementId>, markdown: &str, fade: bool) -> Div {
-    let view = TextView::markdown(id, markdown.trim().to_string()).selectable(true);
+    let view = TextView::markdown(id, markdown.trim().to_string()).selectable(true).code_block_actions(code_block_header);
     let view = if fade {
         view.motion(
             TextViewMotion::default()
@@ -257,11 +257,69 @@ pub fn agent_message_streaming(id: impl Into<ElementId>, markdown: &str, fade: b
     div().text_size(text::BODY).line_height(relative(text::LEADING_PROSE)).text_color(color::text()).child(view)
 }
 
+/// A code block's top bar: its language on the left, Copy on the right (a check and "Copied"
+/// for a moment after a click), over a rule. Drawn by the text view above the code.
+pub fn code_block_header(block: &gpui::base::text::CodeBlock, window: &mut Window, cx: &mut App) -> AnyElement {
+    const COPIED_FOR: std::time::Duration = std::time::Duration::from_millis(1500);
+    let code = block.code();
+    let lang = block.lang().filter(|l| !l.is_empty());
+    // One "copied" moment per block, known by its text.
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (lang.as_deref(), code.as_ref()).hash(&mut h);
+        h.finish()
+    };
+    let copied_at = window.use_keyed_state(SharedString::from(format!("code-copied-{key}")), cx, |_, _| None::<std::time::Instant>);
+    let copied = copied_at.read(cx).is_some_and(|at| at.elapsed() < COPIED_FOR);
+    let copy = div()
+        .id("copy")
+        .flex()
+        .items_center()
+        .gap_1()
+        .h(px(24.))
+        .px_2()
+        .rounded(radius::SM)
+        .text_size(text::XS)
+        .text_color(color::text_2())
+        .cursor_pointer()
+        .hover(|s| s.bg(color::hover()).text_color(color::text()))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(Icon::new(if copied { Lucide::Check } else { Lucide::Copy }).size(size::ICON_SM))
+        .child(if copied { "Copied" } else { "Copy" })
+        .on_click(move |_, window, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(code.trim_end_matches('\n').to_string()));
+            copied_at.update(cx, |at, cx| {
+                *at = Some(std::time::Instant::now());
+                cx.notify();
+            });
+            window
+                .spawn(cx, async move |cx| {
+                    cx.background_executor().timer(COPIED_FOR).await;
+                    let _ = cx.update(|window, _| window.refresh());
+                })
+                .detach();
+        });
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .h(px(34.))
+        .pl_4()
+        .pr_1p5()
+        .border_b_1()
+        .border_color(color::border())
+        .font_family(text::UI_FONT)
+        .child(div().text_size(text::XS).text_color(color::text_3()).child(lang.unwrap_or_default()))
+        .child(copy)
+        .into_any_element()
+}
+
 /// An agent reply drawn from its own [`TextViewState`] (kept by the app, so find can read its
 /// text and highlight it); `fade`: it's streaming. `on_reveal` scrolls the transcript to a
 /// line the state was asked to reveal.
 pub fn agent_reply(state: &Entity<TextViewState>, fade: bool, on_reveal: Option<RevealHandler>) -> Div {
-    let mut view = TextView::new(state).selectable(true);
+    let mut view = TextView::new(state).selectable(true).code_block_actions(code_block_header);
     if fade {
         view = view.motion(
             TextViewMotion::default()
@@ -865,6 +923,12 @@ Before any of that, make sure the tests pass and lint is clean, and that the ter
 ```rust\nlet agent = host.start_agent(\"pi-agent\").await?;\nlet session = agent.new_session(dir).await?;\n```\n\n\
 Invalid manifests are reported, not fatal.";
 
+    pub const CODE_BLOCKS: &str = "Here are three:\n\n\
+```rust\nfn main() {\n    // Greet the world.\n    println!(\"Hello, world! {}\", 42);\n}\n```\n\n\
+```typescript\nconst greet = (name: string): string => `Hello, ${name}!`;\nconsole.log(greet(\"world\"));\n```\n\n\
+```python\ndef main() -> None:\n    print(\"Hello, world!\")\n\nif __name__ == \"__main__\":\n    main()\n```\n\n\
+```\nno language: plain text\n```";
+
     pub fn tool(status: ToolStatus, output: &str) -> ToolCallInfo {
         ToolCallInfo {
             id: "t1".into(),
@@ -1043,6 +1107,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 }),
             ),
             ex("assistant markdown", Rc::new(|| agent_message("preview-md", MARKDOWN))),
+            ex("code blocks", Rc::new(|| agent_message("preview-code", CODE_BLOCKS))),
         ]),
         ComponentPreview::new(Area::Transcript, "Thought", "Collapsed by default; expands to the reasoning.")
             .stacked()
