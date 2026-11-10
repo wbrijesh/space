@@ -49,6 +49,15 @@ pub mod color {
         /// your messages' bubbles; with a lighter border (and the rule under their top bar).
         code_bg = 0x0f0f0fff;
         code_border = 0x222222ff;
+        /// Links in replies (softer than the accent; no underline).
+        md_link = 0x58a6ffff;
+        /// Inline code in replies: a fill a step above the thread, with a hairline.
+        md_code_bg = 0x222222ff;
+        md_code_border = 0x2e2e2eff;
+        /// The bar beside a quote in a reply.
+        md_quote_bar = 0x4a4a4aff;
+        /// `<mark>` in a reply: a faint highlight.
+        md_mark = 0xbb800926;
         /// 1px hairlines.
         border = 0x2a2a2aff;
         /// Focused borders, tracks.
@@ -271,11 +280,13 @@ pub fn install(cx: &mut App) {
         t.switch_thumb = on_accent();
         t.highlight_theme = syntax_theme();
     });
-    code_block_style(cx);
+    markdown_style(cx);
 }
 
-/// Code blocks' background and border, on top of the text style gpui-component installs.
-fn code_block_style(cx: &mut App) {
+/// How replies' markdown looks (code blocks, headings, lists, quotes, tables, links, inline
+/// code), on top of the text style gpui-component installs. Replies use it through
+/// `TextViewDefaults`, so every text view gets the same look.
+fn markdown_style(cx: &mut App) {
     use gpui::base::text::TextViewDefaults;
     let defaults = TextViewDefaults::global(cx);
     let Some(style) = defaults.style().cloned() else { return };
