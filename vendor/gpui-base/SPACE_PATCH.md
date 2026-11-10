@@ -8,4 +8,7 @@ view has `code_block_actions` (and the block doesn't scroll), the element they r
 full-width header row above the code, inside the block's frame, instead of a box floating over
 the block's top-right corner. Space draws the language on the left and Copy on the right there.
 
+Also, in `src/text/text_view.rs`, `TextViewDefaults::style` is public (it was `pub(crate)`),
+so Space can adjust the installed style (code blocks' background and border).
+
 To update gpui-base, copy the new version here and re-apply that change.

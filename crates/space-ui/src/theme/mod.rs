@@ -45,6 +45,10 @@ pub mod color {
         hover = 0x262626ff;
         /// Pressed / selected fill.
         pressed = 0x2e2e2eff;
+        /// Code blocks in replies: a little darker than the thread, so they stand apart from
+        /// your messages' bubbles; with a lighter border (and the rule under their top bar).
+        code_bg = 0x0f0f0fff;
+        code_border = 0x2e2e2eff;
         /// 1px hairlines.
         border = 0x2a2a2aff;
         /// Focused borders, tracks.
@@ -263,6 +267,18 @@ pub fn install(cx: &mut App) {
         t.switch_thumb = on_accent();
         t.highlight_theme = syntax_theme();
     });
+    code_block_style(cx);
+}
+
+/// Code blocks' background and border, on top of the text style gpui-component installs.
+fn code_block_style(cx: &mut App) {
+    use gpui::base::text::TextViewDefaults;
+    let defaults = TextViewDefaults::global(cx);
+    let Some(style) = defaults.style().cloned() else { return };
+    let mut block = style.code_block().clone();
+    block.border_color = Some(color::code_border());
+    let style = style.with_code_background(color::code_bg()).with_code_block(block);
+    defaults.with_style(style).install(cx);
 }
 
 /// Code blocks' syntax colors: GitHub Dark, as the terminal uses.

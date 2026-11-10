@@ -42,7 +42,7 @@ pub struct MessageActions {
     pub group: SharedString,
     /// What copy copies; no copy button without it.
     pub copy_text: Option<SharedString>,
-    /// Copy was just clicked: a check and "Copied".
+    /// Copy was just clicked: a check.
     pub copied: bool,
     pub at_ms: Option<u64>,
     pub now_ms: u64,
@@ -71,7 +71,6 @@ pub fn message_actions(a: MessageActions, h: &ActionHandlers) -> Div {
             .cursor_pointer()
             .hover(|s| s.bg(color::hover()).text_color(color::text()))
             .child(Icon::new(if copied { Lucide::Check } else { Lucide::Copy }).size(size::ICON))
-            .when(copied, |d| d.child("Copied"))
             .when(!copied, |d| d.tip("Copy"))
             .on_click(move |_, w, cx| on_copy(row.clone(), copy_text.clone(), w, cx))
             .into_any_element()

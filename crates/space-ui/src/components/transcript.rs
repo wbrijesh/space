@@ -19,6 +19,7 @@ use super::images::{OpenPicsHandler, Pic, message_images};
 use super::message_actions::{ActionHandlers, MessageActions, message_actions};
 use super::turns::{TurnFold, TurnToggleHandler, folds_away, foldable_turns, turn_summary_row};
 use super::loaders::Spinner;
+use super::tip::TipExt as _;
 use super::widgets::{pill_button, status_dot};
 use crate::format;
 use crate::theme::{color, radius, size, text};
@@ -319,8 +320,8 @@ pub fn language_name(lang: &str) -> String {
     chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
-/// A code block's top bar: its language on the left, Copy on the right (a check and "Copied"
-/// for a moment after a click), over a rule. Drawn by the text view above the code.
+/// A code block's top bar: its language on the left, a Copy icon on the right (a check for a
+/// moment after a click), over a rule. Drawn by the text view above the code.
 pub fn code_block_header(block: &gpui::base::text::CodeBlock, window: &mut Window, cx: &mut App) -> AnyElement {
     const COPIED_FOR: std::time::Duration = std::time::Duration::from_millis(1500);
     let code = block.code();
@@ -338,17 +339,15 @@ pub fn code_block_header(block: &gpui::base::text::CodeBlock, window: &mut Windo
         .id("copy")
         .flex()
         .items_center()
-        .gap_1()
-        .h(px(24.))
-        .px_2()
+        .justify_center()
+        .size(px(24.))
         .rounded(radius::SM)
-        .text_size(text::XS)
-        .text_color(color::text_2())
+        .text_color(if copied { color::text() } else { color::text_2() })
         .cursor_pointer()
         .hover(|s| s.bg(color::hover()).text_color(color::text()))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(Icon::new(if copied { Lucide::Check } else { Lucide::Copy }).size(size::ICON_SM))
-        .child(if copied { "Copied" } else { "Copy" })
+        .when(!copied, |d| d.tip("Copy"))
         .on_click(move |_, window, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(code.trim_end_matches('\n').to_string()));
             copied_at.update(cx, |at, cx| {
@@ -370,8 +369,7 @@ pub fn code_block_header(block: &gpui::base::text::CodeBlock, window: &mut Windo
         .pl_4()
         .pr_1p5()
         .border_b_1()
-        // Darker than the block: the thread's background shows through as a groove.
-        .border_color(color::bg())
+        .border_color(color::code_border())
         .font_family(text::UI_FONT)
         .child(div().text_size(text::XS).text_color(color::text_3()).child(lang.map(|l| language_name(&l)).unwrap_or_default()))
         .child(copy)
