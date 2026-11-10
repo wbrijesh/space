@@ -257,6 +257,68 @@ pub fn agent_message_streaming(id: impl Into<ElementId>, markdown: &str, fade: b
     div().text_size(text::BODY).line_height(relative(text::LEADING_PROSE)).text_color(color::text()).child(view)
 }
 
+/// How a code block's language is written (`typescript` → TypeScript, `rs` → Rust). Unknown
+/// ones keep what the fence says, with a capital first letter.
+pub fn language_name(lang: &str) -> String {
+    let known = match lang.to_ascii_lowercase().as_str() {
+        "rust" | "rs" => "Rust",
+        "typescript" | "ts" => "TypeScript",
+        "tsx" => "TSX",
+        "javascript" | "js" | "mjs" | "cjs" => "JavaScript",
+        "jsx" => "JSX",
+        "python" | "py" => "Python",
+        "go" | "golang" => "Go",
+        "c" => "C",
+        "cpp" | "c++" | "cc" | "cxx" | "hpp" => "C++",
+        "csharp" | "c#" | "cs" => "C#",
+        "objective-c" | "objc" => "Objective-C",
+        "java" => "Java",
+        "kotlin" | "kt" => "Kotlin",
+        "swift" => "Swift",
+        "ruby" | "rb" => "Ruby",
+        "php" => "PHP",
+        "lua" => "Lua",
+        "zig" => "Zig",
+        "elixir" | "ex" | "exs" => "Elixir",
+        "haskell" | "hs" => "Haskell",
+        "scala" => "Scala",
+        "dart" => "Dart",
+        "r" => "R",
+        "bash" => "Bash",
+        "sh" | "shell" => "Shell",
+        "zsh" => "Zsh",
+        "fish" => "Fish",
+        "powershell" | "ps1" => "PowerShell",
+        "console" | "terminal" => "Terminal",
+        "html" => "HTML",
+        "xml" => "XML",
+        "svg" => "SVG",
+        "css" => "CSS",
+        "scss" => "SCSS",
+        "json" => "JSON",
+        "jsonc" => "JSONC",
+        "json5" => "JSON5",
+        "yaml" | "yml" => "YAML",
+        "toml" => "TOML",
+        "ini" => "INI",
+        "sql" => "SQL",
+        "graphql" | "gql" => "GraphQL",
+        "markdown" | "md" => "Markdown",
+        "diff" | "patch" => "Diff",
+        "dockerfile" | "docker" => "Dockerfile",
+        "makefile" | "make" => "Makefile",
+        "nix" => "Nix",
+        "proto" | "protobuf" => "Protocol Buffers",
+        "text" | "txt" | "plaintext" => "Text",
+        _ => "",
+    };
+    if !known.is_empty() {
+        return known.to_string();
+    }
+    let mut chars = lang.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
 /// A code block's top bar: its language on the left, Copy on the right (a check and "Copied"
 /// for a moment after a click), over a rule. Drawn by the text view above the code.
 pub fn code_block_header(block: &gpui::base::text::CodeBlock, window: &mut Window, cx: &mut App) -> AnyElement {
@@ -308,9 +370,10 @@ pub fn code_block_header(block: &gpui::base::text::CodeBlock, window: &mut Windo
         .pl_4()
         .pr_1p5()
         .border_b_1()
-        .border_color(color::border())
+        // Darker than the block: the thread's background shows through as a groove.
+        .border_color(color::bg())
         .font_family(text::UI_FONT)
-        .child(div().text_size(text::XS).text_color(color::text_3()).child(lang.unwrap_or_default()))
+        .child(div().text_size(text::XS).text_color(color::text_3()).child(lang.map(|l| language_name(&l)).unwrap_or_default()))
         .child(copy)
         .into_any_element()
 }
@@ -1160,4 +1223,19 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         .stacked()
         .examples([collapsed, expanded, failed, no_times]),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::language_name;
+
+    #[test]
+    fn language_names() {
+        assert_eq!(language_name("typescript"), "TypeScript");
+        assert_eq!(language_name("rust"), "Rust");
+        assert_eq!(language_name("RS"), "Rust");
+        assert_eq!(language_name("json"), "JSON");
+        assert_eq!(language_name("elm"), "Elm");
+        assert_eq!(language_name(""), "");
+    }
 }
