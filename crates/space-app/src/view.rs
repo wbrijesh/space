@@ -31,7 +31,7 @@ use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
 
 use crate::app::{
-    CloseSettings, CloseTerminal, CloseThread, CyclePermissionMode, FocusComposer, GoBack, GoForward, MaximizeTerminal, NewTerminal, NewThread,
+    CloseSettings, CloseTerminal, CloseThread, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizeTerminal, NewTerminal, NewThread,
     NextTerminal, OpenSettings, PreviousTerminal, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleTerminal, ToggleTrajectory,
 };
 use crate::settings::SaveKind;
@@ -103,6 +103,8 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .track_focus(&app.focus)
         .on_action(cx.listener(|this, _: &NewThread, window, cx| this.new_thread(None, window, cx)))
         .on_action(cx.listener(|this, _: &CloseThread, window, cx| this.close_current_thread(window, cx)))
+        .on_action(cx.listener(|this, _: &NextThread, window, cx| this.step_thread(1, window, cx)))
+        .on_action(cx.listener(|this, _: &PreviousThread, window, cx| this.step_thread(-1, window, cx)))
         .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
         .on_action(cx.listener(|this, _: &ToggleTrajectory, window, cx| this.toggle_trajectory(window, cx)))
         .on_action(cx.listener(|this, _: &GoBack, window, cx| this.go_back(window, cx)))
@@ -118,11 +120,28 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &PreviousTerminal, window, cx| this.step_terminal(-1, window, cx)))
         .on_action(cx.listener(|this, _: &MaximizeTerminal, _, cx| this.toggle_terminal_maximized(cx)))
         .on_action(cx.listener(|this, _: &Quit, window, cx| this.quit(window, cx)))
-        // ⌘ held turns the composer's queue button white (after this step).
-        .on_modifiers_changed(cx.listener(|this, e: &ModifiersChangedEvent, _, cx| {
-            if this.cmd_held != e.modifiers.platform {
-                this.cmd_held = e.modifiers.platform;
+        // ⌘ held turns the composer's queue button white (after this step), and alone numbers
+        // the sidebar rows; letting go goes to the row whose number was typed (see `jump`).
+        .on_modifiers_changed(cx.listener(|this, e: &ModifiersChangedEvent, window, cx| {
+            let m = &e.modifiers;
+            let alone = m.platform && !m.alt && !m.control && !m.shift;
+            if this.cmd_held != m.platform || this.cmd_alone != alone {
+                let released = this.cmd_held && !m.platform;
+                if !this.cmd_held && m.platform {
+                    this.cmd_digits.clear();
+                }
+                this.cmd_held = m.platform;
+                this.cmd_alone = alone;
+                if released {
+                    this.cmd_released(window, cx);
+                }
                 cx.notify();
+            }
+        }))
+        // A digit with ⌘ held picks a sidebar row; it goes no further.
+        .capture_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+            if e.keystroke.modifiers.platform && this.cmd_key(&e.keystroke, cx) {
+                cx.stop_propagation();
             }
         }))
         // Esc in the composer while the agent works stops it (open panels and menus close first).
@@ -209,6 +228,7 @@ fn queued_pic(p: &crate::images::Prepared) -> Pic {
 }
 
 fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceApp>) -> impl IntoElement {
+    let shortcuts = app.row_shortcuts();
     let rows = app
         .threads
         .iter()
@@ -216,7 +236,8 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
         // A new thread isn't listed until its first message is sent (the new-thread button
         // shows it's the current one).
         .filter(|t| !t.is_empty())
-        .map(|t| {
+        .zip(shortcuts)
+        .map(|(t, shortcut)| {
             let key = t.key;
             // On the Settings page no thread is shown, so none is highlighted.
             let selected = app.selected == Some(key) && !app.show_settings;
@@ -233,13 +254,14 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
                 .selected(selected)
                 .indicator(indicator)
                 .terminal(!selected && app.terminals.active(key))
+                .shortcut(shortcut)
                 .on_click(cx.listener(move |this, _, w, cx| this.select_thread(key, w, cx)))
                 .on_close(cx.listener(move |this, _, w, cx| this.confirm_close_thread(key, w, cx)))
                 .into_any_element()
         })
         .collect();
 
-    sidebar_column(SidebarTitleBar::new(nav).shown(shown), rows)
+    sidebar_column(SidebarTitleBar::new(nav).shown(shown), rows, &app.sidebar_scroll)
 }
 
 /// The thread's body with the terminal pane beside it (or instead of it, maximized).

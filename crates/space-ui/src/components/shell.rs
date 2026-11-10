@@ -9,8 +9,9 @@ use super::widgets::{icon_button, pill_button};
 use crate::ClickHandler;
 use crate::theme::{color, radius, size, text};
 
-/// Sidebar column: title bar segment and the scrolling thread list.
-pub fn sidebar_column(title_bar: impl IntoElement, rows: Vec<AnyElement>) -> Div {
+/// Sidebar column: title bar segment and the scrolling thread list. The rows are the list's
+/// direct children, so `scroll` can tell which are in view.
+pub fn sidebar_column(title_bar: impl IntoElement, rows: Vec<AnyElement>, scroll: &ScrollHandle) -> Div {
     div()
         .flex()
         .flex_col()
@@ -27,7 +28,14 @@ pub fn sidebar_column(title_bar: impl IntoElement, rows: Vec<AnyElement>) -> Div
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
-                .child(div().flex().flex_col().gap_0p5().px_2().pt_1().pb_4().children(rows)),
+                .track_scroll(scroll)
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .px_2()
+                .pt_1()
+                .pb_4()
+                .children(rows),
         )
 }
 

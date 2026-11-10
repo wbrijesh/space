@@ -5,6 +5,8 @@ gpui::actions!(
     [
         NewThread,
         CloseThread,
+        NextThread,
+        PreviousThread,
         ToggleSidebar,
         ToggleTrajectory,
         GoBack,

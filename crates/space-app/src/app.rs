@@ -28,7 +28,7 @@ use space_core::{
 use space_ui::components::settings::FieldCheck;
 
 pub use space_ui::actions::{
-    CloseSettings, CloseThread, CyclePermissionMode, FocusComposer, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious,
+    CloseSettings, CloseThread, CyclePermissionMode, FocusComposer, NextThread, PreviousThread, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious,
     ScrollToBottom,
     ToggleSidebar,
     ToggleTrajectory,
@@ -155,6 +155,8 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-shift-enter", MaximizeTerminal, Some("Terminal")),
             KeyBinding::new("cmd-t", NewTerminal, Some("Terminal")),
             KeyBinding::new("cmd-w", CloseThread, None),
+            KeyBinding::new("cmd-alt-down", NextThread, None),
+            KeyBinding::new("cmd-alt-up", PreviousThread, None),
             // In the terminal, ⌘W closes the terminal tab instead.
             KeyBinding::new("cmd-w", CloseTerminal, Some("Terminal")),
             KeyBinding::new("ctrl-tab", NextTerminal, Some("Terminal")),
@@ -194,6 +196,8 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
                     MenuItem::separator(),
                     MenuItem::action("Back", GoBack),
                     MenuItem::action("Forward", GoForward),
+                    MenuItem::action("Next Thread", NextThread),
+                    MenuItem::action("Previous Thread", PreviousThread),
                     MenuItem::separator(),
                     MenuItem::action("Trajectory", ToggleTrajectory),
                     MenuItem::action("Terminal", ToggleTerminal),
@@ -301,6 +305,12 @@ pub struct SpaceApp {
     pub(crate) next_image_id: u64,
     /// Settings: the days closed threads are kept (made when the page is first shown).
     pub(crate) keep_closed_input: Option<Entity<gpui::component::input::InputState>>,
+    /// The sidebar's thread list (which rows are in view, for ⌘ numbers).
+    pub(crate) sidebar_scroll: ScrollHandle,
+    /// ⌘ alone is held: the sidebar shows row numbers.
+    pub(crate) cmd_alone: bool,
+    /// Digits typed while ⌘ is held: the row to go to when it's let go.
+    pub(crate) cmd_digits: String,
     /// Closed threads kept to be resumed (their saved summaries).
     pub(crate) closed_threads: Vec<space_core::protocol::service::ThreadMeta>,
     pub(crate) settings: SettingsStore,
@@ -497,6 +507,9 @@ impl SpaceApp {
             sidebar_shown: space_ui::theme::motion::Spring::new(1., space_ui::theme::motion::SIDEBAR_SLIDE),
             banner,
             closed_threads: Vec::new(),
+            sidebar_scroll: ScrollHandle::new(),
+            cmd_alone: false,
+            cmd_digits: String::new(),
             keep_closed_input: None,
             settings: SettingsStore::load(options.settings_path),
             show_settings: false,

@@ -21,6 +21,7 @@ mod attach;
 mod check;
 mod idle;
 mod images;
+mod jump;
 #[cfg(feature = "dev")]
 mod dev;
 #[cfg(feature = "dev")]

@@ -58,6 +58,8 @@ pub struct ThreadRow {
     terminal: bool,
     on_click: Option<ClickHandler>,
     on_close: Option<ClickHandler>,
+    /// While ⌘ is held: its number, and whether it still matches the digits typed so far.
+    shortcut: Option<(SharedString, bool)>,
 }
 
 impl ThreadRow {
@@ -71,7 +73,14 @@ impl ThreadRow {
             terminal: false,
             on_click: None,
             on_close: None,
+            shortcut: None,
         }
+    }
+
+    /// Show `number` on the right (⌘ is held); `matches`: the digits typed so far lead to it.
+    pub fn shortcut(mut self, shortcut: Option<(SharedString, bool)>) -> Self {
+        self.shortcut = shortcut;
+        self
     }
 
     pub fn selected(mut self, selected: bool) -> Self {
@@ -151,6 +160,7 @@ impl RenderOnce for ThreadRow {
             })
             .child(div().flex_1().min_w_0().truncate().child(self.title))
             .children(indicator)
+            .children(self.shortcut.map(|(n, matches)| shortcut_badge(n, matches)))
             .when_some(self.on_click, |d, f| d.on_click(move |e, w, cx| f(e, w, cx)));
         match self.on_close {
             Some(f) => row
@@ -162,6 +172,27 @@ impl RenderOnce for ThreadRow {
             None => row.into_any_element(),
         }
     }
+}
+
+/// A row's number while ⌘ is held: a small key cap. Rows the typed digits no longer lead to fade.
+fn shortcut_badge(number: SharedString, matches: bool) -> Div {
+    div()
+        .flex_none()
+        .h(px(18.))
+        .min_w(px(18.))
+        .px_1()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(radius::SM)
+        .border_1()
+        .border_color(color::border_strong())
+        .bg(color::surface_2())
+        .text_size(text::XS)
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(color::text_2())
+        .when(!matches, |d| d.opacity(0.35))
+        .child(number)
 }
 
 #[cfg(feature = "dev")]
@@ -187,6 +218,9 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 row("error", |r| r.indicator(RowIndicator::UnreadError)),
                 row("waiting for input", |r| r.indicator(RowIndicator::NeedsInput)),
                 row("terminal running", |r| r.terminal(true)),
+                row("⌘ held", |r| r.shortcut(Some(("3".into(), true)))),
+                row("⌘ held, selected and working", |r| r.selected(true).indicator(RowIndicator::Working).shortcut(Some(("12".into(), true)))),
+                row("⌘ held, not what's typed", |r| r.shortcut(Some(("4".into(), false)))),
             ]),
     ]
 }
