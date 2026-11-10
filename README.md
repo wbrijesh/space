@@ -1,189 +1,84 @@
 # Space
 
-A native macOS development environment built around projects, bots and knowledge. v0 is the
-foundation: a Rust/[GPUI](https://gpui.rs) **harness** that hosts out-of-process **plugins** over the
-[Agent Client Protocol](https://agentclientprotocol.com) (ACP), plus a first agent plugin built on the
-pi SDK. See [docs/architecture.md](docs/architecture.md) for the contract (manifest, discovery, ACP subset,
-`_space/*` extensions).
+A native macOS app for working with coding agents. A Rust/[GPUI](https://gpui.rs) harness runs
+everything else as out-of-process **plugins**: the agent (over the
+[Agent Client Protocol](https://agentclientprotocol.com)), guards, saved threads, titles, traces and the
+terminal. How it fits together: [docs/architecture.md](docs/architecture.md).
 
 ## Install
 
 ```
-brew install --cask wbrijesh/tools/space
+brew install --cask wbrijesh/tools/space                      # install
+brew update && brew upgrade --cask wbrijesh/tools/space       # update
 ```
 
-Apple Silicon, macOS 13 or later. Space uses your Claude subscription through the Claude CLI: install
-it (`brew install --cask claude-code`) and run `claude` once to sign in. Everything else, the plugins
-included, is inside the app. The app isn't notarized yet; the cask clears macOS's download mark so it
-opens normally (a zip downloaded by hand needs System Settings ▸ Privacy & Security ▸ Open Anyway once).
+Apple Silicon, macOS 13 or later. Space uses your Claude subscription through the Claude CLI: install it
+(`brew install --cask claude-code`) and run `claude` once to sign in. The app isn't notarized yet; the
+cask clears macOS's download mark so it opens normally.
 
-## Layout
-
-```
-crates/space-protocol   manifest types (space-plugin.toml), _space/* extension types, ACP re-exports
-crates/space-core       discovery · process supervisor · ACP client · session model (no UI deps)
-crates/space-ui         design tokens · animation clock · components (+ previews and gallery, `dev`)
-crates/space-app        GPUI desktop app, binary `Space` (app state, wiring, dev scenarios)
-plugins/pi-agent        TypeScript ACP agent on the pi SDK (Claude CLI subscription)
-plugins/space-ts.ts     one Bun executable for every bundled TypeScript plugin (`space-ts <id>`)
-plugins/permissions     permission modes: macOS sandbox, decision-model guardrail
-plugins/alerts          a notification or sound when an agent finishes or pauses
-plugins/session-store   saved threads in ~/.space/threads
-plugins/titles          thread titles from the thread's agent model
-plugins/trajectory      every thread's trace of model requests and tool calls (Trajectory tab)
-```
-
-## Prerequisites
-
-- macOS with **Xcode** installed, including the **Metal toolchain** (GPUI compiles Metal shaders).
-  `.cargo/config.toml` points `DEVELOPER_DIR` at `/Applications/Xcode.app`, so `xcode-select` can stay
-  on the Command Line Tools. Check: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun metal --version`.
-  If it is missing: `xcodebuild -downloadComponent MetalToolchain`.
-- Rust (stable, edition 2024; tested with 1.98).
-- [Bun](https://bun.sh) (the TypeScript plugins: dependencies, tests, and the `space-ts` executable).
-- The `claude` CLI, signed in. pi-agent uses your Claude subscription through it, so prompts cost usage.
-- Optional: [`just`](https://github.com/casey/just).
-
-## Commands
-
-**Run Space with `just run`** (or plain `just`). It's the only way to run it while developing:
-
-- It builds everything (the Rust workspace, every bundled plugin, pi-agent) and launches the app
-  through [dx](https://dioxuslabs.com) with live Rust edits: saving a file patches the running app in
-  about a second (render code, layout, styles; changing struct fields or `main` needs a rebuild:
-  press `r` in the dx window).
-- Plugins are separate processes: when a plugin's source (or a crate plugins are built from)
-  changes, the running app rebuilds that plugin and restarts it, a service plugin at once, the agent
-  once it's idle (threads load their sessions again). A build error shows as a banner, with the
-  details in the terminal.
-- Arguments go to the app: `just run ~/code/other` (another project), `just run --gallery` (the
-  component gallery), `just run --scenario list` / `--scenario <name>` (scripted states, stub agent).
-- Needs dx at GPUI's subsecond version: `cargo install dioxus-cli --version 0.7.10 --locked`.
-- It's a debug build; for real performance, check `just release`.
+## Using Space
 
 | | |
 |---|---|
-| `just run [ARGS]` | build everything and run Space (above) |
-| `just build` | `cargo build --workspace`, `bun install`, and `bun build --compile` of `target/debug/space-ts` |
-| `just release` | release build without dev tooling: `target/release/Space.app` with every plugin inside (`Contents/Helpers`, `Contents/Resources/plugins`), ad-hoc signed, zipped with its sha256 |
-| `just release-check` | `just release`, then unzip it outside the repo and run `Space --check-plugins` (every plugin and the agent must start from inside the app) |
-| `just publish` | release-check, tag `v<version>`, upload the zip to a GitHub release, update the cask in `wbrijesh/homebrew-tools` |
-| `just test` | all Rust tests; they use the scripted `space-stub-agent`, so they make no model calls |
-| `just lint` | clippy with `-D warnings` |
-| `just smoke ["PROMPT"]` | headless end-to-end run against pi-agent, printing events (billed); no window |
-| `just smoke-stub` | the same headless run against the stub agent (free) |
+| **Threads** | ⌘N new · ⌘W close · ⌘R rename · ⌘[ / ⌘] back / forward · ⌘⌥↑ / ⌘⌥↓ previous / next · hold ⌘ and type a row's number to jump · ⌘B sidebar |
+| **Composer** | ⏎ send · ⇧⏎ newline · ↑ / ↓ your earlier messages · ⌘L focus · ⇧⌘R next permission mode · Esc stops the agent |
+| **While the agent works** | ⏎ queues a message for when it's done · ⌘⏎ sends it into the running turn, after the current step |
+| **Transcript** | ⌘F find · ⌘G / ⇧⌘G next / previous · ⌘↓ scroll to the bottom · ⇧⌘T Trajectory |
+| **Terminal** | ⌘J (or ⌃\`) show / hide · ⌘T new tab · ⌘W close tab · ⌃Tab next tab · ⇧⌘⏎ maximize · ⌘K clear |
+| **App** | ⌘, Settings · ⌘Q quit (asks while a terminal runs something) |
+
+- **Permission modes** (the shield under the composer): Read Only, Workspace Write (default) or Full
+  access. Outside Read Only, a guardrail model checks every tool call and asks you when it isn't sure;
+  it needs an OpenAI key in Settings. See [plugins/permissions](plugins/permissions/README.md).
+- **Closing** a thread keeps it: a new, empty thread in the same folder offers it under **Resume**.
+  Closed threads are deleted after 30 days (Settings ▸ Threads).
+- **Titles** come from the agent's model after your first message. A name you give (⌘R) stays.
+- **Folders.** Each thread works in one folder, picked under the composer. Opened from Spotlight or the
+  Dock, Space starts where you worked last.
+- **Terminals** belong to a thread and start in its folder; they keep running while hidden.
+- **Trajectory** shows every model request and tool call of a thread
+  ([plugins/trajectory](plugins/trajectory/README.md)).
+- The agent sleeps after 30 minutes with nothing to do and wakes when you type.
+- Threads, settings and traces are kept in `~/.space`.
+
+## Developing
+
+Needs Xcode with its Metal toolchain (`xcodebuild -downloadComponent MetalToolchain` if
+`xcrun metal --version` fails), Rust stable, [Bun](https://bun.sh), [`just`](https://github.com/casey/just),
+dx at GPUI's version (`cargo install dioxus-cli --version 0.7.10 --locked`), and the `claude` CLI signed in.
+
+**`just run`** builds everything and starts Space with live reload: saving a Rust file patches the
+running app (struct fields or `main` need `r` in the dx window), and a changed plugin is rebuilt and
+restarted. Only one Space runs at a time: quit the installed one first, or `just run`'s exits at once.
+Arguments go to the app: a project folder, `--gallery`, or `--scenario list`.
+
+| | |
+|---|---|
+| `just run [ARGS]` | build everything and run Space |
+| `just test` | Rust tests and the TypeScript plugins' tests; a scripted stub agent, so no model calls |
+| `just lint` | clippy (with and without dev tooling) and the TypeScript typecheck |
 | `just protocol` | regenerate the TypeScript protocol bindings from the Rust types |
+| `just install` | release build into `~/Applications/Space.app` (Spotlight) |
+| `just release-check` | release build, then check every plugin starts from a copy of the app |
+| `just publish` | release-check, tag, GitHub release, update the cask; needs `packaging/release-notes/<version>.md` |
+| `just smoke` / `just smoke-stub` | headless end-to-end run against the real agent (billed) / the stub |
 
-Environment:
+Environment: `SPACE_AGENT=<id>` picks the agent plugin, `SPACE_PLUGIN_DIRS=a:b` replaces the bundled
+plugin folders, `SPACE_SETTINGS=<file>` another settings file, `SPACE_NOTIFY=0` no notifications,
+`SPACE_AUTOPROMPT="…"` sends a first prompt, `RUST_LOG=space_core=debug` logs. Dev-only ones:
+[docs/ui-development.md](docs/ui-development.md).
 
-- `SPACE_AGENT=<plugin id>` picks the agent plugin (default `pi-agent`, else the first agent found).
-- `SPACE_PLUGIN_DIRS=dir1:dir2` replaces the bundled plugin roots (`<repo>/plugins`).
-  `~/.space/plugins` and `<project>/.space/plugins` are still scanned.
-- `SPACE_AUTOPROMPT="…"` sends that prompt in the first thread once its session is up.
-- `SPACE_NOTIFY=0` turns off notifications and sounds. The bundled alerts plugin (`plugins/alerts`) plays a
-  sound when a turn ends in the thread you're watching, otherwise Space posts a macOS notification
-  (bundled app only); clicking it opens the thread. Both can be turned off in Settings (⌘,) ▸ Alerts.
-  Scenarios are silent unless `SPACE_NOTIFY=1`.
-- `SPACE_SETTINGS=<file>` uses that settings file instead of `~/.space/settings.json`. Scenarios always
-  use a temp file.
-- `RUST_LOG=space_core=debug` turns on logging (stderr).
-- Dev builds: `SPACE_CLOCK=paused|pin:0.35|speed:0.25` starts the animation clock in that state;
-  `SPACE_GALLERY_PAGE=<name>` opens a gallery page; `SPACE_SCRIPT=<file>` replays input. See
-  [docs/ui-development.md](docs/ui-development.md) for the gallery, scenarios and the clock.
-
-## App icon
-
-A black S (bottom bar, 68° stem, top bar of the same length, both ends square) on a flat apricot
-tile, #FFAF54 (halfway between amber and orange).
-`python3 scripts/make_app_icon.py` draws it into `crates/space-app/resources/`:
-
-- `AppIcon.icon`: Icon Composer bundle (the tile colour as its fill, the S as its layer). macOS 26 masks and
-  lights it, and uses it for the Dock, app switcher, Finder and notifications.
-- `Assets.car`: compiled from it with Xcode's `actool`; the release bundle (`scripts/bundle.sh`) ships it.
-- `AppIcon.png`: flattened, pre-masked copy; dx uses it for the bundle it builds (`crates/space-app/Dioxus.toml`).
-
-After changing the icon, macOS may keep showing the old one (cached per bundle id). Clear it with
-`rm -rf "$(getconf DARWIN_USER_CACHE_DIR)"/com.apple.{dock.iconcache,iconservices,iconservicesagent}; killall iconservicesagent Dock NotificationCenter`.
-
-## Using the app
-
-The app starts the agent plugin in the background on launch and opens a new thread. Settings ▸ Plugins
-lists every plugin and its status; if the agent can't start or exits, the thread says so with Restart.
-After 30 minutes with nothing running or waiting on you, the agent goes to sleep (its process stops;
-Settings ▸ Plugins says "Asleep"). Typing in a thread starts it again in the background and loads
-that thread's session; model and effort can still be changed meanwhile (`SPACE_AGENT_IDLE_SECS`
-shortens the wait, for testing).
-
-- **Sidebar**: a plain list of thread titles, newest first. A thread shows the first line of your first
-  message until the titles plugin names it (with the thread's model, or the one picked in Settings ▸
-  Titles); threads are saved and come back after a restart (right-click ▸ Delete Thread removes one). A
-  spinner shows while a thread works; a dot marks news you haven't seen (blue: reply, red: error,
-  yellow: waiting for your input). ⌘B hides the sidebar.
-- **Title bar**: sidebar toggle, back/forward through the threads you visited (⌘[ / ⌘]), new
-  thread (⌘N), and the current thread's title and folder. Drag it to move the window.
-- **Composer**: one row, **+** · text · send, while the text fits on one line. Longer text
-  switches the card to two zones: the text across the full width (growing upward to ten lines,
-  then scrolling) and **+** / send in a row below; it collapses again when the text fits. Enter
-  sends, Shift+Enter adds a newline. ↑ on the first line brings back the messages you sent in the thread, newest
-  first; ↓ on the last line goes forward and back to what you were typing (editing keeps the text). While the agent works, send
-  becomes Stop (`session/cancel`). **+** attaches files or folders (sent as ACP `resource_link`s);
-  images (PNG, JPEG, GIF, WebP, HEIC, TIFF, BMP) from **+**, a drop on the card or ⌘V become thumbnails
-  above the text instead and go to the agent as images (up to 20 per message; each is scaled to at most
-  1568 px on its long side and stripped of metadata such as location first).
-  Below the card: the project folder (switch it while the thread is empty, otherwise pick a folder
-  to start a new thread there), the model and thinking effort (both switch the session through
-  `_space/session/configure`; new threads start with the defaults from Settings), and a context ring
-  (hover for token counts). Next to the folder, the **permission mode** (shield menu, ⇧⌘R cycles): Read Only
-  (commands in the macOS sandbox, no edits), Workspace Write (the default) or Full access (asks to confirm
-  once per thread). The modes come from the permissions plugin ([plugins/permissions](plugins/permissions/README.md)):
-  in Workspace Write and Full access every tool call is first checked by a decision model (OpenAI; add the
-  key in Settings, where it's checked before it's saved). Until the key works, a yellow pill above the input
-  says why, with links (Open Settings, Retry now) and when it last tried and tries next, and
-  sending is blocked. If the check stops working mid-turn, the tool call waits (**Paused**, never run
-  unchecked), the thread shows a pause icon in the sidebar, and it goes on by itself once the check works
-  again, the key changes, or you switch the thread to Read Only.
-- **Transcript**: your messages as bubbles (their images above them: one shown whole, several as
-  tiles; click one to view it large, ← / → for the others, Esc closes), replies as markdown. Hovering
-  a message of yours shows how long ago you sent it (hover the time for the date) and Copy; hovering
-  an agent turn shows Copy (its last reply), the tokens it used ("Usage 9.4k tok"; click for the
-  breakdown: model, cache hit, uncached and cached input, cache write, output) and when it ended. Thinking
-  collapsed as "Thought for Ns", tool calls as compact rows that expand to their output, permission
-  cards (Allow/Reject). Once a turn finishes normally, its thinking and tool calls fold under one
-  "Completed in 2m 3s" row (click to open it again); its replies stay visible. Stopped, failed and
-  running turns stay open. A streaming reply flows in at an even pace, fading in word by word, and
-  opening or closing a row keeps it where it is. It follows new output while you're at the bottom; scroll up to read and it stays
-  put while the agent keeps working, with a round ↓ button above the composer. The button, ⌘↓ or
-  View ▸ Scroll to Bottom glide back down and follow again (sending a message jumps there too). In a
-  composer with several lines of text, ⌘↓ moves the caret to the end instead.
-- **Trajectory** (⌘⇧T, View ▸ Trajectory, or the Chat | Trajectory tabs above a thread; from the
-  bundled trajectory plugin): what went to and came from the model, request by request. A ledger of
-  SYSTEM (the system prompt and tools, again whenever they change), USER, CONTEXT (Space's hidden
-  sections, by plugin), ASSISTANT and TOOL rows, grouped by turn and step; an overview of input,
-  model (time to first token, then decoding) and tool time above it (drag to filter, scroll to
-  zoom, right-drag to pan, Esc clears); search; fold turns or calls; and an inspector per row:
-  prompt, tools and a diff for SYSTEM, options, usage and timing (TTFT, generation, throughput) for
-  a request, input, output and the guard's verdict for a tool. Under the composer: turns, steps,
-  tok/s, tokens and cache hit. pi-agent records it through pi's own extension hooks; traces stay in
-  `~/.space/trajectory/` and go when the thread does. The Claude CLI's own small wrapper around the
-  system prompt isn't visible.
-- **Settings** (⌘, or Space ▸ Settings…): replaces the thread view, sidebar stays. *New threads*: default
-  model and thinking level ("Agent default" leaves the agent's choice; existing threads don't change).
-  Then each plugin's settings (*Alerts*: notify when an agent finishes, play a sound; *Titles*: the title
-  model, "Same as agent" by default). *Notifications*:
-  the macOS permission status (with a button to allow it or open System Settings). Esc, ⌘, again, ⌘[, ⌘N or clicking a thread leaves.
-  Saved on every change to `~/.space/settings.json`.
-- **Agent errors**: if the agent can't start or exits, the thread shows the error (with the last
-  lines of its stderr) and a Restart button. Plugins' stderr isn't shown in the window; run Space
-  from a terminal with `RUST_LOG=debug` to see it.
-
-## space-core API sketch
-
-```rust
-let (host, mut events) = Host::new(tokio_handle, HostOptions::for_project(dir));
-let agent: AgentHandle = host.start_agent("pi-agent").await?;   // spawn + ACP initialize
-let session: Session = agent.new_session(dir).await?;           // session/new
-session.prompt("hi").await?;   // streams HostEvent::Session { event: SessionEvent::.. }; returns stop reason
-session.cancel()?;             // session/cancel
-session.resolve_permission(request_id, PermissionDecision::Selected(option_id))?;
-// UI side: SessionState::apply(&event) folds events into a transcript.
 ```
+crates/space-protocol   the protocol: manifest, ACP extensions, service and terminal methods
+crates/space-core       discovery, supervisor, ACP client, tool pipeline, sessions (no UI)
+crates/space-plugin     SDK for Rust service plugins
+crates/space-terminal   a terminal's screen (alacritty's parser), keys and mouse to bytes
+crates/space-ui         tokens, components, previews and gallery
+crates/space-app        the app (binary `Space`)
+plugins/                pi-agent (TypeScript) · permissions · alerts · session-store · titles ·
+                        trajectory · terminal; each has a README
+vendor/gpui-base        patched copy of a GPUI dependency (SPACE_PATCH.md)
+packaging/, scripts/    release, cask, notices, app icon (scripts/make_app_icon.py)
+```
+
+More: [writing a plugin](docs/plugins.md) · [working on the UI](docs/ui-development.md).

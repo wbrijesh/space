@@ -14,6 +14,10 @@ Writes to crates/space-app/resources/:
   Assets.car     compiled from it by Xcode's actool; scripts/bundle.sh ships it
   AppIcon.png    flattened and pre-masked; the Dock icon for a bare `cargo run` binary
 Needs Pillow and Xcode.  Run: python3 scripts/make_app_icon.py
+
+macOS caches icons per bundle id; if the old one keeps showing:
+  rm -rf "$(getconf DARWIN_USER_CACHE_DIR)"/com.apple.{dock.iconcache,iconservices,iconservicesagent}
+  killall iconservicesagent Dock NotificationCenter
 """
 import json, math, os, pathlib, shutil, subprocess, tempfile
 from PIL import Image, ImageDraw
