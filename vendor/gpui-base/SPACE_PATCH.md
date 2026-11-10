@@ -29,4 +29,8 @@ the body size apart (was 0.25); a list item's second paragraph keeps half a body
 it; and nested ordered lists are numbered at every depth (`list_item_prefix`; it used letters
 from the second level). Tests updated to match.
 
+Task lists, in `src/text/node.rs` (`render_list_item_row`): a done task's checkbox is filled
+with the list marker color (`with_list_style`'s text color, else the muted foreground), like
+its outline, instead of the link color.
+
 To update gpui-base, copy the new version here and re-apply these changes.

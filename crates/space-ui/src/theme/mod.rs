@@ -13,7 +13,7 @@
 pub mod motion;
 
 use gpui::component::Theme;
-use gpui::{App, Hsla, Pixels, px, rgba};
+use gpui::{App, FontWeight, Hsla, Pixels, StyleRefinement, Styled as _, px, rgba};
 
 macro_rules! colors {
     ($($(#[doc = $doc:literal])* $name:ident = $hex:literal;)*) => {
@@ -292,8 +292,27 @@ fn markdown_style(cx: &mut App) {
     let Some(style) = defaults.style().cloned() else { return };
     let mut block = style.code_block().clone();
     block.border_color = Some(color::code_border());
-    let style = style.with_code_background(color::code_bg()).with_code_block(block);
+    let style = style
+        .with_code_background(color::code_bg())
+        .with_code_block(block)
+        .with_paragraph_gap(gpui::rems(0.75))
+        .with_heading(heading_style)
+        // Bullets and numbers step back behind the text; done tasks' boxes use it too.
+        .with_list_style(StyleRefinement::default().text_color(color::text_3()));
     defaults.with_style(style).install(cx);
+}
+
+/// Headings in replies: three sizes for the levels that organize a reply, then body-sized
+/// bold text for the rest, all in the text color.
+fn heading_style(level: u8) -> StyleRefinement {
+    let (scale, weight) = match level {
+        1 => (1.45, FontWeight::SEMIBOLD),
+        2 => (1.25, FontWeight::SEMIBOLD),
+        3 => (1.1, FontWeight::SEMIBOLD),
+        4 => (1., FontWeight::SEMIBOLD),
+        _ => (1., FontWeight::MEDIUM),
+    };
+    StyleRefinement::default().text_size(text::BODY * scale).font_weight(weight).text_color(color::text())
 }
 
 /// Code blocks' syntax colors: GitHub Dark, as the terminal uses.

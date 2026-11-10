@@ -3789,6 +3789,11 @@ impl BlockNode {
                 )
             })
             .when_some(checked, |this, checked| {
+                let marker = style
+                    .list_style()
+                    .text
+                    .color
+                    .unwrap_or(style.muted_foreground());
                 // Todo list checkbox
                 let check_svg = if style.is_dark() {
                     CHECK_SVG_DARK
@@ -3811,15 +3816,11 @@ impl BlockNode {
                                 .justify_center()
                                 .rounded(px(4.))
                                 .border(px(1.5))
-                                .border_color(
-                                    style
-                                        .list_style()
-                                        .text
-                                        .color
-                                        .unwrap_or(style.muted_foreground()),
-                                )
+                                .border_color(marker)
+                                // Space patch: a done task's box is filled with the marker
+                                // color too (it was the link color), so it stays quiet.
                                 .when(checked, |this| {
-                                    this.bg(style.link()).border_color(style.link()).child(
+                                    this.bg(marker).border_color(marker).child(
                                         img(Arc::new(Image::from_bytes(
                                             ImageFormat::Svg,
                                             check_svg.to_vec(),
