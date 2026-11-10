@@ -989,6 +989,20 @@ Before any of that, make sure the tests pass and lint is clean, and that the ter
 ```rust\nlet agent = host.start_agent(\"pi-agent\").await?;\nlet session = agent.new_session(dir).await?;\n```\n\n\
 Invalid manifests are reported, not fatal.";
 
+    /// Every markdown element a reply can have, for styling them together.
+    pub const MARKDOWN_ALL: &str = "# Heading 1\n\nA paragraph under it, then the smaller headings.\n\n\
+## Heading 2\n\n### Heading 3\n\n#### Heading 4\n\n##### Heading 5\n\n###### Heading 6\n\n\
+Text with **bold**, *italic*, ***both***, ~~struck~~, `inline code`, a [link](https://example.com), \
+an autolink https://example.com and a **bold `code` span**.\n\
+A second line of the same paragraph (soft break).\n\n\
+- A bullet\n- Another, with a nested list:\n  - nested bullet\n    - third level\n- Back out\n\n\
+1. First\n2. Second\n   1. Nested number\n3. Third\n\n\
+- [x] A done task\n- [ ] An open task\n\n\
+> A quote with **bold** and `code`.\n>\n> > A nested quote.\n\n\
+| Left | Center | Right |\n|:---|:---:|---:|\n| `cell` | text | 1,234 |\n| a longer cell that wraps onto more lines | **bold** | 5 |\n\n\
+---\n\nAfter a rule. A footnote reference[^1].\n\n\
+```rust\nfn main() {}\n```\n\n[^1]: The footnote's text.\n";
+
     pub const CODE_BLOCKS: &str = "Here are three:\n\n\
 ```rust\nfn main() {\n    // Greet the world.\n    println!(\"Hello, world! {}\", 42);\n}\n```\n\n\
 ```typescript\nconst greet = (name: string): string => `Hello, ${name}!`;\nconsole.log(greet(\"world\"));\n```\n\n\
@@ -1188,6 +1202,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             ),
             ex("assistant markdown", Rc::new(|| agent_message("preview-md", MARKDOWN))),
             ex("code blocks", Rc::new(|| agent_message("preview-code", CODE_BLOCKS))),
+            ex("every markdown element", Rc::new(|| agent_message("preview-md-all", MARKDOWN_ALL))),
             Example::new("code blocks, narrow", |_, _| agent_message("preview-code-narrow", CODE_BLOCKS).into_any_element())
                 .width(px(380.)),
         ]),
