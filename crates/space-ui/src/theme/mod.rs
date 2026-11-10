@@ -305,6 +305,20 @@ fn markdown_style(cx: &mut App) {
         .with_link_weight(FontWeight::MEDIUM)
         // Inline code: a quiet chip a step above the thread, a little smaller than the text.
         .with_inline_code(gpui::HighlightStyle { background_color: Some(color::md_code_bg()), ..Default::default() })
+        // Rules, table lines and frames: the code blocks' soft border.
+        .with_border(color::code_border())
+        // Quotes: a visible bar, the text a step back.
+        .with_blockquote_style(
+            StyleRefinement::default().border_color(color::md_quote_bar()).text_color(color::text_2()).pl(px(12.)),
+        )
+        // Tables: on the thread, framed like code blocks; the header in medium weight, a step back.
+        .with_table(StyleRefinement::default().bg(gpui::transparent_black()).border_color(color::code_border()))
+        .with_table_head(
+            StyleRefinement::default()
+                .bg(gpui::transparent_black())
+                .text_color(color::text_2())
+                .font_weight(FontWeight::MEDIUM),
+        )
         .with_inline_code_style(
             StyleRefinement::default()
                 .text_size(px(13.))
