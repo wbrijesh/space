@@ -18,6 +18,7 @@
 //! find                print find's state (query, matches, current) and the transcript's scroll
 //! rename some name    rename the selected thread as the Rename sheet would (then print its title)
 //! title               print the selected thread's title
+//! editmenu            print the Edit menu's items: AppKit action and key equivalent
 //! shot name           run `$SPACE_SHOT_CMD name` (e.g. a script calling `screencapture -l`)
 //! shotnow name        same as `shot` without the 250 ms settle delay (animation frames)
 //! quit                quit the app
@@ -211,6 +212,7 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                         }
                     });
                 }
+                "editmenu" => print_edit_menu(),
                 "quit" => {
                     cx.update(|cx| cx.quit());
                 }
@@ -219,4 +221,23 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
         }
     })
     .detach();
+}
+
+/// Each Edit menu item as AppKit sees it: title, action selector, key equivalent and modifiers.
+fn print_edit_menu() {
+    use objc2_app_kit::NSApplication;
+    use objc2_foundation::NSString;
+    let Some(mtm) = objc2::MainThreadMarker::new() else { return };
+    let menu = NSApplication::sharedApplication(mtm).mainMenu();
+    let Some(edit) = menu.and_then(|m| m.itemWithTitle(&NSString::from_str("Edit"))).and_then(|i| i.submenu()) else {
+        eprintln!("script: no Edit menu");
+        return;
+    };
+    for item in edit.itemArray() {
+        if item.isSeparatorItem() {
+            continue;
+        }
+        let action = item.action().map(|s| s.name().to_string_lossy().into_owned()).unwrap_or_default();
+        eprintln!("script: edit {:?} {action} {:?} {:?}", item.title().to_string(), item.keyEquivalent().to_string(), item.keyEquivalentModifierMask());
+    }
 }

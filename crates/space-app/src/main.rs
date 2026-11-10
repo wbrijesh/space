@@ -23,6 +23,7 @@ mod find;
 mod idle;
 mod images;
 mod jump;
+mod native_edit;
 #[cfg(feature = "dev")]
 mod dev;
 #[cfg(feature = "dev")]

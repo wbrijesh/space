@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui::component::input::{InputEvent, InputState, TextareaState};
+use gpui::component::input::{self, InputEvent, InputState, TextareaState};
 use gpui::*;
 use space_core::protocol::service::{BlockerAction, CatalogEntry};
 use space_core::protocol::{CATALOG_PERMISSION_MODES, ConfigureSession, ModelInfo};
@@ -180,6 +180,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
         // Without a window to ask in (the window's own handler asks about running terminals).
         cx.on_action(|_: &Quit, cx| cx.quit());
         ignore_held_shortcuts(cx);
+        crate::native_edit::init();
         #[allow(unused_mut)]
         let mut menus = vec![
             Menu {
@@ -201,7 +202,20 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             },
             Menu {
                 name: "Edit".into(),
+                // The standard items carry AppKit's own actions (`cut:`, `selectAll:`…), so native
+                // text fields (the rename sheet, open panels) get them too: AppKit only sends ⌘X,
+                // ⌘C, ⌘V and ⌘A to a native field through these menu items. In Space's own
+                // windows the keys reach the focused input first, as before. Undo and Redo in
+                // native fields: see `native_edit`.
                 items: vec![
+                    MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
+                    MenuItem::os_action("Redo", input::Redo, OsAction::Redo),
+                    MenuItem::separator(),
+                    MenuItem::os_action("Cut", input::Cut, OsAction::Cut),
+                    MenuItem::os_action("Copy", input::Copy, OsAction::Copy),
+                    MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
+                    MenuItem::os_action("Select All", input::SelectAll, OsAction::SelectAll),
+                    MenuItem::separator(),
                     MenuItem::action("Find…", OpenFind),
                     MenuItem::action("Find Next", FindNext),
                     MenuItem::action("Find Previous", FindPrevious),

@@ -43,7 +43,7 @@ gpui-hot-reload = { package = "gpui-pre", version = "=0.3.11", features = ["hot-
 objc2 = "0.6"
 block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSArray", "NSBundle", "NSData", "NSError", "NSString", "NSNotification", "NSOperation", "NSGeometry", "NSRunLoop", "block2"] }
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSEvent", "NSImage", "NSRunningApplication", "NSSound", "NSResponder", "NSAlert", "NSButton", "NSControl", "NSTextField", "NSView", "NSWindow", "NSGraphics", "block2"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSEvent", "NSImage", "NSMenu", "NSMenuItem", "NSRunningApplication", "NSSound", "NSResponder", "NSAlert", "NSButton", "NSControl", "NSText", "NSTextField", "NSView", "NSWindow", "NSGraphics", "block2"] }
 raw-window-handle = "0.6"
 objc2-core-foundation = { version = "0.3", features = ["CFData", "CFDictionary", "CFNumber", "CFString", "CFCGTypes"] }
 objc2-core-graphics = { version = "0.3", features = ["CGBitmapContext", "CGColorSpace", "CGContext", "CGImage"] }
