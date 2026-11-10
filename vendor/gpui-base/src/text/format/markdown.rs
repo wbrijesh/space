@@ -922,14 +922,8 @@ fn parse_paragraph(
             }
         },
         Node::FootnoteReference(foot) => {
-            let prefix = format!("[{}]", foot.identifier);
-            paragraph.push(mapped_inline(source, prefix.clone(), node, cx).marks(vec![(
-                0..prefix.len(),
-                TextMark {
-                    italic: true,
-                    ..Default::default()
-                },
-            )]));
+            let prefix = footnote_label(&foot.identifier);
+            paragraph.push(mapped_inline(source, prefix, node, cx));
         }
         Node::LinkReference(link) => {
             let link_mark = LinkMark {
@@ -1161,14 +1155,8 @@ fn ast_to_node(source: &str, value: mdast::Node, cx: &mut NodeContext) -> BlockN
         }
         Node::FootnoteDefinition(def) => {
             let mut paragraph = Paragraph::default();
-            let prefix = format!("[{}]: ", def.identifier);
-            paragraph.push(InlineNode::new(&prefix).marks(vec![(
-                0..prefix.len(),
-                TextMark {
-                    italic: true,
-                    ..Default::default()
-                },
-            )]));
+            let prefix = format!("{} ", footnote_label(&def.identifier));
+            paragraph.push(InlineNode::new(&prefix));
 
             parse_inline_children(source, &mut paragraph, &def.children, cx);
             paragraph.span = new_span(def.position, cx);
@@ -1186,6 +1174,17 @@ fn ast_to_node(source: &str, value: mdast::Node, cx: &mut NodeContext) -> BlockN
             }
             BlockNode::Unknown
         }
+    }
+}
+
+/// Space patch: a footnote's mark, as superscript digits when it's numbered (`[^2]` reads
+/// "²"), else the label in brackets. Text can't be raised, so Unicode's superscripts stand in.
+fn footnote_label(identifier: &str) -> String {
+    const SUPERSCRIPT: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
+    if !identifier.is_empty() && identifier.bytes().all(|b| b.is_ascii_digit()) {
+        identifier.bytes().map(|b| SUPERSCRIPT[(b - b'0') as usize]).collect()
+    } else {
+        format!("[{identifier}]")
     }
 }
 
@@ -2679,5 +2678,15 @@ mod tests {
                 symbol: "TSLA.US".to_string()
             })
         );
+    }
+
+    #[test]
+    fn footnotes_are_superscript_numbers() {
+        assert_eq!(footnote_label("1"), "¹");
+        assert_eq!(footnote_label("12"), "¹²");
+        assert_eq!(footnote_label("note"), "[note]");
+        let mut cx = NodeContext::default();
+        let document = parse("A claim[^1].\n\n[^1]: The source.", &mut cx).unwrap();
+        assert_eq!(document.text(), "A claim¹.\n¹ The source.\n");
     }
 }

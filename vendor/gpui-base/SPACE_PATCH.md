@@ -48,4 +48,8 @@ while loading and the alt text in a box if loading fails; an image without a lin
 itself when clicked (`image_open_url`: a local path as `file://`). Which images load at all
 is the app's `image_source` resolver.
 
+Footnotes, in `src/text/format/markdown.rs` (`footnote_label`): a numbered footnote's
+reference and note read as superscript digits ("claim¹", "¹ The source") instead of italic
+"[1]"; other labels keep their brackets. Test: `footnotes_are_superscript_numbers`.
+
 To update gpui-base, copy the new version here and re-apply these changes.
