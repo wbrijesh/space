@@ -48,7 +48,7 @@ pub mod color {
         /// Code blocks in replies: a little darker than the thread, so they stand apart from
         /// your messages' bubbles; with a lighter border (and the rule under their top bar).
         code_bg = 0x0f0f0fff;
-        code_border = 0x2e2e2eff;
+        code_border = 0x222222ff;
         /// 1px hairlines.
         border = 0x2a2a2aff;
         /// Focused borders, tracks.
