@@ -157,7 +157,7 @@ pub mod size {
     /// the first title-bar button.
     pub const TRAFFIC_LIGHTS_W: Pixels = px(92.);
     pub const CONTENT_MAX_W: Pixels = px(760.);
-    /// Your messages' bubbles are at most this wide, whatever the window's width.
+    /// Your messages' bubbles take at most 82% of the column, and never more than this.
     pub const USER_BUBBLE_MAX_W: Pixels = px(560.);
 
     pub const ICON_XS: Pixels = px(11.);

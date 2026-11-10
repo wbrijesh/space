@@ -58,12 +58,27 @@ pub fn user_message(
         .when(has_bubble, |d| d.child(user_bubble(text_, attachments, fold)))
 }
 
+/// Share of the column a bubble may take (and never more than [`size::USER_BUBBLE_MAX_W`]).
+const BUBBLE_SHARE: f32 = 0.82;
+
+thread_local! {
+    /// The widest a bubble can be right now (82% of the column, as last laid out); until the
+    /// first layout, the cap.
+    static BUBBLE_ROOM: std::cell::Cell<Pixels> = const { std::cell::Cell::new(size::USER_BUBBLE_MAX_W) };
+}
+
+/// The width a full bubble's text wraps at.
+fn bubble_text_width() -> Pixels {
+    BUBBLE_ROOM.with(|r| r.get()).min(size::USER_BUBBLE_MAX_W) - BUBBLE_PAD_X * 2.
+}
+
 /// Whether a message is long enough to fold: more than [`FOLD_ABOVE`] lines as the bubble wraps
-/// it (its width is fixed, so this is what it shows).
+/// it at the width it has now.
 pub fn is_long_message(text_: &str, window: &Window) -> bool {
     let text_ = text_.trim();
+    let width = bubble_text_width();
     // Too short to wrap that far (the widest glyphs are well over 4px).
-    let per_line = ((size::USER_BUBBLE_MAX_W - BUBBLE_PAD_X * 2.) / px(4.)) as usize;
+    let per_line = (width / px(4.)).max(1.) as usize;
     if text_.lines().map(|l| l.len() / per_line + 1).sum::<usize>() <= FOLD_ABOVE {
         return false;
     }
@@ -75,7 +90,6 @@ pub fn is_long_message(text_: &str, window: &Window) -> bool {
         underline: None,
         strikethrough: None,
     };
-    let width = size::USER_BUBBLE_MAX_W - BUBBLE_PAD_X * 2.;
     match window.text_system().shape_text(text_.to_string().into(), text::BODY, &[run], Some(width), None) {
         Ok(lines) => lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum::<usize>() > FOLD_ABOVE,
         Err(_) => text_.lines().count() > FOLD_ABOVE,
@@ -135,7 +149,22 @@ pub fn user_bubble(text_: &str, attachments: &[PathBuf], fold: Option<UserFold>)
             }
         };
     }
-    div().flex().justify_end().child(bubble)
+    // 82% of the column, right-aligned; the bubble fits its text within that and the cap. The
+    // canvas keeps the room up to date for measuring folds (redrawn when it changes).
+    let room = canvas(
+        |bounds, window, _| {
+            let width = bounds.size.width;
+            if width > px(0.) && BUBBLE_ROOM.with(|r| r.replace(width)) != width {
+                window.refresh();
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .size_full();
+    div().flex().justify_end().child(
+        div().relative().w(relative(BUBBLE_SHARE)).flex().justify_end().child(room).child(bubble),
+    )
 }
 
 pub fn attachment_chip(path: &Path) -> Div {
