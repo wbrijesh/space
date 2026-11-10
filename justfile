@@ -39,7 +39,7 @@ release:
     scripts/bundle.sh release
 
 # Copy the release app to ~/Applications, where Spotlight and Launchpad find it. It has the same
-# bundle id as `just run`'s app, so opening it while that one runs just brings that one forward
+# bundle id as `just run`'s app: only one of them runs at a time.
 # Install the current code as ~/Applications/Space.app
 install: release
     mkdir -p ~/Applications

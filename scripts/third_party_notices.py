@@ -78,7 +78,8 @@ Agent Client Protocol SDK and their dependencies). Only the code a plugin uses i
 ## Rust crates
 
 Linked into the app and the bundled Rust plugins. MPL-2.0 crates are used unmodified; their
-source is on crates.io.
+source is on crates.io. One crate is modified: gpui-base (Apache-2.0), whose changed copy is in
+this repository at `vendor/gpui-base`, with the changes described in its `SPACE_PATCH.md`.
 
 {table(rust_crates())}
 """

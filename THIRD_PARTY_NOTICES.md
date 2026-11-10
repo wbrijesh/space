@@ -151,7 +151,8 @@ Agent Client Protocol SDK and their dependencies). Only the code a plugin uses i
 ## Rust crates
 
 Linked into the app and the bundled Rust plugins. MPL-2.0 crates are used unmodified; their
-source is on crates.io.
+source is on crates.io. One crate is modified: gpui-base (Apache-2.0), whose changed copy is in
+this repository at `vendor/gpui-base`, with the changes described in its `SPACE_PATCH.md`.
 
 | Name | Version | Licence |
 |---|---|---|
@@ -211,7 +212,10 @@ source is on crates.io.
 | base62 | 2.2.6 | MIT |
 | base64 | 0.22.1 | MIT OR Apache-2.0 |
 | base64 | 0.23.1 | MIT OR Apache-2.0 |
+| bincode | 1.3.3 | MIT |
 | bit-set | 0.10.0 | Apache-2.0 OR MIT |
+| bit-set | 0.8.0 | Apache-2.0 OR MIT |
+| bit-vec | 0.8.0 | Apache-2.0 OR MIT |
 | bit-vec | 0.9.1 | Apache-2.0 OR MIT |
 | bit_field | 0.10.3 | Apache-2.0/MIT |
 | bitflags | 1.3.2 | MIT/Apache-2.0 |
@@ -322,6 +326,7 @@ source is on crates.io.
 | event-listener | 5.4.2 | Apache-2.0 OR MIT |
 | event-listener-strategy | 0.5.4 | Apache-2.0 OR MIT |
 | exr | 1.74.2 | BSD-3-Clause |
+| fancy-regex | 0.16.2 | MIT |
 | fastrand | 2.5.0 | Apache-2.0 OR MIT |
 | fax | 0.2.7 | MIT |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 |
@@ -776,6 +781,7 @@ source is on crates.io.
 | syn | 3.0.9 | MIT OR Apache-2.0 |
 | sync_wrapper | 1.0.2 | Apache-2.0 |
 | synstructure | 0.14.0 | MIT |
+| syntect | 5.3.0 | MIT |
 | sys-locale | 0.3.2 | MIT OR Apache-2.0 |
 | sysinfo | 0.31.4 | MIT |
 | system-configuration | 0.6.1 | MIT OR Apache-2.0 |
@@ -828,6 +834,7 @@ source is on crates.io.
 | triomphe | 0.1.17 | MIT OR Apache-2.0 |
 | try-lock | 0.2.5 | MIT |
 | ttf-parser | 0.25.1 | MIT OR Apache-2.0 |
+| two-face | 0.4.5 | MIT OR Apache-2.0 |
 | typenum | 1.20.1 | MIT OR Apache-2.0 |
 | uds_windows | 1.2.1 | MIT |
 | unicase | 2.10.0 | MIT OR Apache-2.0 |
