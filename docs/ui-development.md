@@ -44,6 +44,11 @@ Conventions:
 * State a component needs across frames (drag tracking, the composer's layout mode) lives in keyed
   element state (`window.use_keyed_state`), not in the app.
 * Anything animated reads time from the clock (below), never from wall-clock time.
+* Hover labels are `.tip("…")` / `.tip_action("…", &Action)` (`tip.rs`), anchored under the element
+  with its shortcut; not GPUI's tooltip.
+* Menus are built from `menu.rs` (trigger, card, rows), so they all look and behave alike.
+* Text the user types outside the composer (a new name) is asked for in a native sheet
+  (`space-app/src/text_prompt.rs`).
 
 ## 3. Previews (fixtures) — next to each component
 
@@ -76,7 +81,8 @@ persists across frames. See `components/composer.rs`.
 ## 4. Gallery — dev-only window
 
 ⌥⌘G, Dev ▸ Component Gallery, or `just run --gallery`. On the left are components
-grouped by area (Shell, Sidebar, Composer, Transcript, Settings, Indicators) and the Tokens page. The main
+grouped by area (Shell, Sidebar, Composer, Transcript, Trajectory, Settings, Indicators) and the
+Tokens page. The main
 pane shows each example with its name. The top bar has:
 
 * **Animation clock:** Live / Pause / Step (one 60 Hz frame), speed 0.1× / 0.25× / 1×, and
@@ -91,23 +97,8 @@ the examples whose name contains one of them (handy for screenshots further down
 `just run --scenario <name>` (or Dev ▸ Relaunch in Scenario) boots
 the **real app shell** against the stub agent playing a script (`space_core::stub_script`).
 Script steps can `hold`, so a turn stays thinking, running a tool, or waiting for permission
-until you cancel it. Nothing in the UI is faked. `just run --scenario list` prints them:
-
-| Scenario | State |
-|---|---|
-| `empty` | one empty thread |
-| `thread-working` | reply streaming, held mid-sentence |
-| `thread-thinking` | held while thinking |
-| `tool-running` | held while a tool runs |
-| `permission-pending` | waiting for Allow / Reject |
-| `error` | failed turn |
-| `many-threads` | nine threads in mixed states (working, waiting, unread, error) |
-| `long-composer` | finished thread with a 12-line draft |
-| `long-transcript` | thread longer than the window, scrolled to the end (bottom fade) |
-| `scrolled-up` | long thread held scrolled up (scroll-to-bottom button) while the reply keeps streaming below |
-| `guardrail` | the real permissions plugin without a key: a Read Only thread with a blocked edit, a Workspace Write thread paused |
-| `guardrail-offline` | the real permissions plugin with a key but OpenAI unreachable: a paused call, the retrying pill with live times |
-| `settings` | the Settings page, with the stub's models and a saved default model and thinking level |
+until you cancel it. Nothing in the UI is faked. `just run --scenario list` prints them, with what
+each shows.
 
 **Adding a scenario:** in `crates/space-app/src/scenarios.rs`, append a `Scenario` to `all()`.
 Give it a name, a description and its threads. Each thread has a `prompt` and the `steps` the
@@ -152,12 +143,16 @@ stays available in optimized builds for profiling. CI and lint run both configur
 
 ## Interaction scripts
 
-`SPACE_SCRIPT=<file>` replays clicks, scrolls, keys and typing through GPUI's own event
-dispatch. The commands are `click X Y`, `move X Y`, `scroll X Y DY` (trackpad scroll; negative DY
-moves the view up), `key cmd-n`, `type text`, `wait MS`, `shot NAME` and `shotnow NAME`; `shot` and
-`shotnow` run `$SPACE_SHOT_CMD NAME`. Use it for interaction checks that need no OS input
-permissions (see `crates/space-app/src/devscript.rs`). While a script runs, the app logs
-`script: transcript following=…` when the transcript stops or resumes following its bottom.
+`SPACE_SCRIPT=<file>` replays clicks, scrolls, keys and typing through GPUI's own event dispatch,
+and can print app state and take screenshots (`shot NAME` runs `$SPACE_SHOT_CMD NAME`). The
+commands are listed at the top of `crates/space-app/src/devscript.rs`. Use it for checks that need
+no OS input permissions, in a window that doesn't have to be in front: macOS sends a background app
+no keys, so scripts drive GPUI directly, and commands like `editmenu` and `terminals` print what a
+screenshot can't show.
+
+Other dev variables: `SPACE_CLOCK` (above), `SPACE_GALLERY_PAGE` / `SPACE_GALLERY_ONLY` (above),
+`SPACE_PERF=1` (how often the transcript is rebuilt), `SPACE_AGENT_IDLE_SECS` (put the agent to sleep
+sooner).
 
 ## Inspired by
 
