@@ -245,7 +245,7 @@ pub fn agent_message(id: impl Into<ElementId>, markdown: &str) -> Div {
 
 /// An agent reply; `fade`: it's streaming, so text it gains fades in (word by word).
 pub fn agent_message_streaming(id: impl Into<ElementId>, markdown: &str, fade: bool) -> Div {
-    let view = TextView::markdown(id, markdown.trim().to_string()).selectable(true).code_block_actions(code_block_header);
+    let view = TextView::markdown(id, markdown.trim().to_string()).selectable(true).code_block_actions(code_block_header).image_source(reply_image_source);
     let view = if fade {
         view.motion(
             TextViewMotion::default()
@@ -377,11 +377,26 @@ pub fn code_block_header(block: &gpui::base::text::CodeBlock, window: &mut Windo
         .into_any_element()
 }
 
+/// Where an image in a reply loads from: a file on this Mac (an absolute path or `file://`) or
+/// the web over https. Anything else (plain http, relative paths) isn't loaded and shows its
+/// alt text.
+pub fn reply_image_source(url: &SharedUri) -> ImageSource {
+    let url = url.as_ref();
+    let path = url.strip_prefix("file://").unwrap_or(url);
+    if path.starts_with('/') {
+        return ImageSource::Resource(Resource::Path(std::path::Path::new(path).into()));
+    }
+    if url.starts_with("https://") {
+        return SharedUri::from(url.to_string()).into();
+    }
+    ImageSource::Resource(Resource::Path(std::path::Path::new("").into()))
+}
+
 /// An agent reply drawn from its own [`TextViewState`] (kept by the app, so find can read its
 /// text and highlight it); `fade`: it's streaming. `on_reveal` scrolls the transcript to a
 /// line the state was asked to reveal.
 pub fn agent_reply(state: &Entity<TextViewState>, fade: bool, on_reveal: Option<RevealHandler>) -> Div {
-    let mut view = TextView::new(state).selectable(true).code_block_actions(code_block_header);
+    let mut view = TextView::new(state).selectable(true).code_block_actions(code_block_header).image_source(reply_image_source);
     if fade {
         view = view.motion(
             TextViewMotion::default()

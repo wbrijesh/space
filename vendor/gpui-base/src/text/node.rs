@@ -2999,11 +2999,46 @@ impl Paragraph {
                     );
                 }
                 let link_click_handler = node_cx.link_click_handler.clone();
-                child_nodes.push(
+                // Space patch: images sit in the column at most 560px wide, rounded, with a quiet
+                // placeholder while they load and their alt text if they can't; one without a
+                // link opens itself when clicked.
+                let (muted, border) = (node_cx.style.muted_foreground(), node_cx.style.border());
+                let alt: SharedString = image.alt.clone().filter(|a| !a.is_empty()).unwrap_or_else(|| "Image".into());
+                let own_link = image.link.is_none().then(|| image_open_url(&image.url));
+                child_nodes.push(div().max_w(px(560.)).min_w_0().child(
                     img(node_cx.image_source(image))
                         .id(ix)
                         .object_fit(ObjectFit::Contain)
+                        // GPUI sizes an image from its width and aspect ratio, so a max height
+                        // wouldn't apply; the width alone is capped (by the box above).
                         .max_w(relative(1.))
+                        .rounded(px(8.))
+                        .with_loading(move || {
+                            div().w(px(160.)).h(px(90.)).rounded(px(8.)).border_1().border_color(border).into_any_element()
+                        })
+                        .with_fallback({
+                            let alt = alt.clone();
+                            move || {
+                                div()
+                                    .px(px(8.))
+                                    .py(px(4.))
+                                    .rounded(px(6.))
+                                    .border_1()
+                                    .border_color(border)
+                                    .text_color(muted)
+                                    .italic()
+                                    .child(alt.clone())
+                                    .into_any_element()
+                            }
+                        })
+                        .when_some(own_link, |this, url| {
+                            let link_click_handler = link_click_handler.clone();
+                            this.cursor_pointer().on_click(move |event, window, cx| {
+                                crate::TextSelection::end(window, cx);
+                                cx.stop_propagation();
+                                handle_link_click(&link_click_handler, url.clone(), event.clone(), window, cx);
+                            })
+                        })
                         .when_some(image.width, |this, width| this.w(width))
                         .when_some(image.link.clone(), |this, link| {
                             let link_click_handler = link_click_handler.clone();
@@ -3032,9 +3067,8 @@ impl Paragraph {
                                         cx,
                                     );
                                 })
-                        })
-                        .into_any_element(),
-                );
+                        }),
+                ).into_any_element());
 
                 consumed += text.len();
                 text.clear();
@@ -3300,6 +3334,12 @@ fn leaf_element_id(fade_key: Option<TextLeafKey>) -> ElementId {
 
 /// A link's underline: a hairline in a translucent link color, so a run of
 /// links reads as text first and as links second.
+/// Space patch: what clicking an image opens: its URL, or a local path as a `file://` URL.
+fn image_open_url(url: &SharedUri) -> SharedString {
+    let url = url.as_ref();
+    if url.starts_with('/') { format!("file://{url}").into() } else { url.to_string().into() }
+}
+
 /// Space patch: a link's color, and its underline and weight when the style asks for them
 /// (`with_link_underline`, `with_link_weight`).
 fn apply_link_style(highlight: &mut HighlightStyle, style: &TextViewStyle) {

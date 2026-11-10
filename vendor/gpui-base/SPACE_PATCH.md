@@ -42,4 +42,10 @@ HTML, in `src/text/format/html.rs`: `<mark>`'s default color is a faint amber
 bold line (it was a plain paragraph; the block still doesn't collapse). Other unknown inline
 tags (`<kbd>`, `<sub>`, `<sup>`) already render as their text.
 
+Images, in `src/text/node.rs` (`Paragraph::render`): at most 560px wide (GPUI derives an
+image's height from its width, so there's no height cap), rounded, a bordered placeholder
+while loading and the alt text in a box if loading fails; an image without a link opens
+itself when clicked (`image_open_url`: a local path as `file://`). Which images load at all
+is the app's `image_source` resolver.
+
 To update gpui-base, copy the new version here and re-apply these changes.

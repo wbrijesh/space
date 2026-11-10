@@ -125,6 +125,11 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
     gpui::application().with_assets(SpaceAssets).run(move |cx: &mut App| {
         gpui::init(cx);
         space_ui::init(cx);
+        // Images in replies that come from the web (https only; see `reply_image_source`).
+        match reqwest_client::ReqwestClient::user_agent(&format!("Space/{}", env!("CARGO_PKG_VERSION"))) {
+            Ok(client) => cx.set_http_client(std::sync::Arc::new(client)),
+            Err(e) => tracing::warn!("no HTTP client for images: {e:#}"),
+        }
         #[cfg(feature = "dev")]
         crate::dev::init(cx);
         cx.bind_keys([
