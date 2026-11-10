@@ -1,21 +1,21 @@
-# Space architecture (v0)
+# Space architecture
 
-Space is a native macOS development environment built around **projects**, **bots** and **knowledge**.
-v0 delivers the foundation: a Rust/GPUI **harness** that hosts out-of-process **plugins**, a first
-**agent plugin** built on the pi SDK, and a **permissions plugin** that guards every tool call.
+A Rust/GPUI **harness** hosts out-of-process **plugins**: an agent (pi-agent, on the pi SDK) and
+service plugins for permissions, alerts, saved threads, titles, traces and terminals.
 
 ```
 ┌──────────────────────────── space (Rust) ─────────────────────────────┐
-│  space-app       GPUI UI: threads · transcript · composer · settings  │
+│  space-app       GPUI UI: threads · transcript · composer · terminal  │
+│  space-terminal  a terminal's screen, keys and mouse                  │
 │  space-core      registry · supervisor · sessions · tool pipeline     │
 │  space-protocol  manifest · ACP re-exports · _space/* · service proto │
 │  space-plugin    SDK for service plugins in Rust                      │
 └──────┬──────────────────────────────────────────┬────────────────────┘
        │ ACP (JSON-RPC over stdio)                │ service protocol (JSON-RPC over stdio)
 ┌──────▼───────────────────────┐   ┌──────────────▼──────────────────────────┐
-│ plugins/pi-agent (TS, Bun)   │   │ plugins/permissions (Rust)               │
-│ pi SDK + claude-cli          │   │ modes · macOS sandbox · decision model   │
-└──────────────────────────────┘   │ plugins/alerts · session-store · titles  │
+│ plugins/pi-agent (TS, Bun)   │   │ permissions: modes · sandbox · guardrail │
+│ pi SDK + claude-cli          │   │ alerts · session-store · titles          │
+└──────────────────────────────┘   │ trajectory · terminal                    │
                                    └──────────────────────────────────────────┘
 ```
 
@@ -65,7 +65,8 @@ cwd = "plugin"                  # "plugin" or "project"
 Capabilities: `agent` (an ACP agent; provides nothing else), `sandbox` (`sandbox/confine`), `context`
 (hidden prompt sections), `settings` (fields on the Settings page), `session-store` (saved threads; must
 also use `read:transcript`), `session-title` (thread titles; must also use `read:transcript`),
-`trajectory` (the Trajectory tab; must observe `trace`), `catalog:<name>` (a list the UI renders, e.g.
+`trajectory` (the Trajectory tab; must observe `trace`), `terminal` (shells for the terminal pane),
+`catalog:<name>` (a list the UI renders, e.g.
 `catalog:permission-modes` for the composer's mode menu). Hook events: `tools/pre-execute`.
 
 `requires` names capabilities (`sandbox`, `context`, `catalog:<name>`), not plugin ids, so any provider
@@ -119,7 +120,7 @@ The harness is the ACP **client**; agent plugins are ACP **agents**.
 
 | Direction | Method | Notes |
 |---|---|---|
-| client → agent | `initialize` | Protocol version and capabilities |
+| client → agent | `initialize` | Protocol version and capabilities; `_meta["space/steer"]: true` from agents that take steering |
 | client → agent | `session/new` | `cwd` = the thread's folder; `_meta["space/dataDir"]` = a folder for the session's own files, when a session store is installed |
 | client → agent | `session/load` | Continue a saved thread's session (agents with `loadSession`), same `_meta`; what the agent replays meanwhile isn't shown (the thread already is) |
 | client → agent | `session/prompt` | Image blocks (base64 bytes plus the saved file's `file://` uri; only to agents with `promptCapabilities.image`), then text and `resource_link` blocks; `_meta["space/context"]` carries hidden context sections |
@@ -136,6 +137,9 @@ Space extensions:
 | agent → client | `_space/tools/preExecute` | `{ sessionId, toolCallId, tool, kind, args, cwd? }` → `{ decision: allow \| deny, reason? }`, after the host's pipeline (may take as long as the call is held) |
 | agent → client | `_space/sandbox/confine` | `{ sessionId, argv, cwd }` → `{ argv }` to spawn instead (unchanged without a `sandbox` provider) |
 | client → agent | `_space/complete` | `{ sessionId, prompt, provider?, model? }` → `{ text }`: one short, tool-free completion by the session's model (or the one named), outside the conversation. The host forwards plugins' `agent/complete` here |
+| client → agent | `_space/session/steer` | `{ sessionId, id, text, images?, attachments? }`: a message for the running turn, delivered after the current step |
+| client → agent | `_space/session/unsteer` | `{ sessionId }` → `{ ids }`: take back the undelivered ones (the turn was stopped) |
+| agent → client | `_space/steered` (notification) | `{ sessionId, id }`: that message reached the model; the transcript shows it there |
 | agent → client | `_space/trace` (notification) | `{ sessionId, events: TraceEvent[] }`: what happened around each model request (headers on change, requests with their new messages, first token, chunk times, responses with usage, retries, tool start/end); see Traces below |
 
 `SpaceStatus` (every field but `sessionId` optional; the client merges partial updates):
@@ -177,9 +181,11 @@ another version is not started.
 | `trace/record` | host → plugin | `observes trace` (with `read:trace`): every trace batch, `{ threadId, sessionId, events }`, in order; none is dropped |
 | `trajectory/read`, `trajectory/detail`, `trajectory/stats` | host → plugin | `provides trajectory`: a page of a thread's rows (from the end, or matching a query), one row's full content, the thread's totals |
 | `trajectory/changed` | plugin → host | `provides trajectory`: a thread's trajectory changed (`{ threadId, version }`); the app reads it again |
+| `terminal/open`, `attach`, `list`, `close`; `input`, `resize` | host → plugin | `provides terminal`: start a shell, replay one, list them, stop one; keys and size (notifications) |
+| `terminal/output`, `title`, `exited` | plugin → host | `provides terminal` (notifications): numbered output, the program in front, the end |
 
 **Observed events** (`session/created`, `turn/started`, `turn/ended`, `tool/held`, `tool/result`,
-`thread/titled`, `thread/deleted`) come from the host's own session events. Each observing plugin has a bounded queue
+`thread/titled` (generated or renamed), `thread/deleted`) come from the host's own session events. Each observing plugin has a bounded queue
 (256) drained by its own task, which sends one event and waits for the answer (10 s at most) before the
 next, so events arrive in order and nothing else waits: a slow plugin only drops its own newest events,
 with a warning. `turn/ended` and `tool/held` say whether the user is `watching` the thread (the app tells
@@ -203,8 +209,10 @@ failed save keeps the events for the next one and says so in the banner; the con
 thread that fails to open is read again when next opened, and nothing is sent into it meanwhile. At launch the sidebar lists
 saved threads; opening one reads its events and replays them through `SessionState::apply` (a turn cut
 short ends as cancelled, so no card waits). Writing in it loads its session again (`session/load`) when
-the agent can; otherwise the composer offers "Continue in new session". Right-click → Delete Thread
-removes the folder. Without a store, threads live in memory. A reloaded session's guards start with what
+the agent can; otherwise the composer offers "Continue in new session". Closing a thread (⌘W) stops
+its turn and terminals and saves it with `closedMs`; it's listed under Resume, and deleted
+(`store/delete`, observers get `thread/deleted`) once older than Settings ▸ Threads allows. A new thread
+isn't saved or listed until its first message. Without a store, threads live in memory. A reloaded session's guards start with what
 the thread shows (`Session::seed_history`: its messages, and its tool calls by title), so their first
 judgements have the same context as later ones.
 
@@ -212,7 +220,24 @@ judgements have the same context as later ones.
 the host asks the `session-title` provider (bundled: `plugins/titles`) for a title; it answers through
 `agent/complete`, with the thread's own model unless its "Title model" setting picks one, and the reply
 is tidied to a few words. A title replaces the first line, is saved (`ThreadMeta.titled`) and told to
-observers (`thread/titled`); a failure, or no title within 15 s, keeps the first line.
+observers (`thread/titled`); a failure, or no title within 15 s, keeps the first line. A name the user
+gives (⌘R) is saved with `ThreadMeta.renamed`, told to observers the same way, and never replaced by a
+generated title.
+
+**Queued and steered messages.** A message sent while a turn runs waits in the app. Queued ones go out
+one per turn, oldest first, as each turn ends. Steered ones (⌘⏎) go to the agent at once
+(`_space/session/steer`), which hands them to the model after the current step and says so
+(`_space/steered`); stopping the turn takes back what wasn't delivered (`_space/session/unsteer`) and
+returns it to the composer. Agents without `space/steer` get steered messages as queued ones.
+
+**Terminals.** The `terminal` provider (bundled: `plugins/terminal`) owns the shells; the app owns the
+screens. Each terminal is a login shell on its own PTY, in the thread's folder. Output arrives as
+numbered `terminal/output` notifications, handed to the app's `TerminalSink` on the plugin's
+connection (off the UI thread) and parsed by `space-terminal`; the app only redraws terminals on
+screen. The plugin keeps recent output, so `terminal/attach` can draw a terminal from scratch and the
+numbering joins the replay to the live stream without gaps or repeats. When the plugin restarts, the
+app attaches again to the terminals it still runs. A shell that exits closes its tab; closing a thread
+or deleting it stops its shells.
 
 **Traces.** Agents send `_space/trace` batches as they work. The host adds what only it knows: the
 user's message (`prompt`) and the hidden context it sent (`context`, with each section's plugin) before
@@ -249,73 +274,40 @@ host's own records; never tool output).
   crashing".
 - `required` plugins can't be turned off.
 
-## Harness implementation notes (v0)
+## Implementation notes
 
-- **GPUI version.** `space-app` depends on `gpui-kit = "0.9.0"`, renamed to `gpui` in Cargo.toml.
-  gpui-kit re-exports `gpui-pre 0.3.11` (a crates.io snapshot of Zed's GPUI), its macOS platform and
-  `gpui-component 0.9.0`, which provides the buttons, textarea and dark theme. `gpui-component` only builds
-  against `gpui-pre`, not against a zed git rev or `gpui 0.2.2`. Using the kit gives us widgets plus a
-  reproducible registry dependency instead of a full zed checkout. It builds cleanly on stable 1.98.
-- **Runtime bridge.** `space-core` uses tokio, with `tokio::process` for children and
-  `tokio-util` compat for ACP `ByteStreams`. The app owns a 2-worker tokio runtime and passes its
-  handle to `Host::new`. Every async `space-core` method spawns its work onto that runtime, so GPUI tasks
-  (`cx.spawn`) can await it directly. Host events go out on a tokio unbounded mpsc channel. A GPUI
-  foreground task drains it in batches and folds each `SessionEvent` into a per-session `SessionState`
-  (`SessionState::apply`).
-- **ACP client.** This uses `agent-client-protocol 5.0.0`, the `Client.v1()` builder with typed handlers for
-  `session/update`, `_space/status` (a `#[derive(JsonRpcNotification)]` struct in `space-protocol`)
-  and `session/request_permission`. Permission responses are produced in a `cx.spawn`ed task, so the
-  dispatch loop keeps running while the user decides. `session/cancel` answers any pending permission
-  requests with `cancelled`.
-- **Supervisor.** The process gets piped stdio and `kill_on_drop`. Each stderr line goes to a
-  2000-line ring buffer and is also emitted as a `HostEvent::PluginLog`. On exit the harness reports
-  `stopped` (killed or exit code 0) or `crashed` (exit code plus the last stderr line). Before spawning,
-  any relative file argument in `run.args` must exist, which catches unbuilt plugins with a clear error.
-- **App shell.** The window uses a transparent title bar (`appears_transparent`, traffic lights at
-  18,17, `app_owns_titlebar_drag`) and draws its own 48px bar, which moves the window with
-  `start_window_move`. The default agent plugin starts on launch. Each thread owns one ACP session
-  (a saved thread's is loaded when you write in it); events that arrive before `session/new` returns
-  are buffered and replayed. Saving and reopening threads is `space-app/src/persist.rs`. Colors, spacing and
-  fonts are tokens in `space-ui` (`theme/`), which also maps them onto the gpui-component theme.
-  Components live in `space-ui` and take props and callbacks only; `space-app/src/view.rs` wires
-  them to app state. See [ui-development.md](ui-development.md).
-- **Focus.** The root element tracks a focus handle, so clicking anything that is not focusable
-  moves focus there and clears the composer's focused state. GPUI only moves focus on mouse-down
-  into elements that track one, so without a sink the last focused control (or a keyboard focus
-  ring) stayed active after clicking elsewhere. Clickable chrome is plain styled divs (no focus);
-  dropdown triggers show a focus ring only after keyboard input, because popup menus hand focus back
-  to their trigger when they close. Selected and hovered rows use clearly different fills.
-- **Follow scrolling.** The transcript uses `space-ui`'s `FollowScrollArea`
-  (`components/follow_scroll.rs`). It measures its content after layout and before the scroll
-  container's prepaint, so it decides with this frame's max offset. Only input changes the offset
-  between frames (it's measured from the top, so content arriving below leaves it alone), so any
-  change is a user scroll: upward scrolling past 24px stops following, scrolling back within 24px
-  of the bottom resumes it, and content growth never stops it. While following, it re-pins with
-  `ScrollHandle::scroll_to_bottom`, which GPUI applies after layout, so streaming text never shows a
-  frame off the bottom. The app only calls `jump_to_bottom` (thread opened or switched, message sent)
-  and `glide_to_bottom` (⌘↓; the glide runs on the animation clock). ⌘↓ is bound at the root and in
-  the composer's textarea (`Input && !ComposerMultiline`); a multi-line composer keeps it for
-  moving the caret to the end.
-- **Settings.** `space-app/src/settings.rs` loads `~/.space/settings.json` (`SPACE_SETTINGS` overrides;
-  serde defaults, so partial or older files load; a corrupt file loads as defaults and is only replaced
-  once the user changes something) and saves atomically on every change. The page (⌘,) is an in-window
-  view, not a second window, so tiling window managers don't have to place it. Model and thinking
-  choices come from the latest `_space/status` that listed them; when a new thread's `session/new`
-  returns, its defaults go out as one `_space/session/configure` (on failure the agent's default stays,
-  logged). The macOS permission status comes from `getNotificationSettingsWithCompletionHandler`,
-  whose callback runs off the main thread and answers through a oneshot channel; it's refreshed when
-  the page opens and whenever the window becomes active.
-- **Plugin settings.** Secrets live in the macOS Keychain (`Secrets`, service `dev.brijesh.space`; tests
-  use their own services), text, switch and model values (`provider/model`, picked from the agent's
-models with "Same as agent" first) in the settings file (older files' `notifications`
-  switches move to the alerts plugin's settings on load). A save goes through `settings/validate`
-  first; the field shows "Checking…", then the outcome, and "Save anyway" when the plugin couldn't check.
+- **GPUI.** `space-app` and `space-ui` use `gpui-kit` (renamed `gpui` in Cargo.toml), which re-exports
+  `gpui-pre` (a crates.io snapshot of Zed's GPUI) and `gpui-component`'s widgets, with `syntect` for
+  code highlighting. `vendor/gpui-base` is a patched copy of one of its crates (`[patch.crates-io]`):
+  code blocks get a header row and wrap like code; see `vendor/gpui-base/SPACE_PATCH.md`.
+- **Runtime bridge.** `space-core` runs on its own tokio runtime; every async method spawns onto it,
+  so GPUI tasks can await them. Host events go out on a channel that a GPUI task drains in batches,
+  folding each `SessionEvent` into the thread's `SessionState`.
+- **ACP client.** `agent-client-protocol` with typed handlers for `session/update`, the `_space/*`
+  notifications and `session/request_permission`; permission answers come from a spawned task, so
+  the dispatch loop keeps running while the user decides.
+- **Supervisor.** Plugins get piped stdio and `kill_on_drop`; stderr goes to a ring buffer and
+  `HostEvent::PluginLog`. Exit 0 or a kill is `stopped`, anything else `crashed` with the last stderr
+  line.
+- **App shell.** One window with its own 48px title bar. Only one Space runs per bundle id (a second
+  one brings the first forward and exits). Opened without a folder (Spotlight, the Dock), new threads
+  start in the folder used last. Components in `space-ui` take props and callbacks;
+  `space-app/src/view.rs` wires them to app state ([ui-development.md](ui-development.md)).
+- **macOS text.** The Edit menu's Cut, Copy, Paste and Select All carry AppKit's own actions, which is
+  what makes those keys work in native fields (the rename sheet, open panels); ⌘Z reaches them through
+  a key monitor (`native_edit.rs`). Text prompts are native sheets (`text_prompt.rs`).
+- **Focus.** The root tracks a focus handle, so clicking anything unfocusable clears the composer's
+  focus; clickable chrome is plain divs, so clicks never leave focus rings.
+- **Follow scrolling.** The transcript's `FollowScrollArea` measures after layout and before the
+  scroll container's prepaint, so it decides with this frame's sizes: scrolling up stops following,
+  coming back near the bottom resumes it, and growing content never stops it.
+- **Settings.** `~/.space/settings.json` (`SPACE_SETTINGS` overrides), serde defaults so older files
+  load, saved atomically on every change. Secrets are in the Keychain (service `dev.brijesh.space`;
+  tests use their own). A plugin setting goes through `settings/validate` before it's stored.
 - **Testing.** `space-core` ships `space-stub-agent` (a scripted ACP agent) and `space-stub-guard` (a
-  scripted service plugin: decisions, holds, crashes, catalogs, validation). `crates/space-core/tests/`
-  run the host and pipeline against them; `plugins/permissions/tests/guardrail.rs` runs the real
-  permissions plugin against a scripted local stand-in for OpenAI, and `plugins/session-store/tests/`
-  saves, restarts and continues a thread with the real store and the stub agent, and
-  `plugins/titles/tests/` names threads through the stub agent's `_space/complete`.
+  scripted service plugin); `crates/space-core/tests/` run the host against them. Plugins have
+  end-to-end tests with the real plugin: permissions against a stand-in for OpenAI, session-store,
+  titles, and terminal with real shells.
 
 ## Repository layout
 
@@ -325,6 +317,7 @@ space/
 │  ├─ space-protocol/   # manifest, ACP re-exports, _space extensions, service protocol
 │  ├─ space-plugin/     # SDK for Rust service plugins
 │  ├─ space-core/       # discovery, supervisor, ACP + service connections, pipeline, sessions
+│  ├─ space-terminal/   # a terminal's screen: alacritty's parser, keys, mouse, selection
 │  ├─ space-ui/         # components, tokens, gallery
 │  └─ space-app/        # GPUI binary `Space`
 ├─ plugins/
@@ -333,6 +326,10 @@ space/
 │  ├─ alerts/           # Rust service plugin: a notification or sound when a turn ends or pauses
 │  ├─ session-store/    # Rust service plugin: saved threads in ~/.space/threads
 │  ├─ titles/           # Rust service plugin: thread titles from the thread's agent model
-│  └─ trajectory/       # Rust service plugin: every thread's trace, for the Trajectory tab
+│  ├─ trajectory/       # Rust service plugin: every thread's trace, for the Trajectory tab
+│  └─ terminal/         # Rust service plugin: shells on PTYs for the terminal pane
+├─ vendor/gpui-base/    # patched GPUI dependency (SPACE_PATCH.md)
+├─ packaging/           # cask template, release notes
+├─ scripts/             # bundle, release check, publish, notices, app icon
 └─ docs/
 ```
