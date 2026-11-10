@@ -921,9 +921,9 @@ impl SpaceApp {
     /// Switch the selected thread's model and/or effort (new threads use Settings' defaults).
     pub(crate) fn configure(&mut self, request: ConfigureSession, cx: &mut Context<Self>) {
         self.touch_agent();
-        // The agent sleeps: keep the choice on the thread (its session is switched to it when it's
-        // loaded again) and start the agent.
-        if self.agent_asleep && self.current().is_some_and(|t| t.live_session().is_none()) {
+        // No live session (a saved thread not loaded yet, or the agent sleeps): keep the choice on
+        // the thread; its session is switched to it when it's loaded (`session_defaults`).
+        if self.current().is_some_and(|t| t.live_session().is_none()) {
             if let Some(t) = self.selected.and_then(|k| self.thread_mut(k)) {
                 let s = &mut t.state.status;
                 if request.model.is_some() {
@@ -934,7 +934,9 @@ impl SpaceApp {
                     s.thinking_level = request.thinking_level.clone();
                 }
             }
-            self.wake_agent(cx);
+            if self.agent_asleep {
+                self.wake_agent(cx);
+            }
             cx.notify();
             return;
         }

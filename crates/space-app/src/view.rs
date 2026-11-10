@@ -1021,9 +1021,21 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
             cwd: thread.cwd.clone(),
             dirs: app.recent_dirs(),
             thread_empty: thread.is_empty(),
-            status: thread.state.status.clone(),
-            // While the agent sleeps the choice is kept and applied when the session is loaded again.
-            locked: thread.state.running || (thread.live_session().is_none() && !app.agent_asleep),
+            status: {
+                // A thread not loaded yet offers what the agent offers now, not what it saved.
+                let mut status = thread.state.status.clone();
+                if thread.live_session().is_none() {
+                    status.available_models = app.agent_models.clone().or(status.available_models);
+                    status.thinking_levels = app.agent_levels.clone().or(status.thinking_levels);
+                }
+                status
+            },
+            // Without a live session (a saved thread not loaded yet, a sleeping agent) the choice
+            // is kept on the thread and applied when its session is loaded. A new thread's first
+            // session gets Settings' defaults instead, so it waits for its session.
+            locked: thread.state.running
+                || thread.creating
+                || (thread.live_session().is_none() && thread.is_empty() && !app.agent_asleep),
             mode,
             blocker,
             stats: app.host.has_trajectory().then(|| app.trajectories.stats.get(&thread.id).cloned()).flatten(),
