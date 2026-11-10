@@ -258,10 +258,11 @@ pub fn agent_message_streaming(id: impl Into<ElementId>, markdown: &str, fade: b
     div().text_size(text::BODY).line_height(relative(text::LEADING_PROSE)).text_color(color::text()).child(view)
 }
 
-/// How a code block's language is written (`typescript` → TypeScript, `rs` → Rust). Unknown
-/// ones keep what the fence says, with a capital first letter.
+/// How a code block's language is written (`typescript` → TypeScript, `rs` → Rust); a block
+/// with none is "Plain text". Unknown ones keep what the fence says, with a capital first letter.
 pub fn language_name(lang: &str) -> String {
-    let known = match lang.to_ascii_lowercase().as_str() {
+    let known = match lang.trim().to_ascii_lowercase().as_str() {
+        "" => "Plain text",
         "rust" | "rs" => "Rust",
         "typescript" | "ts" => "TypeScript",
         "tsx" => "TSX",
@@ -310,7 +311,7 @@ pub fn language_name(lang: &str) -> String {
         "makefile" | "make" => "Makefile",
         "nix" => "Nix",
         "proto" | "protobuf" => "Protocol Buffers",
-        "text" | "txt" | "plaintext" => "Text",
+        "text" | "txt" | "plaintext" | "plain" => "Plain text",
         _ => "",
     };
     if !known.is_empty() {
@@ -325,12 +326,12 @@ pub fn language_name(lang: &str) -> String {
 pub fn code_block_header(block: &gpui::base::text::CodeBlock, window: &mut Window, cx: &mut App) -> AnyElement {
     const COPIED_FOR: std::time::Duration = std::time::Duration::from_millis(1500);
     let code = block.code();
-    let lang = block.lang().filter(|l| !l.is_empty());
+    let lang = block.lang().unwrap_or_default();
     // One "copied" moment per block, known by its text.
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        (lang.as_deref(), code.as_ref()).hash(&mut h);
+        (lang.as_ref(), code.as_ref()).hash(&mut h);
         h.finish()
     };
     let copied_at = window.use_keyed_state(SharedString::from(format!("code-copied-{key}")), cx, |_, _| None::<std::time::Instant>);
@@ -371,7 +372,7 @@ pub fn code_block_header(block: &gpui::base::text::CodeBlock, window: &mut Windo
         .border_b_1()
         .border_color(color::code_border())
         .font_family(text::UI_FONT)
-        .child(div().text_size(text::XS).text_color(color::text_3()).child(lang.map(|l| language_name(&l)).unwrap_or_default()))
+        .child(div().text_size(text::XS).text_color(color::text_3()).child(language_name(&lang)))
         .child(copy)
         .into_any_element()
 }
@@ -988,7 +989,10 @@ Invalid manifests are reported, not fatal.";
 ```rust\nfn main() {\n    // Greet the world.\n    println!(\"Hello, world! {}\", 42);\n}\n```\n\n\
 ```typescript\nconst greet = (name: string): string => `Hello, ${name}!`;\nconsole.log(greet(\"world\"));\n```\n\n\
 ```python\ndef main() -> None:\n    print(\"Hello, world!\")\n\nif __name__ == \"__main__\":\n    main()\n```\n\n\
-```\nno language: plain text\n```";
+```\nno language: plain text\n```\n\n\
+Long lines wrap only at spaces, and wrapped rows hang past their line:\n\n\
+```bash\ncargo clippy -p space-app --no-default-features --all-targets -- -D warnings && ls crates/space-ui/src/components/transcript.rs vendor/gpui-base/src/text/inline_flow.rs plugins/terminal/src/main.rs\n```\n\n\
+```rust\nfn main() {\n    if let Some(session) = host.sessions().find(|s| s.id() == wanted && s.agent().can_steer() && !s.is_closed()) {\n        session.steer(\"queued-1\".into(), text, attachments, images).await?;\n    }\n}\n```";
 
     pub fn tool(status: ToolStatus, output: &str) -> ToolCallInfo {
         ToolCallInfo {
@@ -1169,6 +1173,8 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             ),
             ex("assistant markdown", Rc::new(|| agent_message("preview-md", MARKDOWN))),
             ex("code blocks", Rc::new(|| agent_message("preview-code", CODE_BLOCKS))),
+            Example::new("code blocks, narrow", |_, _| agent_message("preview-code-narrow", CODE_BLOCKS).into_any_element())
+                .width(px(380.)),
         ]),
         ComponentPreview::new(Area::Transcript, "Thought", "Collapsed by default; expands to the reasoning.")
             .stacked()
@@ -1234,6 +1240,7 @@ mod tests {
         assert_eq!(language_name("RS"), "Rust");
         assert_eq!(language_name("json"), "JSON");
         assert_eq!(language_name("elm"), "Elm");
-        assert_eq!(language_name(""), "");
+        assert_eq!(language_name(""), "Plain text");
+        assert_eq!(language_name("text"), "Plain text");
     }
 }

@@ -2588,26 +2588,49 @@ impl CodeBlock {
             .line_height(relative(1.6))
             .relative()
             .refine_style(&style.code_block())
-            .child(
-                Inline::new(
-                    self.state.clone(),
-                    vec![],
-                    fade_highlights(
-                        node_cx
-                            .code_block_highlighter
-                            .as_ref()
-                            .map(|highlighter| self.highlighted_styles(highlighter))
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|(range, style)| (range, InlineHighlight::from(style)))
-                            .collect(),
-                        node_cx.stream_fades(leaf_key),
-                    ),
-                    node_cx.link_click_handler.clone(),
-                )
-                .range_backgrounds(node_cx.range_backgrounds(leaf_key).to_vec())
-                .reveal(node_cx.reveal_at(leaf_key, 0, self.code().len())),
-            );
+            .child({
+                let highlights = fade_highlights(
+                    node_cx
+                        .code_block_highlighter
+                        .as_ref()
+                        .map(|highlighter| self.highlighted_styles(highlighter))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|(range, style)| (range, InlineHighlight::from(style)))
+                        .collect(),
+                    node_cx.stream_fades(leaf_key),
+                );
+                let backgrounds = node_cx.range_backgrounds(leaf_key).to_vec();
+                let reveal = node_cx.reveal_at(leaf_key, 0, self.code().len());
+                // Space patch: laid out as an inline flow in code mode, which
+                // wraps only at spaces and indents continuation rows.
+                if header {
+                    InlineFlow::new(
+                        block_element_id("codeblock-text", self.span, options.ix),
+                        vec![InlineFlowItem::Text {
+                            state: self.state.clone(),
+                            text: self.code(),
+                            links: vec![],
+                            highlights,
+                            backgrounds,
+                            reveal,
+                        }],
+                        node_cx.link_click_handler.clone(),
+                    )
+                    .code()
+                    .into_any_element()
+                } else {
+                    Inline::new(
+                        self.state.clone(),
+                        vec![],
+                        highlights,
+                        node_cx.link_click_handler.clone(),
+                    )
+                    .range_backgrounds(backgrounds)
+                    .reveal(reveal)
+                    .into_any_element()
+                }
+            });
         if header {
             let id = block_element_id("codeblock", self.span, options.ix);
             let actions = node_cx.code_block_actions.clone().map(|actions| actions(&self, window, cx));

@@ -34,6 +34,8 @@ pub(super) struct InlineFlow {
     /// The block editor leaf this flow renders (design D3): its fragments
     /// and atoms are reported to the editor sink as pieces.
     editor_key: Option<u64>,
+    /// Space patch: wrap as code (see [`code_rows`]).
+    code: bool,
 }
 
 /// Bytes an image or custom inline node occupies in an editor leaf (one
@@ -284,7 +286,16 @@ impl InlineFlow {
             items,
             link_click_handler,
             editor_key: None,
+            code: false,
         }
+    }
+
+    /// Space patch: wrap as code: only at spaces and tabs (a token wider than
+    /// the line still breaks where it must), and continuation rows indented
+    /// past the line they continue. See [`code_rows`].
+    pub(super) fn code(mut self) -> Self {
+        self.code = true;
+        self
     }
 
     pub(super) fn editor_key(mut self, key: Option<u64>) -> Self {
@@ -413,6 +424,7 @@ impl Element for InlineFlow {
             current: Rc::default(),
         };
         let current = layout_state.current.clone();
+        let code = self.code;
 
         let layout_id = window.request_measured_layout(Default::default(), {
             move |known_dimensions, available_space, window, cx| {
@@ -442,6 +454,7 @@ impl Element for InlineFlow {
                                 &objects,
                                 &typography.text_style,
                                 wrap_width,
+                                code,
                                 window,
                                 cx,
                             )
@@ -988,6 +1001,7 @@ fn layout_flow(
         &objects,
         text_style,
         wrap_width,
+        false,
         window,
         cx,
     )
@@ -1005,6 +1019,7 @@ fn layout_measured_flow(
     prepared_objects: &[Option<MeasuredInlineObject>],
     text_style: &TextStyle,
     wrap_width: Option<Pixels>,
+    code: bool,
     window: &mut Window,
     _cx: &mut App,
 ) -> InlineFlowLayout {
@@ -1021,14 +1036,14 @@ fn layout_measured_flow(
         .iter()
         .map(|object| object.clone().map(|object| object.fit_text(wrap_width)))
         .collect::<Vec<_>>();
-    let line_ranges = line_ranges(items, image_sizes, &objects, text_style, wrap_width, window);
+    let line_ranges = line_ranges(items, image_sizes, &objects, text_style, wrap_width, code, window);
     let font_size = text_style.font_size.to_pixels(rem_size);
     let mut fragments = Vec::new();
     let mut empty_lines = Vec::new();
     let mut max_width = Pixels::ZERO;
     let mut y = Pixels::ZERO;
 
-    for line_range in line_ranges {
+    for (line_range, indent) in line_ranges {
         let mut line_fragments = Vec::new();
         let mut line_width = Pixels::ZERO;
         // `LineLayout` is the metric source used by the text paint path. Its
@@ -1180,7 +1195,8 @@ fn layout_measured_flow(
                 ),
             ));
         }
-        let mut x = Pixels::ZERO;
+        // Space patch: a code row continuing a wrapped line starts indented.
+        let mut x = indent;
         for mut fragment in line_fragments {
             // Give a text run's glyph box equal leading on both sides, as
             // much as the line allows: its glyphs are painted centered in the
@@ -1236,7 +1252,7 @@ fn layout_measured_flow(
             fragments.push(positioned);
         }
 
-        max_width = max_width.max(line_width);
+        max_width = max_width.max(indent + line_width);
         y += line_ascent + line_descent;
     }
 
@@ -1319,8 +1335,9 @@ fn line_ranges(
     objects: &[Option<MeasuredInlineObject>],
     text_style: &TextStyle,
     wrap_width: Option<Pixels>,
+    code: bool,
     window: &mut Window,
-) -> Vec<Range<usize>> {
+) -> Vec<(Range<usize>, Pixels)> {
     let total_len = items.iter().map(MeasureItem::len).sum::<usize>();
     let mut hard_lines = Vec::new();
     let mut line_start = 0;
@@ -1339,10 +1356,26 @@ fn line_ranges(
     hard_lines.push(line_start..total_len);
 
     let Some(wrap_width) = wrap_width else {
-        return hard_lines;
+        return hard_lines.into_iter().map(|line| (line, Pixels::ZERO)).collect();
     };
     let rem_size = window.rem_size();
     let font_size = text_style.font_size.to_pixels(rem_size);
+    // Space patch: code (one text item) wraps by its own rules.
+    if code && let [MeasureItem::Text { text, .. }] = items {
+        let space = shape_line(" ".into(), font_size, &text_runs(1, text_style, &[]), window).width();
+        let mut ranges = Vec::new();
+        for hard_line in hard_lines {
+            if hard_line.is_empty() {
+                ranges.push((hard_line, Pixels::ZERO));
+                continue;
+            }
+            let spans = shaped_spans(items, image_sizes, objects, text_style, &hard_line, window);
+            ranges.extend(code_rows(text, hard_line, wrap_width, space, |range| {
+                spans_width(&spans, range)
+            }));
+        }
+        return ranges;
+    }
     let mut wrapper = window
         .text_system()
         .line_wrapper(text_style.font(), font_size);
@@ -1350,7 +1383,7 @@ fn line_ranges(
 
     for hard_line in hard_lines {
         if hard_line.is_empty() {
-            ranges.push(hard_line);
+            ranges.push((hard_line, Pixels::ZERO));
             continue;
         }
         let mut item_start = 0;
@@ -1432,16 +1465,89 @@ fn line_ranges(
             if end < hard_line.end && spans_width(&spans, start..hard_line.end) <= wrap_width {
                 end = hard_line.end;
             }
-            ranges.push(start..end);
+            ranges.push((start..end, Pixels::ZERO));
             start = end;
         }
 
         if hard_line.is_empty() {
-            ranges.push(hard_line.clone());
+            ranges.push((hard_line.clone(), Pixels::ZERO));
         }
     }
 
     ranges
+}
+
+/// Space patch: the rows of one line of code, `line` of `text`, at
+/// `wrap_width`, each with the indent it starts at. `width` measures a range
+/// of `text` as it's shaped; `space` is one space's width.
+///
+/// A row breaks only after spaces or tabs, so `--no-default-features` or
+/// `a/b/c` stay whole. A token too wide for a row of its own breaks at the
+/// last grapheme that fits. Rows after the first are indented by the line's
+/// own indentation plus two spaces (less when the row would get too
+/// narrow), so a wrapped row can't pass for a new line. The ranges cover
+/// the line exactly, in order: nothing is added to the text.
+fn code_rows(
+    text: &str,
+    line: Range<usize>,
+    wrap_width: Pixels,
+    space: Pixels,
+    width: impl Fn(Range<usize>) -> Pixels,
+) -> Vec<(Range<usize>, Pixels)> {
+    let blank = |b: u8| b == b' ' || b == b'\t';
+    let bytes = text.as_bytes();
+    if width(line.clone()) <= wrap_width {
+        return vec![(line, Pixels::ZERO)];
+    }
+    let lead = bytes[line.clone()].iter().take_while(|b| blank(**b)).count();
+    let mut hang = width(line.start..line.start + lead) + space * 2.;
+    // Keep at least half the row, and room for some text, for what follows.
+    if hang > wrap_width / 2. || wrap_width - hang < space * 8. {
+        hang = (space * 2.).min(wrap_width / 4.);
+    }
+    // Where a row may start: after a run of blanks, at the next non-blank.
+    let candidates: Vec<usize> = (line.start + lead + 1..line.end)
+        .filter(|&p| blank(bytes[p - 1]) && !blank(bytes[p]))
+        .collect();
+    let trim = |start: usize, end: usize| {
+        let mut end = end;
+        while end > start && blank(bytes[end - 1]) {
+            end -= 1;
+        }
+        end
+    };
+    let mut rows = Vec::new();
+    let mut start = line.start;
+    let mut indent = Pixels::ZERO;
+    while start < line.end {
+        let room = wrap_width - indent;
+        if width(start..trim(start, line.end)) <= room {
+            rows.push((start..line.end, indent));
+            break;
+        }
+        let fits = candidates
+            .iter()
+            .rev()
+            .find(|&&c| c > start && width(start..trim(start, c)) <= room)
+            .copied();
+        let end = match fits {
+            Some(end) => end,
+            None => {
+                // One token wider than the row: as many graphemes as fit, at
+                // least one.
+                let bounds: Vec<usize> = text[start..line.end]
+                    .grapheme_indices(true)
+                    .map(|(ix, g)| start + ix + g.len())
+                    .collect();
+                let fit = bounds.partition_point(|&end| width(start..end) <= room);
+                bounds[fit.saturating_sub(1).min(bounds.len() - 1)].max(bounds[0])
+            }
+        };
+        rows.push((start..end, indent));
+        start = end;
+        indent = hang;
+    }
+    rows
 }
 
 /// Where the first line of `fragments` (which start at byte `start`) wraps at
@@ -2402,5 +2508,69 @@ mod tests {
                 );
             });
         }
+    }
+}
+
+/// Space patch: code wrapping.
+#[cfg(test)]
+mod code_wrap_tests {
+    use gpui::{Pixels, px};
+
+    use super::code_rows;
+
+    /// Every char 1px wide, so widths are byte counts (ASCII).
+    fn rows(text: &str, wrap: f32) -> Vec<(&str, f32)> {
+        code_rows(text, 0..text.len(), px(wrap), px(1.), |r| px((r.end - r.start) as f32))
+            .into_iter()
+            .map(|(r, indent): (_, Pixels)| (&text[r], f32::from(indent)))
+            .collect()
+    }
+
+    #[test]
+    fn breaks_only_after_spaces() {
+        let line = "cargo clippy -p space-app --no-default-features --all-targets";
+        let got = rows(line, 30.);
+        assert_eq!(
+            got,
+            vec![
+                ("cargo clippy -p space-app ", 0.),
+                ("--no-default-features ", 2.),
+                ("--all-targets", 2.),
+            ]
+        );
+        // The rows are the line, in order, with nothing added.
+        assert_eq!(got.iter().map(|r| r.0).collect::<String>(), line);
+    }
+
+    #[test]
+    fn paths_stay_whole() {
+        let got = rows("ls crates/space-ui/src/components/transcript.rs now", 46.);
+        assert_eq!(got[0].0, "ls ");
+        assert_eq!(got[1].0, "crates/space-ui/src/components/transcript.rs ");
+    }
+
+    #[test]
+    fn a_token_wider_than_the_row_breaks_where_it_must() {
+        let got = rows("x aaaaaaaaaaaaaaaaaaaaaaaaa", 10.);
+        assert_eq!(got[0], ("x ", 0.));
+        assert!(got[1..].iter().all(|(row, indent)| row.len() as f32 + indent <= 10.), "{got:?}");
+        assert_eq!(got.iter().map(|r| r.0).collect::<String>(), "x aaaaaaaaaaaaaaaaaaaaaaaaa");
+    }
+
+    #[test]
+    fn continuation_rows_hang_past_the_lines_indent() {
+        let got = rows("    let value = compute(first_argument, second_argument);", 40.);
+        assert_eq!(got[0].1, 0.);
+        assert_eq!(got[1].1, 6., "4 spaces of indent + 2: {got:?}");
+        // Too narrow for that: a smaller hang.
+        let got = rows("                    let value = compute(a, b);", 30.);
+        assert!(got[1].1 <= 7.5, "{got:?}");
+    }
+
+    #[test]
+    fn a_line_that_fits_is_one_row() {
+        assert_eq!(rows("short --flag", 40.), vec![("short --flag", 0.)]);
+        // Trailing spaces may hang past the edge.
+        assert_eq!(rows("abcd   ", 4.), vec![("abcd   ", 0.)]);
     }
 }
