@@ -128,7 +128,7 @@ pub fn view_tabs(selected: ViewTab, on_select: TabHandler) -> Div {
     div()
         .flex_none()
         .w_full()
-        .h(px(30.))
+        .h(size::PANE_BAR_H)
         .px_4()
         .flex()
         .items_end()

@@ -19,8 +19,8 @@ use crate::theme::{color, radius, size, text};
 pub const FONT_SIZE: Pixels = px(12.5);
 /// Space between the pane's edges and the grid.
 pub const PAD: Pixels = px(10.);
-/// The tab strip's height.
-pub const STRIP_H: Pixels = px(36.);
+/// The tab strip's height: the same as the Chat | Trajectory bar beside it.
+pub const STRIP_H: Pixels = size::PANE_BAR_H;
 
 /// Where the grid sits and how big its cells are (for turning pointer positions into cells).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -239,7 +239,7 @@ pub fn tab_strip(tabs: &[TerminalTab], selected: usize, maximized: bool, h: &Str
             .group(group.clone())
             .flex_none()
             .max_w(px(180.))
-            .h(px(26.))
+            .h(px(24.))
             .pl_2()
             .pr_1()
             .flex()

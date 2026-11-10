@@ -159,6 +159,9 @@ pub mod radius {
 pub mod size {
     use super::*;
     pub const TITLE_BAR_H: Pixels = px(48.);
+    /// The bars along the top of a pane (Chat | Trajectory, the terminal's tabs), the same
+    /// height so they line up side by side. Includes the bottom border.
+    pub const PANE_BAR_H: Pixels = px(33.);
     pub const SIDEBAR_W: Pixels = px(316.);
     /// Width reserved for the macOS traffic lights (at x=18, ~52px wide) plus a gap before
     /// the first title-bar button.
