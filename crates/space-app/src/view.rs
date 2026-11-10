@@ -424,7 +424,8 @@ fn body(app: &SpaceApp, streaming: Option<(usize, usize)>, window: &mut Window, 
         .flex()
         .justify_center()
         .px_6()
-        .pb_4()
+        // The same as the gap between the composer's card and its controls row above it.
+        .pb_2()
         .child(column().gap_2().children(notices).child(composer));
 
     if app.view_tab() == ViewTab::Trajectory

@@ -191,8 +191,9 @@ pub mod size {
     pub const SPINNER_MD: f32 = 16.;
     pub const SPINNER_LG: f32 = 18.;
     pub const CONTEXT_RING: f32 = 16.;
-    /// Fade at the bottom of the transcript, above the composer.
-    pub const SCROLL_FADE_H: Pixels = px(72.);
+    /// Fade at the bottom of the transcript, above the composer; also the space left under the
+    /// last item, so it clears the fade when scrolled to the end.
+    pub const SCROLL_FADE_H: Pixels = px(43.);
     /// A scroll area follows its bottom while the user is within this distance of it.
     pub const FOLLOW_SLOP: f32 = 24.;
     /// Gap between the scroll-to-bottom button and the bottom of its scroll area (the top of
