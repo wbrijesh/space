@@ -990,18 +990,27 @@ Before any of that, make sure the tests pass and lint is clean, and that the ter
 Invalid manifests are reported, not fatal.";
 
     /// Every markdown element a reply can have, for styling them together.
-    pub const MARKDOWN_ALL: &str = "# Heading 1\n\nA paragraph under it, then the smaller headings.\n\n\
-## Heading 2\n\n### Heading 3\n\n#### Heading 4\n\n##### Heading 5\n\n###### Heading 6\n\n\
-Text with **bold**, *italic*, ***both***, ~~struck~~, `inline code`, a [link](https://example.com), \
-an autolink https://example.com and a **bold `code` span**.\n\
-A second line of the same paragraph (soft break).\n\n\
-- A bullet\n- Another, with a nested list:\n  - nested bullet\n    - third level\n- Back out\n\n\
-1. First\n2. Second\n   1. Nested number\n3. Third\n\n\
-- [x] A done task\n- [ ] An open task\n\n\
-> A quote with **bold** and `code`.\n>\n> > A nested quote.\n\n\
-| Left | Center | Right |\n|:---|:---:|---:|\n| `cell` | text | 1,234 |\n| a longer cell that wraps onto more lines | **bold** | 5 |\n\n\
----\n\nAfter a rule. A footnote reference[^1].\n\n\
-```rust\nfn main() {}\n```\n\n[^1]: The footnote's text.\n";
+    pub const MARKDOWN_ALL: &str = concat!(
+        "# Heading 1\n\nA paragraph under it, then the smaller headings.\n\n",
+        "## Heading 2\n\nA paragraph under heading 2.\n\n### Heading 3\n\n#### Heading 4\n\n##### Heading 5\n\n###### Heading 6\n\n",
+        "Text with **bold**, *italic*, ***both***, ~~struck~~, `inline code`, a [link](https://example.com), ",
+        "an autolink https://example.com and a **bold `code` span**.\nA second line of the same paragraph (soft break).\n\n",
+        "- A bullet\n- Another, with a nested list:\n  - nested bullet\n  - another nested\n    - third level\n- Back out\n\n",
+        "1. First\n2. Second\n   1. Nested number\n   2. Nested again\n3. Third\n\n",
+        "- [x] A done task\n- [ ] An open task\n\n",
+        "1. A list item with two paragraphs.\n\n   Its second paragraph.\n\n   > A quote inside the item.\n2. The next item\n\n",
+        "> A quote with **bold** and `code`.\n>\n> > A nested quote.\n\n",
+        "| Left | Center | Right |\n|:---|:---:|---:|\n| `cell` | text | 1,234 |\n| a longer cell that wraps onto more lines | **bold** | 5 |\n\n",
+        "---\n\nAfter a rule. A footnote reference[^1].\n\n",
+        "Inline HTML: press <kbd>Ctrl</kbd>+<kbd>C</kbd>, H<sub>2</sub>O, x<sup>2</sup>, <mark>marked</mark> and <u>underlined</u>.\n\n",
+        "<details>\n<summary>Click to expand</summary>\n\nHidden content inside a details block.\n\n</details>\n\n",
+        "An image from this Mac and one from the web:\n\n![Space's icon](",
+        env!("CARGO_MANIFEST_DIR"),
+        "/../space-app/resources/AppIcon.png)\n\n",
+        "![The Rust logo](https://www.rust-lang.org/logos/rust-logo-512x512.png)\n\n",
+        "![A missing image](https://example.invalid/missing.png)\n\n",
+        "```rust\nfn main() {}\n```\n\n[^1]: The footnote's text.\n",
+    );
 
     pub const CODE_BLOCKS: &str = "Here are three:\n\n\
 ```rust\nfn main() {\n    // Greet the world.\n    println!(\"Hello, world! {}\", 42);\n}\n```\n\n\
