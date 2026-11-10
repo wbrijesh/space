@@ -3341,8 +3341,16 @@ fn heading_metrics(level: u8) -> (f32, f32, f32) {
     }
 }
 
-/// The gap below a heading, relative to the heading's size.
-const HEADING_BOTTOM_GAP: f32 = 0.35;
+/// Space patch: a heading's gaps follow the body text, not the heading's own size, so every
+/// level keeps one rhythm. Returns the space above (the whole section gap, the previous
+/// block's own gap included) and below, for a body font size.
+fn heading_gaps(level: u8, body: Pixels) -> (Pixels, Pixels) {
+    if level <= 3 {
+        (body * 1.65, body * 0.75)
+    } else {
+        (body * 1.1, body * 0.5)
+    }
+}
 
 /// The size a heading renders at, including one a caller's heading
 /// refinement pins, which its gaps follow.
@@ -3857,8 +3865,9 @@ impl BlockNode {
                 div()
                     .w_full()
                     .min_w_0()
-                    // Items breathe a little apart, less than paragraphs do.
-                    .when(ix > 0, |this| this.pt(body * 0.25))
+                    // Items breathe a little apart, less than paragraphs do (Space patch: 0.4
+                    // of the body size, about 6px).
+                    .when(ix > 0, |this| this.pt(body * 0.4))
                     .when(*spread, |this| this.child(div()))
                     .children({
                         let mut items: Vec<Div> = Vec::with_capacity(children.len());
@@ -3893,6 +3902,9 @@ impl BlockNode {
                                                 div().child(preceding_row).child(
                                                     div()
                                                         .w_full()
+                                                        // Space patch: a second paragraph
+                                                        // keeps a gap, as paragraphs do.
+                                                        .pt(body * 0.5)
                                                         .pl(indent)
                                                         .overflow_hidden()
                                                         .child(text),
@@ -4343,9 +4355,11 @@ impl BlockNode {
                 children,
                 span,
             } => {
-                let (_, line_height, section_gap) = heading_metrics(*level);
+                let (_, line_height, _) = heading_metrics(*level);
                 let refinement = node_cx.style.heading(*level);
                 let text_size = heading_size(*level, node_cx, window);
+                let body = body_font_size(node_cx, window);
+                let (section_gap, bottom_gap) = heading_gaps(*level, body);
                 // The previous block already leaves a gap below itself, so
                 // only the rest of the section gap is added here -- the two
                 // collapse like CSS margins. A heading right after another one
@@ -4355,11 +4369,9 @@ impl BlockNode {
                     px(0.)
                 } else {
                     match options.prev {
-                        PrevBlock::Heading(_) => text_size * 0.25,
-                        PrevBlock::Rule => (text_size * section_gap
-                            - rule_space(body_font_size(node_cx, window)))
-                        .max(px(0.)),
-                        PrevBlock::Other => (text_size * section_gap
+                        PrevBlock::Heading(_) => body * 0.25,
+                        PrevBlock::Rule => (section_gap - rule_space(body)).max(px(0.)),
+                        PrevBlock::Other => (section_gap
                             - node_cx.style.paragraph_gap().to_pixels(window.rem_size()))
                         .max(px(0.)),
                     }
@@ -4367,7 +4379,7 @@ impl BlockNode {
                 let bottom = if options.is_last {
                     px(0.)
                 } else {
-                    text_size * HEADING_BOTTOM_GAP
+                    bottom_gap
                 };
 
                 div()
@@ -4502,7 +4514,7 @@ impl BlockNode {
                     let above = match options.prev {
                         PrevBlock::Rule => space,
                         PrevBlock::Heading(level) => {
-                            heading_size(level, node_cx, window) * HEADING_BOTTOM_GAP
+                            heading_gaps(level, body_font_size(node_cx, window)).1
                         }
                         PrevBlock::Other => {
                             node_cx.style.paragraph_gap().to_pixels(window.rem_size())

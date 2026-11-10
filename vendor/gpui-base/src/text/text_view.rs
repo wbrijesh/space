@@ -2949,7 +2949,7 @@ mod tests {
         let nested_starts_at_four = "1. outer\n\n   4. nested\n   5. again";
         assert_eq!(
             shaped_markers(Format::Markdown, nested_starts_at_four),
-            ["1.", "D.", "E."]
+            ["1.", "4.", "5."]
         );
 
         let nested_starts_at_zero = "1. outer\n\n   0. zero";

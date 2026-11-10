@@ -21,20 +21,9 @@ pub(super) fn list_item_prefix(
 ) -> String {
     if ordered {
         let ordinal = ordered_list_ordinal(start, ix);
-        if depth == 0 || start == Some(0) {
-            return format!("{ordinal}. ");
-        }
-
-        let first_letter = if depth == 1 { b'A' } else { b'a' };
-        let mut remaining = ordinal;
-        let mut letters = Vec::new();
-        while remaining > 0 {
-            remaining -= 1;
-            letters.push((first_letter + (remaining % 26) as u8) as char);
-            remaining /= 26;
-        }
-        let label: String = letters.into_iter().rev().collect();
-        return format!("{label}. ");
+        // Space patch: numbers at every depth, as browsers and other chat apps show nested
+        // ordered lists (letters read as an outline, not a list).
+        format!("{ordinal}. ")
     } else {
         let depth = depth.min(BULLETS.len() - 1);
         let bullet = BULLETS[depth];
@@ -89,37 +78,14 @@ mod tests {
     }
 
     #[test]
-    fn test_alphabetic_list_item_prefix() {
-        for (ordinal, label) in [
-            (1, "A"),
-            (26, "Z"),
-            (27, "AA"),
-            (28, "AB"),
-            (52, "AZ"),
-            (53, "BA"),
-            (702, "ZZ"),
-            (703, "AAA"),
-            (u32::MAX, "MWLQKWU"),
-        ] {
-            for depth in [1, 2, 3] {
-                let label = if depth == 1 {
-                    label.to_string()
-                } else {
-                    label.to_ascii_lowercase()
-                };
-                let expected = format!("{label}. ");
-                assert_eq!(list_item_prefix(0, Some(ordinal), true, depth), expected);
-                assert_eq!(
-                    list_item_prefix((ordinal - 1) as usize, None, true, depth),
-                    expected
-                );
-            }
+    fn nested_ordered_lists_keep_numbers() {
+        // Space patch: no letters at depth.
+        for depth in [0, 1, 2, 3] {
+            assert_eq!(list_item_prefix(0, Some(1), true, depth), "1. ");
+            assert_eq!(list_item_prefix(26, Some(1), true, depth), "27. ");
+            assert_eq!(list_item_prefix(0, Some(4), true, depth), "4. ");
+            assert_eq!(list_item_prefix(1, Some(0), true, depth), "1. ");
         }
-        assert_eq!(list_item_prefix(1, Some(26), true, 1), "AA. ");
-        assert_eq!(list_item_prefix(1, Some(26), true, 2), "aa. ");
-        assert_eq!(list_item_prefix(usize::MAX, Some(1), true, 1), "MWLQKWU. ");
-        assert_eq!(list_item_prefix(26, Some(1), true, 0), "27. ");
-        assert_eq!(list_item_prefix(27, Some(0), true, 1), "27. ");
     }
 
     #[test]
@@ -130,13 +96,13 @@ mod tests {
         assert_eq!(list_item_prefix(10, Some(1), true, 0), "11. ");
         assert_eq!(list_item_prefix(0, Some(3), true, 0), "3. ");
         assert_eq!(list_item_prefix(1, Some(3), true, 0), "4. ");
-        assert_eq!(list_item_prefix(0, Some(1), true, 1), "A. ");
-        assert_eq!(list_item_prefix(1, Some(1), true, 1), "B. ");
-        assert_eq!(list_item_prefix(0, Some(4), true, 1), "D. ");
-        assert_eq!(list_item_prefix(1, Some(4), true, 1), "E. ");
-        assert_eq!(list_item_prefix(0, Some(1), true, 2), "a. ");
-        assert_eq!(list_item_prefix(1, Some(1), true, 2), "b. ");
-        assert_eq!(list_item_prefix(6, Some(1), true, 2), "g. ");
+        assert_eq!(list_item_prefix(0, Some(1), true, 1), "1. ");
+        assert_eq!(list_item_prefix(1, Some(1), true, 1), "2. ");
+        assert_eq!(list_item_prefix(0, Some(4), true, 1), "4. ");
+        assert_eq!(list_item_prefix(1, Some(4), true, 1), "5. ");
+        assert_eq!(list_item_prefix(0, Some(1), true, 2), "1. ");
+        assert_eq!(list_item_prefix(1, Some(1), true, 2), "2. ");
+        assert_eq!(list_item_prefix(6, Some(1), true, 2), "7. ");
         assert_eq!(list_item_prefix(0, Some(0), true, 1), "0. ");
         assert_eq!(list_item_prefix(1, Some(0), true, 1), "1. ");
         assert_eq!(list_item_prefix(0, None, false, 0), "• ");

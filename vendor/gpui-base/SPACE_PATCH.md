@@ -1,4 +1,4 @@
-# Space's patch to gpui-base 0.9.0
+# Space's patches to gpui-base 0.9.0
 
 This is gpui-base 0.9.0 from crates.io (Apache-2.0, https://github.com/longbridge/gpui-kit,
 `crates/base` at 7591a35e), used through `[patch.crates-io]` in the workspace `Cargo.toml`.
@@ -22,4 +22,11 @@ the line's own indentation plus two spaces; `layout_measured_flow` starts each r
 indent. The rows cover the line exactly, and a selection maps back to the block's own text, so
 copying gives the original code. Tests: `code_wrap_tests` in `inline_flow.rs`.
 
-To update gpui-base, copy the new version here and re-apply that change.
+Markdown rhythm, in `src/text/node.rs` and `src/text/utils.rs` (marked "Space patch"):
+headings' gaps follow the body size (`heading_gaps`: about 24px above and 11px below for
+levels 1–3, 16px and 7px for 4–6) instead of each heading's own size; list items are 0.4 of
+the body size apart (was 0.25); a list item's second paragraph keeps half a body size above
+it; and nested ordered lists are numbered at every depth (`list_item_prefix`; it used letters
+from the second level). Tests updated to match.
+
+To update gpui-base, copy the new version here and re-apply these changes.
