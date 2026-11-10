@@ -32,23 +32,64 @@ const TOOL_MAX_LINES: usize = 40;
 
 /// A user message: its pictures (right-aligned, above), then the bubble with any file chips and
 /// the text. `id` is unique in the thread (element ids of the pictures).
-pub fn user_message(id: impl Into<SharedString>, text_: &str, attachments: &[PathBuf], pics: Vec<Pic>, on_open: Option<OpenPicsHandler>) -> Div {
+/// A message longer than this many lines is shown cut to [`FOLD_SHOWN`] lines, with Show more.
+const FOLD_ABOVE: usize = 12;
+const FOLD_SHOWN: usize = 6;
+/// The bubble's side padding (`px_4`), taken off its width for the text.
+const BUBBLE_PAD_X: Pixels = px(16.);
+
+/// A long message's fold: its transcript index, whether it's open, and the toggle.
+pub type UserFold = (usize, bool, ToggleHandler);
+
+pub fn user_message(
+    id: impl Into<SharedString>,
+    text_: &str,
+    attachments: &[PathBuf],
+    pics: Vec<Pic>,
+    on_open: Option<OpenPicsHandler>,
+    fold: Option<UserFold>,
+) -> Div {
     let has_bubble = !text_.trim().is_empty() || !attachments.is_empty();
     div()
         .flex()
         .flex_col()
         .gap_1p5()
         .when(!pics.is_empty(), |d| d.child(message_images(id, pics, on_open)))
-        .when(has_bubble, |d| d.child(user_bubble(text_, attachments)))
+        .when(has_bubble, |d| d.child(user_bubble(text_, attachments, fold)))
 }
 
-pub fn user_bubble(text_: &str, attachments: &[PathBuf]) -> Div {
+/// Whether a message is long enough to fold: more than [`FOLD_ABOVE`] lines as the bubble wraps
+/// it (its width is fixed, so this is what it shows).
+pub fn is_long_message(text_: &str, window: &Window) -> bool {
+    let text_ = text_.trim();
+    // Too short to wrap that far (the widest glyphs are well over 4px).
+    let per_line = ((size::USER_BUBBLE_MAX_W - BUBBLE_PAD_X * 2.) / px(4.)) as usize;
+    if text_.lines().map(|l| l.len() / per_line + 1).sum::<usize>() <= FOLD_ABOVE {
+        return false;
+    }
+    let run = TextRun {
+        len: text_.len(),
+        font: window.text_style().font(),
+        color: color::text(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let width = size::USER_BUBBLE_MAX_W - BUBBLE_PAD_X * 2.;
+    match window.text_system().shape_text(text_.to_string().into(), text::BODY, &[run], Some(width), None) {
+        Ok(lines) => lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum::<usize>() > FOLD_ABOVE,
+        Err(_) => text_.lines().count() > FOLD_ABOVE,
+    }
+}
+
+pub fn user_bubble(text_: &str, attachments: &[PathBuf], fold: Option<UserFold>) -> Div {
     let mut bubble = div()
-        .max_w(relative(0.82))
+        .min_w_0()
+        .max_w(size::USER_BUBBLE_MAX_W)
         .flex()
         .flex_col()
         .gap_2()
-        .px_4()
+        .px(BUBBLE_PAD_X)
         .py_2p5()
         .rounded(radius::CARD)
         .bg(color::surface_2())
@@ -58,7 +99,41 @@ pub fn user_bubble(text_: &str, attachments: &[PathBuf]) -> Div {
         bubble = bubble.child(div().flex().flex_wrap().gap_1p5().children(attachments.iter().map(|p| attachment_chip(p))));
     }
     if !text_.is_empty() {
-        bubble = bubble.child(text_.trim().to_string());
+        let body = text_.trim().to_string();
+        bubble = match fold {
+            None => bubble.child(body),
+            Some((ix, open, on_toggle)) => {
+                let line = text::BODY * text::LEADING;
+                let text_el = if open {
+                    div().child(body)
+                } else {
+                    // The first lines, fading out at the bottom.
+                    let bg = color::surface_2();
+                    div().relative().max_h(line * FOLD_SHOWN as f32).overflow_hidden().child(body).child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom_0()
+                            .h(line * 1.5)
+                            .bg(linear_gradient(180., linear_color_stop(bg.opacity(0.), 0.), linear_color_stop(bg, 1.))),
+                    )
+                };
+                let toggle = div()
+                    .id(("user-fold", ix))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_size(text::SM)
+                    .text_color(color::text_3())
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(color::text_2()))
+                    .child(if open { "Show less" } else { "Show more" })
+                    .child(Icon::new(if open { IconName::ChevronUp } else { IconName::ChevronDown }).size(size::ICON_SM))
+                    .on_click(move |_, w, cx| on_toggle(ix, w, cx));
+                bubble.child(div().flex().flex_col().gap_1().child(text_el).child(toggle))
+            }
+        };
     }
     div().flex().justify_end().child(bubble)
 }
@@ -545,7 +620,9 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
                     out.push(div().flex().flex_col().children(std::mem::take(&mut turn)).into_any_element());
                 }
                 let group = SharedString::from(format!("user-{key}-{ix}"));
-                let message = user_message(format!("pics-{key}-{ix}"), text, attachments, images.iter().map(Pic::file).collect(), on_open_image.clone());
+                let fold = is_long_message(text, window).then(|| (ix, expanded.contains(&ix), on_toggle.clone()));
+                let message =
+                    user_message(format!("pics-{key}-{ix}"), text, attachments, images.iter().map(Pic::file).collect(), on_open_image.clone(), fold);
                 out.push(
                     div()
                         .group(group.clone())
@@ -619,7 +696,7 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
         out.push(div().flex().flex_col().children(turn).into_any_element());
     }
     if let Some((text_, attachments, pics)) = queued {
-        out.push(div().mt(GAP).child(user_message(format!("pics-{key}-queued"), text_, attachments, pics, None)).into_any_element());
+        out.push(div().mt(GAP).child(user_message(format!("pics-{key}-queued"), text_, attachments, pics, None, None)).into_any_element());
         out.push(div().mt(GAP).child(working_row("Starting agent…")).into_any_element());
     } else if state.running
         && state.pending_permission().is_none()
@@ -644,6 +721,12 @@ pub mod fixtures {
     use space_core::{PermissionKind, PermissionOption, ToolCallPatch};
 
     use super::*;
+
+    pub const LONG_MESSAGE: &str = "Here's the plan for the release, step by step:\n\n\
+1. Bump the version in Cargo.toml.\n2. Write the release notes.\n3. Build the release app and check every plugin starts.\n\
+4. Tag the commit.\n5. Upload the zip to a GitHub release.\n6. Update the cask in the tap.\n7. Install it on the other Mac.\n\
+8. Check the update command works.\n9. Check Spotlight finds it.\n10. Tell the team.\n\n\
+Before any of that, make sure the tests pass and lint is clean, and that the terminal plugin is in the bundle.";
 
     pub const MARKDOWN: &str = "Plugin discovery scans three roots in order: the bundled `plugins/` directory, \
 `~/.space/plugins` and the project's `.space/plugins`. Later roots win on duplicate ids.\n\n\
@@ -802,20 +885,23 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     let (t1, t2, t3, t4, t5, t6, t7, t8, t9) =
         (t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t);
     let (a1, a2, a3) = (answer.clone(), answer.clone(), answer);
+    let (t10, t11): (ToggleHandler, ToggleHandler) = (Rc::new(|_, _, _| {}), Rc::new(|_, _, _| {}));
     vec![
         ComponentPreview::new(Area::Transcript, "Messages", "User bubble and markdown reply.").stacked().examples([
-            ex("user", Rc::new(|| user_bubble("Explain how plugin discovery works", &[]))),
+            ex("user", Rc::new(|| user_bubble("Explain how plugin discovery works", &[], None))),
             ex(
                 "user with attachments",
-                Rc::new(|| user_bubble("Review these", &[PathBuf::from("Cargo.toml"), PathBuf::from("crates")])),
+                Rc::new(|| user_bubble("Review these", &[PathBuf::from("Cargo.toml"), PathBuf::from("crates")], None)),
             ),
             ex(
                 "user with images",
                 Rc::new(|| {
                     let pics = vec![super::images::sample(1600, 900), super::images::sample(1024, 1024)];
-                    user_message("preview-pics", "Why does the sidebar look like this?", &[], pics, None)
+                    user_message("preview-pics", "Why does the sidebar look like this?", &[], pics, None, None)
                 }),
             ),
+            ex("long, folded", Rc::new(move || user_bubble(LONG_MESSAGE, &[], Some((0, false, t10.clone()))))),
+            ex("long, shown in full", Rc::new(move || user_bubble(LONG_MESSAGE, &[], Some((1, true, t11.clone()))))),
             ex("assistant markdown", Rc::new(|| agent_message("preview-md", MARKDOWN))),
         ]),
         ComponentPreview::new(Area::Transcript, "Thought", "Collapsed by default; expands to the reasoning.")
