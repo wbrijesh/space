@@ -304,6 +304,8 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
 
 pub struct SpaceApp {
     pub(crate) host: Host,
+    /// The window it's in, for work that arrives without one (a shell that exits).
+    pub(crate) window_handle: AnyWindowHandle,
     pub(crate) project_dir: PathBuf,
     pub(crate) agent_id: Option<String>,
     pub(crate) agent: Option<AgentHandle>,
@@ -530,6 +532,7 @@ impl SpaceApp {
 
         let host_for_terminals = host.clone();
         let mut this = Self {
+            window_handle: window.window_handle(),
             agent_id: agent_plugin.map(|p| p.id().to_string()),
             notify: options.notify,
             host,

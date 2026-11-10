@@ -405,10 +405,10 @@ impl SpaceApp {
         let Some(key) = self.selected else { return };
         let Some(id) = self.terminals.panes.get(&key).and_then(|p| p.tabs.get(ix)).cloned() else { return };
         let Some(session) = self.terminals.session(&id) else {
-            return self.remove_tab(key, &id, window, cx);
+            return self.remove_tab(key, &id, true, window, cx);
         };
         if !session.busy() {
-            return self.remove_tab(key, &id, window, cx);
+            return self.remove_tab(key, &id, true, window, cx);
         }
         let title = session.state.lock().unwrap().title.clone();
         let answer = window.prompt(
@@ -420,7 +420,7 @@ impl SpaceApp {
         );
         cx.spawn_in(window, async move |this, cx| {
             if answer.await == Ok(0) {
-                let _ = this.update_in(cx, |this, window, cx| this.remove_tab(key, &id, window, cx));
+                let _ = this.update_in(cx, |this, window, cx| this.remove_tab(key, &id, true, window, cx));
             }
         })
         .detach();
@@ -434,7 +434,9 @@ impl SpaceApp {
         }
     }
 
-    fn remove_tab(&mut self, key: u64, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    /// Close the tab and its shell; with `refocus`, focus goes to the pane's next tab, or the
+    /// composer once the pane closes.
+    fn remove_tab(&mut self, key: u64, id: &str, refocus: bool, window: &mut Window, cx: &mut Context<Self>) {
         let (host, gone) = (self.host.clone(), id.to_string());
         cx.background_spawn(async move { host.terminal_close(&gone).await }).detach();
         self.drop_session(id);
@@ -445,12 +447,17 @@ impl SpaceApp {
                 pane.selected -= 1;
             }
         }
-        if pane.tabs.is_empty() {
+        let closed = pane.tabs.is_empty();
+        if closed {
             pane.open = false;
             pane.maximized = false;
-            self.focus_composer(window, cx);
-        } else {
-            self.focus_terminal(key, window, cx);
+        }
+        if refocus && self.selected == Some(key) {
+            if closed {
+                self.focus_composer(window, cx);
+            } else {
+                self.focus_terminal(key, window, cx);
+            }
         }
         cx.notify();
     }
@@ -508,11 +515,25 @@ impl SpaceApp {
         }
     }
 
+    /// The shell ended (`exit`, ⌃D): its tab closes, as closing it would, and the pane with
+    /// its last tab. Ended shells found when attaching (`replay`) keep their notice instead.
     pub(crate) fn terminal_exited(&mut self, id: &str, exit_code: Option<i32>, cx: &mut Context<Self>) {
-        if let Some(session) = self.terminals.session(id) {
-            session.state.lock().unwrap().exited = Some(exit_code);
-            self.notify_terminal(id, cx);
-        }
+        let Some(session) = self.terminals.session(id) else { return };
+        session.state.lock().unwrap().exited = Some(exit_code);
+        self.notify_terminal(id, cx);
+        // After this event's update: closing needs the window (focus moves).
+        let (handle, id) = (self.window_handle, id.to_string());
+        cx.spawn(async move |this, cx| {
+            let _ = handle.update(cx, |_, window, cx| this.update(cx, |this, cx| this.close_exited_terminal(&id, window, cx)));
+        })
+        .detach();
+    }
+
+    fn close_exited_terminal(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.terminals.panes.iter().find_map(|(k, p)| p.tabs.iter().any(|t| t == id).then_some(*k)) else { return };
+        // Focus moves only if it was in this terminal: a shell ending elsewhere doesn't take it.
+        let had_focus = self.terminals.views.get(id).is_some_and(|v| v.read(cx).focus.is_focused(window));
+        self.remove_tab(key, id, had_focus, window, cx);
     }
 
     /// The terminal plugin's status changed: attach to what it runs once it's up; mark its

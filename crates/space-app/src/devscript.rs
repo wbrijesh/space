@@ -19,6 +19,7 @@
 //! rename some name    rename the selected thread as the Rename sheet would (then print its title)
 //! title               print the selected thread's title
 //! editmenu            print the Edit menu's items: AppKit action and key equivalent
+//! terminals           print the selected thread's terminal pane: open, and its tabs
 //! shot name           run `$SPACE_SHOT_CMD name` (e.g. a script calling `screencapture -l`)
 //! shotnow name        same as `shot` without the 250 ms settle delay (animation frames)
 //! quit                quit the app
@@ -213,6 +214,16 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                     });
                 }
                 "editmenu" => print_edit_menu(),
+                "terminals" => {
+                    let _ = window.update(cx, |root, _, cx| {
+                        let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
+                        if let Some(app) = app {
+                            let app = app.read(cx);
+                            let pane = app.selected.and_then(|k| app.terminals.panes.get(&k));
+                            eprintln!("script: terminals {:?}", pane.map(|p| (p.open, p.tabs.len(), p.opening)));
+                        }
+                    });
+                }
                 "quit" => {
                     cx.update(|cx| cx.quit());
                 }
