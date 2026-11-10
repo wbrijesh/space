@@ -711,7 +711,8 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
         let on_menu = h.on_menu.clone();
         Rc::new(move |w, cx| on_menu(None, w, cx))
     };
-    let folder = {
+    // The folder is picked before the first message; after that it's the thread's.
+    let folder = c.thread_empty.then(|| {
         let is_open = menu_open == Some(ComposerMenu::Folder);
         trigger("project-menu", is_open, true)
             .on_click(toggle_menu(ComposerMenu::Folder))
@@ -719,11 +720,11 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
             .child(div().max_w(px(220.)).truncate().child(format::dir_name(&c.cwd)))
             .child(chevron())
             .when(is_open, |d| {
-                let menu = folder_menu(&c.dirs, &c.cwd, c.thread_empty, h.on_pick_dir.clone(), h.on_choose_folder.clone(), close_menu.clone());
+                let menu = folder_menu(&c.dirs, &c.cwd, h.on_pick_dir.clone(), h.on_choose_folder.clone(), close_menu.clone());
                 let close = close_menu.clone();
                 d.child(popover(false, menu, move |w, cx| close(w, cx)))
             })
-    };
+    });
 
     let mut right = div().flex().items_center().gap_0p5();
     let picker_locked = c.locked || status.available_models.as_ref().is_none_or(|m| m.is_empty());
@@ -810,7 +811,7 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
         .justify_between()
         .pl(px(ROW_INSET_LEFT))
         .pr(px(ROW_INSET_RIGHT))
-        .child(div().flex().items_center().gap_1().min_w_0().child(folder).children(mode).children(resume))
+        .child(div().flex().items_center().gap_1().min_w_0().children(folder).children(mode).children(resume))
         .child(right)
 }
 
@@ -929,12 +930,10 @@ pub fn mode_menu(entries: &[CatalogEntry], current: &str, on_mode: StringHandler
     }))
 }
 
-/// Folder picker: recent folders and "Choose folder…". For a non-empty thread, picking a
-/// folder starts a new thread there.
+/// Folder picker for a new thread: recent folders and "Choose folder…".
 pub fn folder_menu(
     dirs: &[PathBuf],
     cwd: &PathBuf,
-    thread_empty: bool,
     on_pick: PathHandler,
     on_choose: Handler,
     close: Handler,
@@ -943,10 +942,10 @@ pub fn folder_menu(
     let choose_close = close.clone();
     surface()
         .min_w(px(260.))
-        .child(heading(if thread_empty { "Project folder" } else { "New thread in…" }))
+        .child(heading("Project folder"))
         .children(dirs.iter().enumerate().map(|(ix, dir)| {
             let (d, f, close) = (dir.clone(), on_pick.clone(), close.clone());
-            choice(("folder", ix), folder(IconName::Folder), format::abbreviate_home(dir), thread_empty && dir == cwd).on_click(
+            choice(("folder", ix), folder(IconName::Folder), format::abbreviate_home(dir), dir == cwd).on_click(
                 move |_, w, cx| {
                     close(w, cx);
                     f(d.clone(), w, cx)
@@ -989,7 +988,8 @@ pub mod fixtures {
         ComposerControls {
             dirs: vec![cwd.clone()],
             cwd,
-            thread_empty: false,
+            // No context used yet: a new thread (its folder can still be picked).
+            thread_empty: tokens == 0,
             status: status(tokens),
             locked,
             mode: Some(modes("workspace-write", true)),
@@ -1166,7 +1166,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             }),
             menu("folder", || {
                 let c = fixtures::controls(0, false);
-                folder_menu(&c.dirs, &c.cwd, true, Rc::new(|_, _, _| {}), Rc::new(|_, _| {}), Rc::new(|_, _| {}))
+                folder_menu(&c.dirs, &c.cwd, Rc::new(|_, _, _| {}), Rc::new(|_, _| {}), Rc::new(|_, _| {}))
             }),
             menu("resume", || {
                 let t = |id: &str, title: &str, closed: &str| ClosedThread { id: id.into(), title: title.to_string().into(), closed: closed.to_string().into() };

@@ -33,8 +33,8 @@ cask clears macOS's download mark so it opens normally.
 - **Closing** a thread keeps it: a new, empty thread in the same folder offers it under **Resume**.
   Closed threads are deleted after 30 days (Settings ▸ Threads).
 - **Titles** come from the agent's model after your first message. A name you give (⌘R) stays.
-- **Folders.** Each thread works in one folder, picked under the composer. Opened from Spotlight or the
-  Dock, Space starts where you worked last.
+- **Folders.** Each thread works in one folder, picked under the composer before its first message.
+  Opened from Spotlight or the Dock, Space starts where you worked last.
 - **Terminals** belong to a thread and start in its folder; they keep running while hidden.
 - **Trajectory** shows every model request and tool call of a thread
   ([plugins/trajectory](plugins/trajectory/README.md)).
