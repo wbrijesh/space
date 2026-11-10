@@ -23,16 +23,19 @@ Space harness (ACP client) ──stdin/stdout NDJSON──▶ space-ts pi-agent 
 
 | ACP | Behaviour |
 |---|---|
-| `initialize` | Returns `protocolVersion: 1`, `loadSession: true`, `agentInfo {name: "pi-agent", version}`, and the Space protocol version in `_meta["space/protocolVersion"]` |
+| `initialize` | Returns `protocolVersion: 1`, `loadSession: true`, `agentInfo {name: "pi-agent", version}`, the Space protocol version in `_meta["space/protocolVersion"]`, and `_meta["space/steer"]: true` |
 | `session/new {cwd}` | Creates an isolated pi session for `cwd`, kept in `_meta["space/dataDir"]` when the host gives a folder (else in memory), then sends the `_space/status` notification (`provider`, `model`, `thinkingLevel`, `availableModels`, `thinkingLevels`, context usage). No ACP modes: permission modes belong to the host. |
 | `session/load {sessionId, cwd}` | Continues the pi session kept in `_meta["space/dataDir"]` (pi's own session file; never `~/.pi`) under the same id, then sends `_space/status`. Nothing is replayed: Space shows the conversation from its own saved thread. |
 | `session/prompt` | Joins the text blocks (other block types are described inline) and runs `session.prompt()`. Hidden context sections in `_meta["space/context"]` go into the run's system prompt. It streams pi events as `session/update` notifications and resolves with `end_turn`, `cancelled` or `max_tokens`. Provider errors become a JSON-RPC error (-32603) carrying pi's message, for example the claude-cli usage-credit stop. |
 | `session/cancel` | `session.abort()`; the pending prompt resolves with `cancelled` |
 | `_space/complete {sessionId, prompt, provider?, model?}` | One `completeSimple` call on the session's model runtime (the session's model, or the one named; no tools, at most 256 tokens), outside the conversation; returns `{text}`. Space's titles plugin names threads with it. |
+| `_space/session/steer {sessionId, id, text, images?, attachments?}` | `session.steer()`: pi delivers it after the current step. When it leaves pi's queue (`queue_update`), `_space/steered {sessionId, id}` goes out in order with the turn's updates. Rejected when no turn runs; still undelivered when the turn ends, it's dropped (Space sends it next). |
+| `_space/session/unsteer {sessionId}` | `session.clearQueue()`; returns the ids it dropped |
 | `_space/session/configure {sessionId, provider?, model?, thinkingLevel?}` | `session.setModel()` / `session.setThinkingLevel()` (session-only, pi clamps the level to the model), returns the new `_space/status` payload. Rejected while a prompt is running. |
 
-`availableModels` lists the current provider's models (for claude-cli: pi's built-in Anthropic catalog),
-without dated snapshot ids, grouped Opus / Sonnet / Haiku / Fable and newest first. `_space/status` is sent
+`availableModels` lists the newest model of each family of the current provider (for claude-cli: Fable,
+Opus, Sonnet, Haiku from pi's built-in Anthropic catalog, without dated snapshot ids), plus the
+session's own model if it's an older one. `_space/status` is sent
 again after every turn with the updated `contextTokens` / `contextWindow` from `session.getContextUsage()`.
 
 How pi events map to `session/update`:

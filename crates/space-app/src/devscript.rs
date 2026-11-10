@@ -13,6 +13,7 @@
 //! key cmd-n           dispatch a keystroke
 //! type some text      type text into the focused element
 //! resize 1280 820     resize the window (logical px)
+//! size                print the window's size and scale factor
 //! context             print the focused element's key context stack
 //! composer            print the composer's text
 //! find                print find's state (query, matches, current) and the transcript's scroll
