@@ -298,7 +298,22 @@ fn markdown_style(cx: &mut App) {
         .with_paragraph_gap(gpui::rems(0.75))
         .with_heading(heading_style)
         // Bullets and numbers step back behind the text; done tasks' boxes use it too.
-        .with_list_style(StyleRefinement::default().text_color(color::text_3()));
+        .with_list_style(StyleRefinement::default().text_color(color::text_3()))
+        // Links: a softer blue, medium weight, no underline (they're clickable anyway).
+        .with_link(color::md_link())
+        .with_link_underline(false)
+        .with_link_weight(FontWeight::MEDIUM)
+        // Inline code: a quiet chip a step above the thread, a little smaller than the text.
+        .with_inline_code(gpui::HighlightStyle { background_color: Some(color::md_code_bg()), ..Default::default() })
+        .with_inline_code_style(
+            StyleRefinement::default()
+                .text_size(px(13.))
+                .bg(color::md_code_bg())
+                .border_1()
+                .border_color(color::md_code_border())
+                .rounded(px(4.))
+                .px(px(4.)),
+        );
     defaults.with_style(style).install(cx);
 }
 

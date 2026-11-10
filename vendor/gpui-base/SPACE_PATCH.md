@@ -33,4 +33,8 @@ Task lists, in `src/text/node.rs` (`render_list_item_row`): a done task's checkb
 with the list marker color (`with_list_style`'s text color, else the muted foreground), like
 its outline, instead of the link color.
 
+Links, in `src/text/style.rs` and `src/text/node.rs`: `TextViewStyle::with_link_underline`
+and `with_link_weight`, applied by `apply_link_style` wherever a link is styled (underlined,
+at the text's weight, by default).
+
 To update gpui-base, copy the new version here and re-apply these changes.

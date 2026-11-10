@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gpui::{HighlightStyle, Hsla, Rems, StyleRefinement, rems};
+use gpui::{FontWeight, HighlightStyle, Hsla, Rems, StyleRefinement, rems};
 
 use crate::ColorTokens;
 
@@ -15,6 +15,10 @@ pub struct TextViewStyle {
     foreground: Hsla,
     muted_foreground: Hsla,
     link: Hsla,
+    /// Space patch: links are underlined (the default) or not.
+    link_underlined: bool,
+    /// Space patch: links' font weight, when not the text's.
+    link_weight: Option<FontWeight>,
     selection: Hsla,
     code_background: Hsla,
     border: Hsla,
@@ -44,6 +48,8 @@ impl PartialEq for TextViewStyle {
             && self.foreground == other.foreground
             && self.muted_foreground == other.muted_foreground
             && self.link == other.link
+            && self.link_underlined == other.link_underlined
+            && self.link_weight == other.link_weight
             && self.selection == other.selection
             && self.code_background == other.code_background
             && self.border == other.border
@@ -87,6 +93,8 @@ impl TextViewStyle {
             foreground: colors.foreground,
             muted_foreground: colors.muted_foreground,
             link: colors.primary,
+            link_underlined: true,
+            link_weight: None,
             selection: colors.selection,
             code_background: colors.accent,
             border: colors.border,
@@ -123,6 +131,18 @@ impl TextViewStyle {
     /// Sets the link text color.
     pub fn with_link(mut self, color: Hsla) -> Self {
         self.link = color;
+        self
+    }
+
+    /// Space patch: whether links are underlined (they are by default).
+    pub fn with_link_underline(mut self, underlined: bool) -> Self {
+        self.link_underlined = underlined;
+        self
+    }
+
+    /// Space patch: links' font weight.
+    pub fn with_link_weight(mut self, weight: FontWeight) -> Self {
+        self.link_weight = Some(weight);
         self
     }
 
@@ -329,6 +349,14 @@ impl TextViewStyle {
     /// Explicit inline code typography and box refinements.
     pub fn inline_code_style(&self) -> &StyleRefinement {
         &self.inline_code_style
+    }
+
+    pub(crate) fn link_underlined(&self) -> bool {
+        self.link_underlined
+    }
+
+    pub(crate) fn link_weight(&self) -> Option<FontWeight> {
+        self.link_weight
     }
 
     /// Explicit list marker refinements.
