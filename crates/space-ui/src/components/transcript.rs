@@ -33,8 +33,8 @@ const TOOL_MAX_LINES: usize = 40;
 /// A user message: its pictures (right-aligned, above), then the bubble with any file chips and
 /// the text. `id` is unique in the thread (element ids of the pictures).
 /// A message longer than this many lines is shown cut to [`FOLD_SHOWN`] lines, with Show more.
-const FOLD_ABOVE: usize = 12;
-const FOLD_SHOWN: usize = 6;
+const FOLD_ABOVE: usize = 20;
+const FOLD_SHOWN: usize = 12;
 /// The bubble's side padding (`px_4`), taken off its width for the text.
 const BUBBLE_PAD_X: Pixels = px(16.);
 
@@ -754,7 +754,9 @@ pub mod fixtures {
     pub const LONG_MESSAGE: &str = "Here's the plan for the release, step by step:\n\n\
 1. Bump the version in Cargo.toml.\n2. Write the release notes.\n3. Build the release app and check every plugin starts.\n\
 4. Tag the commit.\n5. Upload the zip to a GitHub release.\n6. Update the cask in the tap.\n7. Install it on the other Mac.\n\
-8. Check the update command works.\n9. Check Spotlight finds it.\n10. Tell the team.\n\n\
+8. Check the update command works.\n9. Check Spotlight finds it.\n10. Tell the team.\n\
+11. Watch the crash reports for a day.\n12. Answer questions in the channel.\n13. Note what went wrong.\n\
+14. Fix the release script where it was slow.\n15. Plan the next release.\n\n\
 Before any of that, make sure the tests pass and lint is clean, and that the terminal plugin is in the bundle.";
 
     pub const MARKDOWN: &str = "Plugin discovery scans three roots in order: the bundled `plugins/` directory, \
