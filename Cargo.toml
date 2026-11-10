@@ -6,7 +6,7 @@ exclude = ["vendor"]
 [workspace.package]
 edition = "2024"
 license = "MIT"
-version = "0.1.1"
+version = "0.1.2"
 
 [workspace.dependencies]
 space-protocol = { path = "crates/space-protocol" }
