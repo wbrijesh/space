@@ -311,6 +311,8 @@ pub struct SpaceApp {
     pub(crate) cmd_alone: bool,
     /// Digits typed while ⌘ is held: the row to go to when it's let go.
     pub(crate) cmd_digits: String,
+    /// Another ⌘ shortcut was pressed while ⌘ is held: no numbers until it's pressed again.
+    pub(crate) cmd_other: bool,
     /// Closed threads kept to be resumed (their saved summaries).
     pub(crate) closed_threads: Vec<space_core::protocol::service::ThreadMeta>,
     pub(crate) settings: SettingsStore,
@@ -439,6 +441,17 @@ impl SpaceApp {
             cx.notify();
         });
 
+        // A ⌘ shortcut that isn't a thread number (⌘J, ⌘N…): the sidebar's numbers go at once,
+        // before the shortcut runs (bindings run before the window's key listeners see it).
+        let shortcuts = {
+            let this = cx.entity().downgrade();
+            cx.intercept_keystrokes(move |e, _, cx| {
+                if e.keystroke.modifiers.platform && !crate::jump::is_number_key(&e.keystroke) {
+                    let _ = this.update(cx, |this, cx| this.cmd_shortcut(cx));
+                }
+            })
+        };
+
         cx.spawn(async move |this, cx| {
             while let Some(first) = events.recv().await {
                 let mut batch = vec![first];
@@ -510,6 +523,7 @@ impl SpaceApp {
             sidebar_scroll: ScrollHandle::new(),
             cmd_alone: false,
             cmd_digits: String::new(),
+            cmd_other: false,
             keep_closed_input: None,
             settings: SettingsStore::load(options.settings_path),
             show_settings: false,
@@ -525,7 +539,7 @@ impl SpaceApp {
             agent_activity: std::time::Instant::now(),
             agent_asleep: false,
             claude_cli: claude_cli_installed(),
-            _subscriptions: vec![sub, activation, quit],
+            _subscriptions: vec![sub, activation, quit, shortcuts],
             terminals: crate::terminal::Terminals::new(&host_for_terminals),
             next_pending: 0,
             cmd_held: false,

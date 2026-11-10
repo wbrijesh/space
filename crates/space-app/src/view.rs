@@ -129,6 +129,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
                 let released = this.cmd_held && !m.platform;
                 if !this.cmd_held && m.platform {
                     this.cmd_digits.clear();
+                    this.cmd_other = false;
                 }
                 this.cmd_held = m.platform;
                 this.cmd_alone = alone;

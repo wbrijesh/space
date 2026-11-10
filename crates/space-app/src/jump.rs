@@ -3,7 +3,8 @@
 //! Holding ⌘ numbers the sidebar rows in view, from the top of what's shown (1, 2, … 10, 11 …:
 //! scrolling renumbers them). Typing a number while ⌘ is held picks a row, and letting go of ⌘
 //! goes to it, so two digits work (⌘ held, 1, 2, release: row 12). Rows the digits typed so far
-//! no longer lead to fade. ⌘⌥↓ / ⌘⌥↑ step to the next or previous thread in the list.
+//! no longer lead to fade. Any other ⌘ shortcut (⌘J, ⌘N…) hides the numbers at once, until ⌘
+//! is pressed again. ⌘⌥↓ / ⌘⌥↑ step to the next or previous thread in the list.
 
 use std::ops::Range;
 
@@ -11,7 +12,22 @@ use gpui::*;
 
 use crate::app::SpaceApp;
 
+/// ⌘ and a digit, nothing else: a thread number.
+pub(crate) fn is_number_key(k: &Keystroke) -> bool {
+    let m = &k.modifiers;
+    m.platform && !m.alt && !m.control && !m.shift && k.key.len() == 1 && k.key.chars().all(|c| c.is_ascii_digit())
+}
+
 impl SpaceApp {
+    /// Another ⌘ shortcut: hide the numbers and forget the digits until ⌘ is pressed again.
+    pub(crate) fn cmd_shortcut(&mut self, cx: &mut Context<Self>) {
+        if !self.cmd_other || !self.cmd_digits.is_empty() {
+            self.cmd_other = true;
+            self.cmd_digits.clear();
+            cx.notify();
+        }
+    }
+
     /// The listed threads, in sidebar order (a new thread with nothing sent isn't listed).
     pub(crate) fn listed_threads(&self) -> Vec<u64> {
         self.threads.iter().rev().filter(|t| !t.is_empty()).map(|t| t.key).collect()
@@ -36,7 +52,7 @@ impl SpaceApp {
     /// one, and whether the digits typed so far lead to it.
     pub(crate) fn row_shortcuts(&self) -> Vec<Option<(SharedString, bool)>> {
         let count = self.listed_threads().len();
-        if !self.cmd_alone || !self.sidebar_open {
+        if !self.cmd_alone || self.cmd_other || !self.sidebar_open {
             return vec![None; count];
         }
         let view = self.rows_in_view(count);
@@ -54,9 +70,7 @@ impl SpaceApp {
     /// A key went down with ⌘ held: a digit adds to the number (two at most: a third starts
     /// over); anything else is a shortcut, which forgets it. `true`: the digit was taken.
     pub(crate) fn cmd_key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) -> bool {
-        let m = &keystroke.modifiers;
-        let digit = keystroke.key.len() == 1 && keystroke.key.chars().all(|c| c.is_ascii_digit());
-        if digit && m.platform && !m.alt && !m.control && !m.shift && self.sidebar_open && !self.listed_threads().is_empty() {
+        if is_number_key(keystroke) && !self.cmd_other && self.sidebar_open && !self.listed_threads().is_empty() {
             if self.cmd_digits.len() >= 2 {
                 self.cmd_digits.clear();
             }

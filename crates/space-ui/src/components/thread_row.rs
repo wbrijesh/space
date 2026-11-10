@@ -174,7 +174,7 @@ impl RenderOnce for ThreadRow {
     }
 }
 
-/// A row's number while ⌘ is held: a small key cap. Rows the typed digits no longer lead to fade.
+/// A row's number while ⌘ is held: a small key cap in monospace. Rows the typed digits no longer lead to fade.
 fn shortcut_badge(number: SharedString, matches: bool) -> Div {
     div()
         .flex_none()
@@ -188,8 +188,9 @@ fn shortcut_badge(number: SharedString, matches: bool) -> Div {
         .border_1()
         .border_color(color::border_strong())
         .bg(color::surface_2())
+        // Monospace: every digit the same width, so 1 and 11 line up and never jiggle.
+        .font_family(text::MONO_FONT)
         .text_size(text::XS)
-        .font_weight(FontWeight::MEDIUM)
         .text_color(color::text_2())
         .when(!matches, |d| d.opacity(0.35))
         .child(number)
