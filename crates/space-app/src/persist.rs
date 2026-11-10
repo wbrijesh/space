@@ -12,7 +12,7 @@
 //! session again (ACP `session/load`) when the agent can, else starts a new one.
 
 use std::hash::{BuildHasher as _, Hasher as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui::{Context, PromptLevel, Window};
@@ -153,6 +153,9 @@ impl SpaceApp {
                 }
             };
             let _ = this.update(cx, |this, cx| {
+                if std::mem::take(&mut this.last_folder) {
+                    this.use_last_folder(&saved, cx);
+                }
                 let (closed, open): (Vec<_>, Vec<_>) = saved.into_iter().partition(|m| m.closed_ms.is_some());
                 this.closed_threads = closed;
                 this.purge_closed_threads(cx);
@@ -165,6 +168,20 @@ impl SpaceApp {
             });
         })
         .detach();
+    }
+
+    /// Opened without a folder: work where you last did. The folder of the thread used last
+    /// (that still exists) becomes the one new threads start in, and the new thread opened at
+    /// launch moves there if nothing's been typed in it.
+    fn use_last_folder(&mut self, saved: &[ThreadMeta], cx: &mut Context<Self>) {
+        let Some(dir) = saved.iter().filter(|m| Path::new(&m.project).is_dir()).max_by_key(|m| m.updated_ms).map(|m| PathBuf::from(&m.project)) else {
+            return;
+        };
+        let home = std::mem::replace(&mut self.project_dir, dir.clone());
+        let fresh: Vec<u64> = self.threads.iter().filter(|t| t.is_empty() && t.draft.is_empty() && t.cwd == home).map(|t| t.key).collect();
+        for key in fresh {
+            self.move_empty_thread(key, dir.clone(), cx);
+        }
     }
 
     /// Read a saved thread's events (when it's opened). A turn that was cut short ends as

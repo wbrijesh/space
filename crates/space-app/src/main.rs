@@ -51,12 +51,16 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use space_core::smoke::{self, SmokeOptions};
-use space_core::{Host, HostOptions};
+use space_core::{DiscoveryOptions, Host, HostOptions};
 
 use crate::app::{Launch, Options, SeedThread};
 
 struct Args {
     project_dir: PathBuf,
+    /// No folder came with the launch (opened from Spotlight, the Dock or Finder, which start
+    /// apps in `/`): `project_dir` is the home folder until the saved threads say which folder
+    /// was used last.
+    no_folder: bool,
     smoke: Option<String>,
     plugin: Option<String>,
     allow: bool,
@@ -105,14 +109,17 @@ fn parse_args() -> Result<Args> {
         }
     }
     let project_dir = match project_dir {
-        Some(p) => p.canonicalize().with_context(|| format!("project dir {}", p.display()))?,
+        Some(p) => Some(p.canonicalize().with_context(|| format!("project dir {}", p.display()))?),
         // `just run` passes the repo (dx starts the app in its own folder).
         None => match std::env::var_os("SPACE_PROJECT").filter(|p| !p.is_empty()) {
-            Some(p) => PathBuf::from(p),
-            None => std::env::current_dir()?,
+            Some(p) => Some(PathBuf::from(p)),
+            // Started from a shell in a folder: that folder. Opened as an app: `/`, no folder.
+            None => Some(std::env::current_dir()?).filter(|d| d.parent().is_some()),
         },
     };
-    Ok(Args { project_dir, smoke, plugin, allow, permission_mode, gallery, scenario, check_plugins })
+    let no_folder = project_dir.is_none();
+    let project_dir = project_dir.unwrap_or_else(|| std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/")));
+    Ok(Args { project_dir, no_folder, smoke, plugin, allow, permission_mode, gallery, scenario, check_plugins })
 }
 
 fn main() -> Result<()> {
@@ -146,11 +153,17 @@ fn main() -> Result<()> {
 
     #[allow(unused_mut)]
     let mut host_options = HostOptions::for_project(&args.project_dir);
+    if args.no_folder {
+        // No project was opened: no project plugins (the home folder's `.space/plugins` is the
+        // user's, scanned anyway).
+        host_options.discovery = DiscoveryOptions::standard(None);
+    }
     // Space's folder (plugin approvals, threads) is the settings file's.
     host_options.space_dir = settings::default_path().and_then(|p| Some(p.parent()?.to_path_buf()));
     #[allow(unused_mut)]
     let mut options = Options {
         project_dir: args.project_dir.clone(),
+        last_folder: args.no_folder,
         agent: std::env::var("SPACE_AGENT").ok().filter(|s| !s.is_empty()),
         seed: std::env::var("SPACE_AUTOPROMPT")
             .ok()

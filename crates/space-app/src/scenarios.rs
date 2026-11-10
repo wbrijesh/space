@@ -535,6 +535,7 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         .collect();
     let options = Options {
         project_dir: project_dir.to_path_buf(),
+        last_folder: false,
         agent: Some("stub".into()),
         seed,
         select: scenario.select,

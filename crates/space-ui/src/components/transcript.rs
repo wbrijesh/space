@@ -808,7 +808,11 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
     let mut folded: Option<TurnFold> = None;
     // Stands for the summary row when spacing what follows it (spaced like a thought row).
     let summary_marker = TranscriptItem::Thought(String::new());
-    let compact = |i: &TranscriptItem| matches!(i, TranscriptItem::Tool(_) | TranscriptItem::Thought(_));
+    // One-line rows, spaced tightly among themselves: tool calls, thoughts, and a permission
+    // once answered (its card shrinks to a line like a tool row's).
+    let compact = |i: &TranscriptItem| {
+        matches!(i, TranscriptItem::Tool(_) | TranscriptItem::Thought(_) | TranscriptItem::Permission { resolved: Some(_), .. })
+    };
     let row = |id: String, group: &SharedString, copy: Option<&str>, at_ms: Option<u64>, usage: Option<&TurnUsage>, end: bool| {
         message_actions(
             MessageActions {
@@ -1141,6 +1145,17 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     let failed = turn("stopped: stays open", finished(Some(1_000), "cancelled"), false, None);
     let no_times = turn("finished, saved before times were kept", finished(None, "end_turn"), false, None);
     let streaming = turn("streaming: the reply's first part shown so far", work(None), false, Some((3, 14)));
+    // An answered permission between tool calls: spaced like the rows around it.
+    let answered = {
+        let mut events = work(None);
+        events.truncate(4);
+        let ask = fixtures::guardrail_ask();
+        let id = ask.request_id;
+        events.push(SessionEvent::PermissionRequested(ask));
+        events.push(SessionEvent::PermissionResolved { request_id: id, decision: PermissionDecision::Selected("allow".into()) });
+        events.push(SessionEvent::ToolCall(tool(ToolStatus::Completed, TEST_OUTPUT)));
+        turn("permission answered between tool calls", events, false, None)
+    };
 
     let (t1, t2, t3, t4, t5, t6, t7, t8, t9) =
         (t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t.clone(), t);
@@ -1218,7 +1233,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         ]),
         ComponentPreview::new(Area::Transcript, "Transcript", "A whole turn laid out by transcript_items.")
             .stacked()
-            .examples([full, streaming]),
+            .examples([full, streaming, answered]),
         ComponentPreview::new(
             Area::Transcript,
             "Finished turns",

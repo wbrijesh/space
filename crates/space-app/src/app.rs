@@ -53,6 +53,9 @@ const DEFAULT_AGENT: &str = "pi-agent";
 
 pub struct Options {
     pub project_dir: PathBuf,
+    /// No folder came with the launch: once the saved threads are listed, new threads start in
+    /// the folder of the one used last (instead of `project_dir`, the home folder).
+    pub last_folder: bool,
     /// Plugin id of the agent to run (default `pi-agent`, else the first agent plugin).
     pub agent: Option<String>,
     /// Threads to open at launch (newest last); empty: one new thread.
@@ -304,6 +307,8 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
 
 pub struct SpaceApp {
     pub(crate) host: Host,
+    /// Opened without a folder: start in the last used one once the saved threads are listed.
+    pub(crate) last_folder: bool,
     /// The window it's in, for work that arrives without one (a shell that exits).
     pub(crate) window_handle: AnyWindowHandle,
     pub(crate) project_dir: PathBuf,
@@ -537,6 +542,7 @@ impl SpaceApp {
             notify: options.notify,
             host,
             project_dir: options.project_dir.clone(),
+            last_folder: options.last_folder,
             agent: None,
             agent_status: PluginStatus::Stopped,
             threads: Vec::new(),
@@ -846,9 +852,15 @@ impl SpaceApp {
             self.new_thread(Some(dir), window, cx);
             return;
         }
-        if thread.cwd == dir {
-            return;
+        if self.move_empty_thread(key, dir, cx) {
+            self.focus_composer(window, cx);
         }
+    }
+
+    /// Start an empty thread over in `dir` (a new session there), keeping its draft and mode.
+    /// False when it's already there.
+    pub(crate) fn move_empty_thread(&mut self, key: u64, dir: PathBuf, cx: &mut Context<Self>) -> bool {
+        let Some(thread) = self.thread_mut(key).filter(|t| t.is_empty() && t.cwd != dir) else { return false };
         if let Some(old) = thread.session.take() {
             self.session_threads.remove(old.id());
         }
@@ -861,7 +873,7 @@ impl SpaceApp {
         thread.mode = mode;
         thread.confirmed = confirmed;
         self.create_session(key, cx);
-        self.focus_composer(window, cx);
+        true
     }
 
     pub(crate) fn choose_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
