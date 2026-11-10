@@ -15,6 +15,7 @@
 //! resize 1280 820     resize the window (logical px)
 //! context             print the focused element's key context stack
 //! composer            print the composer's text
+//! find                print find's state (query, matches, current) and the transcript's scroll
 //! shot name           run `$SPACE_SHOT_CMD name` (e.g. a script calling `screencapture -l`)
 //! shotnow name        same as `shot` without the 250 ms settle delay (animation frames)
 //! quit                quit the app
@@ -169,6 +170,26 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                         let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
                         if let Some(app) = app {
                             eprintln!("script: composer {:?}", app.read(cx).input.read(cx).value());
+                        }
+                    });
+                }
+                "find" => {
+                    let _ = window.update(cx, |root, _, cx| {
+                        let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
+                        if let Some(app) = app {
+                            let app = app.read(cx);
+                            let scroll = app.transcript_scroll.scroll_handle();
+                            let (open, query, current, matches) = match &app.find {
+                                Some(f) => (f.open, f.input.read(cx).value().to_string(), f.current, f.matches.iter().map(|m| (m.ix, m.range.clone())).collect::<Vec<_>>()),
+                                None => (false, String::new(), None, Vec::new()),
+                            };
+                            let expanded = app.current().map(|t| t.expanded.iter().copied().collect::<Vec<_>>()).unwrap_or_default();
+                            eprintln!(
+                                "script: find open={open} query={query:?} current={current:?} matches={matches:?} expanded={expanded:?} scroll={:.0} max={:.0} following={}",
+                                -f32::from(scroll.offset().y),
+                                f32::from(scroll.max_offset().y),
+                                app.transcript_scroll.is_following(),
+                            );
                         }
                     });
                 }

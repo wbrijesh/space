@@ -33,7 +33,7 @@ pub use space_ui::actions::{
     ToggleSidebar,
     ToggleTrajectory,
     CloseTerminal, MaximizeTerminal, NewTerminal, NextTerminal, PreviousTerminal, TerminalClear, TerminalCopy, TerminalPaste,
-    ToggleTerminal,
+    ToggleTerminal, OpenFind, FindNext, FindPrevious, CloseFind,
 };
 use space_ui::assets::SpaceAssets;
 use space_ui::components::composer;
@@ -169,6 +169,12 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("tab", gpui::NoAction, Some("Terminal")),
             KeyBinding::new("shift-tab", gpui::NoAction, Some("Terminal")),
             KeyBinding::new("escape", gpui::NoAction, Some("Terminal")),
+            // Find in thread, from anywhere (beats the text field's own ⌘F); Esc in its field
+            // closes it (bound after the field's Escape, so it wins at equal depth).
+            KeyBinding::new("cmd-f", OpenFind, None),
+            KeyBinding::new("cmd-g", FindNext, None),
+            KeyBinding::new("cmd-shift-g", FindPrevious, None),
+            KeyBinding::new("escape", CloseFind, Some("FindBar > Input")),
         ]);
         // Without a window to ask in (the window's own handler asks about running terminals).
         cx.on_action(|_: &Quit, cx| cx.quit());
@@ -187,6 +193,15 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             Menu {
                 name: "File".into(),
                 items: vec![MenuItem::action("New Thread", NewThread), MenuItem::action("Close Thread", CloseThread)],
+                disabled: false,
+            },
+            Menu {
+                name: "Edit".into(),
+                items: vec![
+                    MenuItem::action("Find…", OpenFind),
+                    MenuItem::action("Find Next", FindNext),
+                    MenuItem::action("Find Previous", FindPrevious),
+                ],
                 disabled: false,
             },
             Menu {
@@ -305,6 +320,10 @@ pub struct SpaceApp {
     pub(crate) next_image_id: u64,
     /// Settings: the days closed threads are kept (made when the page is first shown).
     pub(crate) keep_closed_input: Option<Entity<gpui::component::input::InputState>>,
+    /// Find in thread (⌘F), made when first opened.
+    pub(crate) find: Option<crate::find::Find>,
+    /// The shown thread's replies' text views (see [`crate::find`]).
+    pub(crate) replies: crate::find::Replies,
     /// The sidebar's thread list (which rows are in view, for ⌘ numbers).
     pub(crate) sidebar_scroll: ScrollHandle,
     /// ⌘ alone is held: the sidebar shows row numbers.
@@ -525,6 +544,8 @@ impl SpaceApp {
             cmd_digits: String::new(),
             cmd_other: false,
             keep_closed_input: None,
+            find: None,
+            replies: Default::default(),
             settings: SettingsStore::load(options.settings_path),
             show_settings: false,
             agent_models: None,
@@ -709,6 +730,7 @@ impl SpaceApp {
         }
         self.show_settings = false;
         if self.selected != Some(key) {
+            self.close_find(false, window, cx);
             let left = self.selected;
             let draft = self.input.read(cx).value().to_string();
             if let Some(prev) = self.selected {

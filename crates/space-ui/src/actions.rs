@@ -27,7 +27,11 @@ gpui::actions!(
         MaximizeTerminal,
         TerminalCopy,
         TerminalPaste,
-        TerminalClear
+        TerminalClear,
+        OpenFind,
+        FindNext,
+        FindPrevious,
+        CloseFind
     ]
 );
 

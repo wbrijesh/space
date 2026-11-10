@@ -25,7 +25,8 @@ use space_ui::components::shell::{
 };
 use space_ui::components::thread_row::{RowIndicator, ThreadRow};
 use space_ui::components::title_bar::{MainTitleBar, SidebarTitleBar, TitleBarNav};
-use space_ui::components::transcript::{TranscriptView, transcript_items};
+use space_ui::components::find::find_bar;
+use space_ui::components::transcript::{FindMarks, TranscriptView, transcript_items};
 use space_ui::format::{self, Preview};
 use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
@@ -33,6 +34,7 @@ use space_ui::ClickHandler;
 use crate::app::{
     CloseSettings, CloseTerminal, CloseThread, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizeTerminal, NewTerminal, NewThread,
     NextTerminal, OpenSettings, PreviousTerminal, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleTerminal, ToggleTrajectory,
+    OpenFind, FindNext, FindPrevious, CloseFind,
 };
 use crate::settings::SaveKind;
 use crate::threads::Thread;
@@ -88,7 +90,8 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
     let content = if app.show_settings {
         settings(app, window, cx)
     } else {
-        let body = body(app, window, cx);
+        let streaming = app.prepare_transcript(window, cx);
+        let body = body(app, streaming, window, cx);
         match terminal_key {
             Some(key) => with_terminal(app, key, body, shown, window, cx),
             None => body,
@@ -120,6 +123,10 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &PreviousTerminal, window, cx| this.step_terminal(-1, window, cx)))
         .on_action(cx.listener(|this, _: &MaximizeTerminal, _, cx| this.toggle_terminal_maximized(cx)))
         .on_action(cx.listener(|this, _: &Quit, window, cx| this.quit(window, cx)))
+        .on_action(cx.listener(|this, _: &OpenFind, window, cx| this.open_find(window, cx)))
+        .on_action(cx.listener(|this, _: &FindNext, window, cx| this.find_step(true, window, cx)))
+        .on_action(cx.listener(|this, _: &FindPrevious, window, cx| this.find_step(false, window, cx)))
+        .on_action(cx.listener(|this, _: &CloseFind, window, cx| this.close_find(true, window, cx)))
         // ⌘ held turns the composer's queue button white (after this step), and alone numbers
         // the sidebar rows; letting go goes to the row whose number was typed (see `jump`).
         .on_modifiers_changed(cx.listener(|this, e: &ModifiersChangedEvent, window, cx| {
@@ -368,7 +375,7 @@ fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Con
         .into_any_element()
 }
 
-fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
+fn body(app: &SpaceApp, streaming: Option<(usize, usize)>, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
     let Some(thread) = app.current() else {
         return div().flex_1().into_any_element();
     };
@@ -425,8 +432,6 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
         return div().flex_1().min_h_0().flex().flex_col().children(tabs).child(view).into_any_element();
     }
 
-    // The streaming reply (the last item of a running turn) shows at an even pace.
-    let streaming = streaming_reply(app, thread, window, cx);
     #[cfg(feature = "dev")]
     let built = std::time::Instant::now();
     let this = cx.entity().downgrade();
@@ -468,6 +473,19 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
             let _ = this4.update(cx, |this, cx| this.toggle_turn(ix, cx));
         }),
         streaming,
+        replies: &app.replies.states,
+        find: app.find.as_ref().filter(|f| f.open).map(|f| FindMarks {
+            user: &f.user,
+            current: f.current_match().map(|m| (m.ix, m.range.clone())),
+            reveal: f.reveal.clone(),
+        }),
+        on_reveal: {
+            let scroll = app.transcript_scroll.clone();
+            Some(Rc::new(move |bounds, window, _| {
+                scroll.reveal(bounds);
+                window.refresh();
+            }))
+        },
     }, window, cx);
     #[cfg(feature = "dev")]
     perf::frame(built.elapsed());
@@ -484,6 +502,24 @@ fn body(app: &SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyE
             }
             let _ = following;
         });
+
+    // The find bar floats at the top right of the transcript.
+    let find_bar = app.find.as_ref().filter(|f| f.open).map(|f| {
+        let on_step: space_ui::components::find::StepHandler = {
+            let this = cx.entity().downgrade();
+            Rc::new(move |forward, w, cx| {
+                let _ = this.update(cx, |this, cx| this.find_step(forward, w, cx));
+            })
+        };
+        let on_close: space_ui::components::find::CloseHandler = {
+            let this = cx.entity().downgrade();
+            Rc::new(move |w, cx| {
+                let _ = this.update(cx, |this, cx| this.close_find(true, w, cx));
+            })
+        };
+        div().absolute().top_2().right_4().child(find_bar(&f.input, f.count(cx), on_step, on_close))
+    });
+    let transcript = div().relative().flex_1().min_h_0().flex().flex_col().child(transcript).children(find_bar);
 
     div().flex_1().min_h_0().flex().flex_col().children(tabs).child(transcript).child(bottom).into_any_element()
 }
@@ -541,7 +577,7 @@ mod perf {
 
 /// The streaming reply of `thread`, if a turn is running and its last item is a reply: its index
 /// and how much of it to show now (asking for the next frame while more is to come).
-fn streaming_reply(app: &SpaceApp, thread: &Thread, window: &mut Window, cx: &mut Context<SpaceApp>) -> Option<(usize, usize)> {
+pub(crate) fn streaming_reply(app: &SpaceApp, thread: &Thread, window: &mut Window, cx: &mut Context<SpaceApp>) -> Option<(usize, usize)> {
     let mut reveal = app.stream_reveal.borrow_mut();
     let last = thread.state.items.len().checked_sub(1);
     let text = match (thread.state.running, last.and_then(|i| thread.state.items.get(i))) {

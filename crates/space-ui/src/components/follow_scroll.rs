@@ -49,6 +49,8 @@ enum Request {
     /// Something in the content was opened or closed: keep what's on screen where it is (stop
     /// following if it now reaches past the bottom).
     Hold,
+    /// Scroll this far from the top and stop following (find showing a match).
+    To(f32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -148,6 +150,15 @@ impl Follow {
                     self.nudge = 0.;
                     return (Scroll::Keep, false);
                 }
+            }
+            Some(Request::To(y)) => {
+                self.glide = None;
+                self.hold = None;
+                self.nudge = 0.;
+                // Not following even at the bottom: text streaming in mustn't push the match away.
+                let y = y.clamp(0., max);
+                self.following = false;
+                return (Scroll::To(y), false);
             }
             Some(Request::Glide) if !time.reduce_motion && max - pos > EPS => {
                 self.glide = Some(Glide { from: pos, since: time.now });
@@ -313,6 +324,24 @@ impl FollowScroll {
         if inner.follow.request.is_none() {
             inner.follow.request = Some(Request::Hold);
         }
+    }
+
+    /// Bring `target` (window coordinates, as last painted) into view if it isn't: centred, and
+    /// no longer following. Leaves the view alone when `target` is already clear of the edges
+    /// (and of the bottom fade).
+    pub fn reveal(&self, target: Bounds<Pixels>) {
+        let mut inner = self.0.borrow_mut();
+        let view = inner.handle.bounds();
+        if view.size.height <= px(0.) {
+            return;
+        }
+        let margin = px(24.);
+        if target.top() >= view.top() + margin && target.bottom() <= view.bottom() - size::SCROLL_FADE_H {
+            return;
+        }
+        let pos = -f32::from(inner.handle.offset().y);
+        let delta = f32::from(target.center().y - view.center().y);
+        inner.follow.request = Some(Request::To(pos + delta));
     }
 
     /// Stop following and hold the view `distance` above the bottom (at most at the top), as if
@@ -935,5 +964,23 @@ mod tests {
         assert!(b.follow.following);
         b.grow(50.);
         assert_eq!(b.pos, 850., "still follows new content");
+    }
+
+    #[test]
+    fn scrolling_to_a_match_stops_following() {
+        let mut a = Area::new(1000.);
+        a.follow.request = Some(Request::To(300.));
+        a.frame();
+        assert!(!a.follow.following && a.pos == 300.);
+        a.grow(100.);
+        assert_eq!(a.pos, 300., "new content doesn't pull it away");
+        // At the bottom too: what streams in below doesn't move the match.
+        let mut b = Area::new(1000.);
+        b.wheel(-500.);
+        b.follow.request = Some(Request::To(5000.));
+        b.frame();
+        assert!(!b.follow.following && b.at_bottom());
+        b.grow(100.);
+        assert_eq!(b.pos, 1000.);
     }
 }

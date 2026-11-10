@@ -62,6 +62,9 @@ pub mod color {
         on_accent = 0xffffffff;
         /// Text selection.
         selection = 0x2f7cf655;
+        /// Find in thread: every match, and the current one.
+        find_match = 0xd2992238;
+        find_current = 0xd2992299;
         /// Status: success / done.
         green = 0x3fb950ff;
         /// Status: needs attention / waiting.

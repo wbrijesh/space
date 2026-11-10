@@ -1,12 +1,14 @@
 //! Transcript items (user bubble, markdown reply, thought, tool call, permission card, plan,
 //! error, divider, working row) and [`transcript_items`], which lays out a session's items.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui::assets::IconName as Lucide;
-use gpui::component::text::{TextView, TextViewMotion};
+use gpui::component::text::{TextView, TextViewMotion, TextViewState};
 use gpui::component::{Icon, IconName};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -23,6 +25,26 @@ use crate::theme::{color, radius, size, text};
 
 pub type ToggleHandler = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 pub type AnswerHandler = Rc<dyn Fn(u64, PermissionDecision, &mut Window, &mut App)>;
+/// Scroll the transcript so this (window coordinates) is in view.
+pub type RevealHandler = Rc<dyn Fn(Bounds<Pixels>, &mut Window, &mut App)>;
+
+/// Find's matches in one message bubble: byte ranges of its trimmed text, the current one, and
+/// (for the current match) the flag asking to scroll to it once it's laid out, with the scroll.
+#[derive(Clone)]
+pub struct BubbleMarks {
+    pub ranges: Vec<Range<usize>>,
+    pub current: Option<Range<usize>>,
+    pub reveal: Option<(Rc<Cell<bool>>, RevealHandler)>,
+}
+
+/// Find's matches in your messages: by item index, ranges of the trimmed text; the current
+/// match; and whether to scroll to it (done by its bubble once laid out). Matches in replies
+/// are highlighted by their [`TextViewState`]s.
+pub struct FindMarks<'a> {
+    pub user: &'a HashMap<usize, Vec<Range<usize>>>,
+    pub current: Option<(usize, Range<usize>)>,
+    pub reveal: Rc<Cell<bool>>,
+}
 
 /// Gap between transcript items; tool calls and thoughts stack tightly.
 const GAP: Pixels = px(18.);
@@ -48,6 +70,7 @@ pub fn user_message(
     pics: Vec<Pic>,
     on_open: Option<OpenPicsHandler>,
     fold: Option<UserFold>,
+    marks: Option<BubbleMarks>,
 ) -> Div {
     let has_bubble = !text_.trim().is_empty() || !attachments.is_empty();
     div()
@@ -55,7 +78,7 @@ pub fn user_message(
         .flex_col()
         .gap_1p5()
         .when(!pics.is_empty(), |d| d.child(message_images(id, pics, on_open)))
-        .when(has_bubble, |d| d.child(user_bubble(text_, attachments, fold)))
+        .when(has_bubble, |d| d.child(user_bubble(text_, attachments, fold, marks)))
 }
 
 /// Share of the column a bubble may take (and never more than [`size::USER_BUBBLE_MAX_W`]).
@@ -96,7 +119,38 @@ pub fn is_long_message(text_: &str, window: &Window) -> bool {
     }
 }
 
-pub fn user_bubble(text_: &str, attachments: &[PathBuf], fold: Option<UserFold>) -> Div {
+/// A bubble's text, with find's matches highlighted (and the current one scrolled to when asked).
+fn bubble_text(body: String, marks: Option<BubbleMarks>) -> AnyElement {
+    let Some(marks) = marks.filter(|m| !m.ranges.is_empty()) else { return body.into_any_element() };
+    let style = |bg: Hsla| HighlightStyle { background_color: Some(bg), ..Default::default() };
+    let highlights = marks
+        .ranges
+        .iter()
+        .map(|r| (r.clone(), style(if marks.current.as_ref() == Some(r) { color::find_current() } else { color::find_match() })))
+        .collect::<Vec<_>>();
+    let styled = StyledText::new(body).with_highlights(highlights);
+    let (Some(current), Some((pending, on_reveal))) = (marks.current, marks.reveal) else { return styled.into_any_element() };
+    // After the text is laid out: scroll to the current match's line.
+    let layout = styled.layout().clone();
+    let reveal = canvas(
+        move |_, window, cx| {
+            if !pending.get() {
+                return;
+            }
+            if let Some(at) = layout.position_for_index(current.start) {
+                pending.set(false);
+                let line = layout.line_height();
+                on_reveal(Bounds::new(at, size(px(1.), line)), window, cx);
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .size_0();
+    div().relative().child(styled).child(reveal).into_any_element()
+}
+
+pub fn user_bubble(text_: &str, attachments: &[PathBuf], fold: Option<UserFold>, marks: Option<BubbleMarks>) -> Div {
     let mut bubble = div()
         .min_w_0()
         .max_w(size::USER_BUBBLE_MAX_W)
@@ -115,9 +169,10 @@ pub fn user_bubble(text_: &str, attachments: &[PathBuf], fold: Option<UserFold>)
     if !text_.is_empty() {
         let body = text_.trim().to_string();
         bubble = match fold {
-            None => bubble.child(body),
+            None => bubble.child(bubble_text(body, marks)),
             Some((ix, open, on_toggle)) => {
                 let line = text::BODY * text::LEADING;
+                let body = bubble_text(body, marks);
                 let text_el = if open {
                     div().child(body)
                 } else {
@@ -199,6 +254,24 @@ pub fn agent_message_streaming(id: impl Into<ElementId>, markdown: &str, fade: b
     } else {
         view
     };
+    div().text_size(text::BODY).line_height(relative(text::LEADING_PROSE)).text_color(color::text()).child(view)
+}
+
+/// An agent reply drawn from its own [`TextViewState`] (kept by the app, so find can read its
+/// text and highlight it); `fade`: it's streaming. `on_reveal` scrolls the transcript to a
+/// line the state was asked to reveal.
+pub fn agent_reply(state: &Entity<TextViewState>, fade: bool, on_reveal: Option<RevealHandler>) -> Div {
+    let mut view = TextView::new(state).selectable(true);
+    if fade {
+        view = view.motion(
+            TextViewMotion::default()
+                .with_stream_fade(std::time::Duration::from_millis(180))
+                .with_stream_fade_stagger(std::time::Duration::from_millis(12)),
+        );
+    }
+    if let Some(on_reveal) = on_reveal {
+        view = view.on_reveal(move |bounds, window, cx| on_reveal(bounds, window, cx));
+    }
     div().text_size(text::BODY).line_height(relative(text::LEADING_PROSE)).text_color(color::text()).child(view)
 }
 
@@ -576,6 +649,12 @@ pub struct TranscriptView<'a> {
     /// The streaming reply: its index and how many bytes of it to show (the rest is still to
     /// be revealed); it fades in as it grows.
     pub streaming: Option<(usize, usize)>,
+    /// The replies' text views, by item index (a reply without one renders on its own).
+    pub replies: &'a HashMap<usize, Entity<TextViewState>>,
+    /// Find's matches while the find bar is open.
+    pub find: Option<FindMarks<'a>>,
+    /// Scrolls the transcript (to show a match).
+    pub on_reveal: Option<RevealHandler>,
 }
 
 /// The transcript's elements, spaced, with a trailing working row while a turn runs. Each
@@ -599,6 +678,9 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
         open_turns,
         on_toggle_turn,
         streaming,
+        replies,
+        find,
+        on_reveal,
     } = view;
     let items = &state.items;
     let folds = foldable_turns(items);
@@ -650,8 +732,21 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
                 }
                 let group = SharedString::from(format!("user-{key}-{ix}"));
                 let fold = is_long_message(text, window).then(|| (ix, expanded.contains(&ix), on_toggle.clone()));
-                let message =
-                    user_message(format!("pics-{key}-{ix}"), text, attachments, images.iter().map(Pic::file).collect(), on_open_image.clone(), fold);
+                let marks = find.as_ref().and_then(|f| {
+                    let ranges = f.user.get(&ix)?.clone();
+                    let current = f.current.as_ref().filter(|(at, _)| *at == ix).map(|(_, r)| r.clone());
+                    let reveal = current.is_some().then(|| on_reveal.clone()).flatten().map(|h| (f.reveal.clone(), h));
+                    Some(BubbleMarks { ranges, current, reveal })
+                });
+                let message = user_message(
+                    format!("pics-{key}-{ix}"),
+                    text,
+                    attachments,
+                    images.iter().map(Pic::file).collect(),
+                    on_open_image.clone(),
+                    fold,
+                    marks,
+                );
                 out.push(
                     div()
                         .group(group.clone())
@@ -699,8 +794,10 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
             TranscriptItem::Agent(md) => {
                 reply = Some(md);
                 let id = SharedString::from(format!("md-{key}-{ix}"));
-                match streaming {
-                    Some((at, shown)) if at == ix => agent_message_streaming(id, &md[..shown.min(md.len())], !cx.reduce_motion()),
+                let live = streaming.is_some_and(|(at, _)| at == ix);
+                match (replies.get(&ix), streaming) {
+                    (Some(state), _) => agent_reply(state, live && !cx.reduce_motion(), on_reveal.clone()),
+                    (None, Some((at, shown))) if at == ix => agent_message_streaming(id, &md[..shown.min(md.len())], !cx.reduce_motion()),
                     _ => agent_message(id, md),
                 }
             }
@@ -725,7 +822,7 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
         out.push(div().flex().flex_col().children(turn).into_any_element());
     }
     if let Some((text_, attachments, pics)) = queued {
-        out.push(div().mt(GAP).child(user_message(format!("pics-{key}-queued"), text_, attachments, pics, None, None)).into_any_element());
+        out.push(div().mt(GAP).child(user_message(format!("pics-{key}-queued"), text_, attachments, pics, None, None, None)).into_any_element());
         out.push(div().mt(GAP).child(working_row("Starting agent…")).into_any_element());
     } else if state.running
         && state.pending_permission().is_none()
@@ -885,6 +982,9 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                     open_turns: &open_turns,
                     on_toggle_turn: Rc::new(|_, _, _| {}),
                     streaming,
+                    replies: &HashMap::new(),
+                    find: None,
+                    on_reveal: None,
                 };
                 div().flex().flex_col().children(transcript_items(view, window, cx)).into_any_element()
             })
@@ -919,20 +1019,29 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     let (t10, t11): (ToggleHandler, ToggleHandler) = (Rc::new(|_, _, _| {}), Rc::new(|_, _, _| {}));
     vec![
         ComponentPreview::new(Area::Transcript, "Messages", "User bubble and markdown reply.").stacked().examples([
-            ex("user", Rc::new(|| user_bubble("Explain how plugin discovery works", &[], None))),
+            ex("user", Rc::new(|| user_bubble("Explain how plugin discovery works", &[], None, None))),
             ex(
                 "user with attachments",
-                Rc::new(|| user_bubble("Review these", &[PathBuf::from("Cargo.toml"), PathBuf::from("crates")], None)),
+                Rc::new(|| user_bubble("Review these", &[PathBuf::from("Cargo.toml"), PathBuf::from("crates")], None, None)),
             ),
             ex(
                 "user with images",
                 Rc::new(|| {
                     let pics = vec![super::images::sample(1600, 900), super::images::sample(1024, 1024)];
-                    user_message("preview-pics", "Why does the sidebar look like this?", &[], pics, None, None)
+                    user_message("preview-pics", "Why does the sidebar look like this?", &[], pics, None, None, None)
                 }),
             ),
-            ex("long, folded", Rc::new(move || user_bubble(LONG_MESSAGE, &[], Some((0, false, t10.clone()))))),
-            ex("long, shown in full", Rc::new(move || user_bubble(LONG_MESSAGE, &[], Some((1, true, t11.clone()))))),
+            ex("long, folded", Rc::new(move || user_bubble(LONG_MESSAGE, &[], Some((0, false, t10.clone())), None))),
+            ex("long, shown in full", Rc::new(move || user_bubble(LONG_MESSAGE, &[], Some((1, true, t11.clone())), None))),
+            ex(
+                "user, with find matches",
+                Rc::new(|| {
+                    let text_ = "Explain how plugin discovery works, and which plugin wins";
+                    let ranges = super::find::find_matches(text_, "plugin");
+                    let current = ranges.get(1).cloned();
+                    user_bubble(text_, &[], None, Some(BubbleMarks { ranges, current, reveal: None }))
+                }),
+            ),
             ex("assistant markdown", Rc::new(|| agent_message("preview-md", MARKDOWN))),
         ]),
         ComponentPreview::new(Area::Transcript, "Thought", "Collapsed by default; expands to the reasoning.")
