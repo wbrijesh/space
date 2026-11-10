@@ -6709,6 +6709,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "objc2-image-io",
  "objc2-user-notifications",
+ "raw-window-handle",
  "schemars 1.2.3",
  "serde",
  "serde_json",

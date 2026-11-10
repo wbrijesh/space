@@ -16,6 +16,11 @@ pub const TITLE_TIMEOUT: Duration = Duration::from_secs(15);
 const COMPLETE_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl Host {
+    /// You renamed a thread: plugins that follow titles hear of it as they do of a generated one.
+    pub fn thread_renamed(&self, session_id: &str, title: &str) {
+        self.inner.observe(Observed::ThreadTitled { session_id: session_id.to_string(), title: Some(title.to_string()) });
+    }
+
     /// Ask the `session-title` provider to name the thread of `session_id` after its first
     /// message, waiting at most `timeout`. `None`: no provider, or it failed or took too long
     /// (the thread keeps its first-line title). A title is told to observers (`thread/titled`).

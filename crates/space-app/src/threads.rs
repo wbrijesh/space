@@ -40,6 +40,8 @@ pub struct Thread {
     /// The title the `session-title` plugin gave it; until then (or without one) the first line
     /// of the first message.
     pub name: Option<String>,
+    /// You renamed it (⌘R): `name` is yours, and a generated title doesn't replace it.
+    pub renamed: bool,
     /// The agent session to load to continue a saved conversation: (agent plugin, session id).
     pub resume: Option<(String, String)>,
     pub cwd: PathBuf,
@@ -105,6 +107,7 @@ impl Thread {
             unloaded: false,
             loading: false,
             name: None,
+            renamed: false,
             resume: None,
             branch: format::git_branch(&cwd),
             cwd,
@@ -544,7 +547,8 @@ impl SpaceApp {
         cx.spawn(async move |this, cx| {
             let Some(title) = host.generate_title(&session_id, &first_message, space_core::TITLE_TIMEOUT).await else { return };
             let _ = this.update(cx, |this, cx| {
-                let Some(thread) = this.thread_mut(key) else { return };
+                // Renamed while the title was on its way: yours stays.
+                let Some(thread) = this.thread_mut(key).filter(|t| !t.renamed) else { return };
                 thread.name = Some(title);
                 if this.saving_threads() {
                     this.save_thread(key, cx);

@@ -58,6 +58,7 @@ pub struct ThreadRow {
     terminal: bool,
     on_click: Option<ClickHandler>,
     on_close: Option<ClickHandler>,
+    on_rename: Option<ClickHandler>,
     /// While ⌘ is held: its number, and whether it still matches the digits typed so far.
     shortcut: Option<(SharedString, bool)>,
 }
@@ -73,6 +74,7 @@ impl ThreadRow {
             terminal: false,
             on_click: None,
             on_close: None,
+            on_rename: None,
             shortcut: None,
         }
     }
@@ -105,6 +107,12 @@ impl ThreadRow {
 
     pub fn on_click(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
         self.on_click = Some(std::rc::Rc::new(f));
+        self
+    }
+
+    /// The row's context menu offers Rename Thread….
+    pub fn on_rename(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
+        self.on_rename = Some(std::rc::Rc::new(f));
         self
     }
 
@@ -162,15 +170,20 @@ impl RenderOnce for ThreadRow {
             .children(indicator)
             .children(self.shortcut.map(|(n, matches)| shortcut_badge(n, matches)))
             .when_some(self.on_click, |d, f| d.on_click(move |e, w, cx| f(e, w, cx)));
-        match self.on_close {
-            Some(f) => row
-                .context_menu(move |menu, _, _| {
-                    let f = f.clone();
-                    menu.item(PopupMenuItem::new("Close Thread").on_click(move |e, w, cx| f(e, w, cx)))
-                })
-                .into_any_element(),
-            None => row.into_any_element(),
+        if self.on_close.is_none() && self.on_rename.is_none() {
+            return row.into_any_element();
         }
+        let (on_rename, on_close) = (self.on_rename, self.on_close);
+        row.context_menu(move |mut menu, _, _| {
+            if let Some(f) = on_rename.clone() {
+                menu = menu.item(PopupMenuItem::new("Rename Thread…").on_click(move |e, w, cx| f(e, w, cx)));
+            }
+            if let Some(f) = on_close.clone() {
+                menu = menu.item(PopupMenuItem::new("Close Thread").on_click(move |e, w, cx| f(e, w, cx)));
+            }
+            menu
+        })
+        .into_any_element()
     }
 }
 

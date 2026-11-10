@@ -64,6 +64,7 @@ impl SpaceApp {
             created_ms: thread.created_ms,
             updated_ms: now_ms(),
             titled: thread.name.is_some(),
+            renamed: thread.renamed,
             closed_ms: None,
         }
     }
@@ -351,7 +352,8 @@ impl SpaceApp {
         thread.created_ms = meta.created_ms;
         thread.mode.clone_from(&meta.mode);
         thread.resume = meta.agent.clone().zip(meta.session_id.clone());
-        thread.name = meta.titled.then(|| meta.title.clone());
+        thread.name = (meta.titled || meta.renamed).then(|| meta.title.clone());
+        thread.renamed = meta.renamed;
         thread.unloaded = true;
         thread.meta = Some(meta);
         thread
@@ -403,6 +405,18 @@ mod tests {
     use space_core::protocol::SpaceStatus;
 
     use super::*;
+
+    #[test]
+    fn a_rename_is_saved_as_yours() {
+        let meta = ThreadMeta { title: "Mine".into(), titled: true, renamed: true, ..Default::default() };
+        let json = serde_json::to_value(&meta).unwrap();
+        assert_eq!(json["renamed"], true);
+        assert_eq!(serde_json::from_value::<ThreadMeta>(json).unwrap(), meta);
+        // Saved before renaming existed (or never renamed): not renamed, and not written.
+        let json = serde_json::to_value(ThreadMeta::default()).unwrap();
+        assert!(json.get("renamed").is_none());
+        assert!(!serde_json::from_value::<ThreadMeta>(serde_json::json!({"id": "a", "title": "t", "project": "/p", "createdMs": 1, "updatedMs": 2})).unwrap().renamed);
+    }
 
     #[test]
     fn closed_threads_expire_after_the_cutoff() {

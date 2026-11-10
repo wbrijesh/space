@@ -39,6 +39,8 @@ mod settings;
 mod single;
 mod terminal;
 mod terminal_view;
+mod text_prompt;
+mod rename;
 mod threads;
 mod trajectory;
 mod view;

@@ -33,7 +33,7 @@ pub use space_ui::actions::{
     ToggleSidebar,
     ToggleTrajectory,
     CloseTerminal, MaximizeTerminal, NewTerminal, NextTerminal, PreviousTerminal, TerminalClear, TerminalCopy, TerminalPaste,
-    ToggleTerminal, OpenFind, FindNext, FindPrevious, CloseFind,
+    ToggleTerminal, OpenFind, FindNext, FindPrevious, CloseFind, RenameThread,
 };
 use space_ui::assets::SpaceAssets;
 use space_ui::components::composer;
@@ -155,6 +155,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-shift-enter", MaximizeTerminal, Some("Terminal")),
             KeyBinding::new("cmd-t", NewTerminal, Some("Terminal")),
             KeyBinding::new("cmd-w", CloseThread, None),
+            KeyBinding::new("cmd-r", RenameThread, None),
             KeyBinding::new("cmd-alt-down", NextThread, None),
             KeyBinding::new("cmd-alt-up", PreviousThread, None),
             // In the terminal, ⌘W closes the terminal tab instead.
@@ -192,7 +193,10 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             },
             Menu {
                 name: "File".into(),
-                items: vec![MenuItem::action("New Thread", NewThread), MenuItem::action("Close Thread", CloseThread)],
+                items: vec![MenuItem::action("New Thread", NewThread),
+                    MenuItem::action("Rename Thread…", RenameThread),
+                    MenuItem::action("Close Thread", CloseThread),
+                ],
                 disabled: false,
             },
             Menu {

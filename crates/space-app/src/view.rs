@@ -34,7 +34,7 @@ use space_ui::ClickHandler;
 use crate::app::{
     CloseSettings, CloseTerminal, CloseThread, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizeTerminal, NewTerminal, NewThread,
     NextTerminal, OpenSettings, PreviousTerminal, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleTerminal, ToggleTrajectory,
-    OpenFind, FindNext, FindPrevious, CloseFind,
+    OpenFind, FindNext, FindPrevious, CloseFind, RenameThread,
 };
 use crate::settings::SaveKind;
 use crate::threads::Thread;
@@ -106,6 +106,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .track_focus(&app.focus)
         .on_action(cx.listener(|this, _: &NewThread, window, cx| this.new_thread(None, window, cx)))
         .on_action(cx.listener(|this, _: &CloseThread, window, cx| this.close_current_thread(window, cx)))
+        .on_action(cx.listener(|this, _: &RenameThread, window, cx| this.rename_current_thread(window, cx)))
         .on_action(cx.listener(|this, _: &NextThread, window, cx| this.step_thread(1, window, cx)))
         .on_action(cx.listener(|this, _: &PreviousThread, window, cx| this.step_thread(-1, window, cx)))
         .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
@@ -264,6 +265,7 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
                 .terminal(!selected && app.terminals.active(key))
                 .shortcut(shortcut)
                 .on_click(cx.listener(move |this, _, w, cx| this.select_thread(key, w, cx)))
+                .on_rename(cx.listener(move |this, _, w, cx| this.rename_thread(key, w, cx)))
                 .on_close(cx.listener(move |this, _, w, cx| this.confirm_close_thread(key, w, cx)))
                 .into_any_element()
         })

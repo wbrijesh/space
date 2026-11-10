@@ -16,6 +16,8 @@
 //! context             print the focused element's key context stack
 //! composer            print the composer's text
 //! find                print find's state (query, matches, current) and the transcript's scroll
+//! rename some name    rename the selected thread as the Rename sheet would (then print its title)
+//! title               print the selected thread's title
 //! shot name           run `$SPACE_SHOT_CMD name` (e.g. a script calling `screencapture -l`)
 //! shotnow name        same as `shot` without the 250 ms settle delay (animation frames)
 //! quit                quit the app
@@ -190,6 +192,22 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                                 f32::from(scroll.max_offset().y),
                                 app.transcript_scroll.is_following(),
                             );
+                        }
+                    });
+                }
+                "rename" | "title" => {
+                    let typed = line.strip_prefix("rename").unwrap_or("").trim_start().to_string();
+                    let rename = cmd == "rename";
+                    let _ = window.update(cx, |root, _, cx| {
+                        let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
+                        if let Some(app) = app {
+                            app.update(cx, |app, cx| {
+                                if rename && let Some(key) = app.selected {
+                                    app.set_thread_name(key, &typed, cx);
+                                }
+                                let t = app.current().map(|t| (t.title(), t.renamed));
+                                eprintln!("script: title {t:?}");
+                            });
                         }
                     });
                 }
