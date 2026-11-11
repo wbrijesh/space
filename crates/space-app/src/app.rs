@@ -33,7 +33,7 @@ pub use space_ui::actions::{
     ToggleSidebar,
     ToggleTrajectory,
     CloseTerminal, MaximizeTerminal, NewTerminal, NextTerminal, PreviousTerminal, TerminalClear, TerminalCopy, TerminalPaste,
-    ToggleTerminal, OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
+    ToggleRightPane, ShowTerminal, ShowFiles, OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
 };
 use space_ui::assets::SpaceAssets;
 use space_ui::components::composer;
@@ -163,8 +163,8 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-q", Quit, None),
             // The terminal pane. ⌘J (or ⌃`, as in VS Code) from anywhere; the rest while a
             // terminal has focus. ⌘J is bound last, so menus and tooltips show it.
-            KeyBinding::new("ctrl-`", ToggleTerminal, None),
-            KeyBinding::new("cmd-j", ToggleTerminal, None),
+            KeyBinding::new("ctrl-`", ShowTerminal, None),
+            KeyBinding::new("cmd-j", ShowTerminal, None),
             KeyBinding::new("cmd-shift-enter", MaximizeTerminal, Some("Terminal")),
             KeyBinding::new("cmd-t", NewTerminal, Some("Terminal")),
             KeyBinding::new("cmd-w", CloseThread, None),
@@ -244,7 +244,9 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
                     MenuItem::action("Previous Thread", PreviousThread),
                     MenuItem::separator(),
                     MenuItem::action("Trajectory", ToggleTrajectory),
-                    MenuItem::action("Terminal", ToggleTerminal),
+                    MenuItem::action("Right Pane", ToggleRightPane),
+                    MenuItem::action("Terminal", ShowTerminal),
+                    MenuItem::action("Files", ShowFiles),
                     MenuItem::separator(),
                     MenuItem::action("Scroll to Bottom", ScrollToBottom),
                     MenuItem::action("Focus Composer", FocusComposer),
@@ -654,7 +656,7 @@ impl SpaceApp {
             input.update(cx, |s, cx| s.focus(window, cx));
         }
         if options.open_terminal {
-            this.toggle_terminal(window, cx);
+            this.show_pane_view(space_ui::components::right_pane::PaneView::Terminal, window, cx);
         }
         this
     }

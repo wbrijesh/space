@@ -116,6 +116,7 @@ pub fn registry() -> Vec<ComponentPreview> {
         images::previews(),
         pastes::previews(),
         quote::previews(),
+        right_pane::previews(),
         message_actions::previews(),
         trajectory::previews(),
         follow_scroll::previews(),

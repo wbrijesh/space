@@ -11,7 +11,7 @@ use gpui::*;
 use super::tip::TipExt as _;
 use super::widgets::icon_button;
 use crate::ClickHandler;
-use crate::actions::{GoBack, GoForward, NewThread, ToggleSidebar, ToggleTerminal};
+use crate::actions::{GoBack, GoForward, NewThread, ToggleRightPane, ToggleSidebar};
 use crate::theme::{color, size, text};
 
 /// Makes `el` a window drag region: dragging moves the window, a double click zooms or
@@ -170,26 +170,26 @@ pub struct MainTitleBar {
     nav: Option<TitleBarNav>,
     /// How far the sidebar is shown (0 hidden, 1 shown).
     sidebar: f32,
-    /// The terminal button: whether the pane is open, and the toggle.
-    terminal: Option<(bool, ClickHandler)>,
+    /// The right pane's button: whether the pane is open, and the toggle.
+    right_pane: Option<(bool, ClickHandler)>,
     /// Open the thread's folder in an app.
     open_in: Option<super::open_in::OpenIn>,
 }
 
 impl MainTitleBar {
     pub fn new(title: impl Into<SharedString>) -> Self {
-        Self { title: title.into(), nav: None, sidebar: 1., terminal: None, open_in: None }
+        Self { title: title.into(), nav: None, sidebar: 1., right_pane: None, open_in: None }
     }
 
-    /// The "Open in" control at the right, left of the terminal button.
+    /// The "Open in" control at the right, left of the right pane's button.
     pub fn open_in(mut self, open_in: super::open_in::OpenIn) -> Self {
         self.open_in = Some(open_in);
         self
     }
 
-    /// A terminal button at the right (filled while the pane is open).
-    pub fn terminal(mut self, open: bool, on_toggle: ClickHandler) -> Self {
-        self.terminal = Some((open, on_toggle));
+    /// The right pane's button at the right (filled while the pane is open).
+    pub fn right_pane(mut self, open: bool, on_toggle: ClickHandler) -> Self {
+        self.right_pane = Some((open, on_toggle));
         self
     }
 
@@ -228,10 +228,10 @@ impl RenderOnce for MainTitleBar {
                     .child(self.title),
             )
             .when_some(self.open_in, |d, o| d.child(div().mr_1().child(super::open_in::open_in_control(o))))
-            .when_some(self.terminal, |d, (open, toggle)| {
+            .when_some(self.right_pane, |d, (open, toggle)| {
                 d.child(
-                    icon_button("toggle-terminal", Lucide::SquareTerminal, true, open)
-                        .tip_action("Terminal", &ToggleTerminal)
+                    icon_button("toggle-right-pane", Lucide::PanelRight, true, open)
+                        .tip_action("Right Pane", &ToggleRightPane)
                         .on_click(move |e, w, cx| toggle(e, w, cx)),
                 )
             })
@@ -268,7 +268,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             .example(
                 Example::new("open in", move |_, _| {
                     let nav = TitleBarNav::inert(false, true, true);
-                    let bar = MainTitleBar::new(title).sidebar(0., nav.clone()).open_in(super::open_in::fixture()).terminal(false, Rc::new(|_, _, _| {}));
+                    let bar = MainTitleBar::new(title).sidebar(0., nav.clone()).open_in(super::open_in::fixture()).right_pane(false, Rc::new(|_, _, _| {}));
                     div().relative().child(bar).child(nav.overlay(0.)).into_any_element()
                 })
                 .width(px(900.)),

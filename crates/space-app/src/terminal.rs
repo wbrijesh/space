@@ -17,6 +17,7 @@ use gpui::*;
 use space_core::Host;
 use space_core::protocol::terminal::{TerminalOpen, TerminalReplay};
 use space_terminal::{Screen, Size as TermSize};
+use space_ui::components::right_pane::PaneView;
 use space_ui::components::terminal::{FONT_SIZE, TerminalTab};
 
 use crate::app::SpaceApp;
@@ -152,6 +153,8 @@ impl Session {
 pub(crate) struct Pane {
     pub(crate) open: bool,
     pub(crate) maximized: bool,
+    /// The view shown (the one used last); `None`: never chosen, so the pane offers both.
+    pub(crate) view: Option<PaneView>,
     /// Terminal ids, in tab order.
     pub(crate) tabs: Vec<String>,
     pub(crate) selected: usize,
@@ -274,25 +277,60 @@ impl SpaceApp {
         Some(view)
     }
 
-    /// ⌘J (or ⌃`): open the thread's pane (a shell the first time) and focus it; from the terminal,
-    /// hide it and go back to the composer.
-    pub(crate) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.show_settings || !self.host.has_terminal() {
+    fn pane_open(&self, key: u64) -> bool {
+        self.terminals.panes.get(&key).is_some_and(|p| p.open)
+    }
+
+    /// The title bar's button: hide the pane, or open it on the view used last (the chooser,
+    /// the first time).
+    pub(crate) fn toggle_right_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.show_settings {
             return;
         }
         let Some(key) = self.selected else { return };
-        let open = self.terminals.panes.get(&key).is_some_and(|p| p.open);
-        if open && self.terminal_focused(key, window, cx) {
+        if self.pane_open(key) {
             self.hide_terminal(window, cx);
             return;
         }
+        let view = self.terminals.panes.get(&key).and_then(|p| p.view);
+        self.open_pane(key, view, window, cx);
+    }
+
+    /// ⌘J / ⌃` (Terminal) and Show Files: open the pane on that view; when it's shown already
+    /// (and, for Terminal, focused), hide the pane and go back to the composer.
+    pub(crate) fn show_pane_view(&mut self, view: PaneView, window: &mut Window, cx: &mut Context<Self>) {
+        if self.show_settings {
+            return;
+        }
+        let Some(key) = self.selected else { return };
+        let shown = self.terminals.panes.get(&key).is_some_and(|p| p.open && p.view == Some(view));
+        if shown && (view == PaneView::Files || self.terminal_focused(key, window, cx)) {
+            self.hide_terminal(window, cx);
+            return;
+        }
+        self.open_pane(key, Some(view), window, cx);
+    }
+
+    /// Open thread `key`'s pane on `view` (`None`: the chooser). Terminal starts a shell the
+    /// first time and takes focus.
+    fn open_pane(&mut self, key: u64, view: Option<PaneView>, window: &mut Window, cx: &mut Context<Self>) {
         let pane = self.terminals.panes.entry(key).or_default();
         pane.open = true;
-        if pane.tabs.is_empty() && pane.opening == 0 {
-            self.open_terminal(key, None, window, cx);
+        if view.is_some() {
+            pane.view = view;
+        }
+        // Only the terminal is maximized.
+        if pane.view != Some(PaneView::Terminal) {
+            pane.maximized = false;
+        }
+        if view == Some(PaneView::Terminal) {
+            let start = pane.tabs.is_empty() && pane.opening == 0;
+            if start && self.host.has_terminal() {
+                self.open_terminal(key, None, window, cx);
+            }
+            self.focus_terminal(key, window, cx);
         }
         self.terminal_slide(cx);
-        self.focus_terminal(key, window, cx);
         cx.notify();
     }
 
@@ -302,7 +340,7 @@ impl SpaceApp {
     /// starts then, and on every render.
     pub(crate) fn terminal_slide(&mut self, cx: &mut Context<Self>) {
         let open = self.selected.is_some_and(|k| {
-            !self.show_settings && self.host.has_terminal() && self.terminals.pane(k).is_some_and(|p| p.open)
+            !self.show_settings && self.terminals.pane(k).is_some_and(|p| p.open)
         });
         let target = if open { 1. } else { 0. };
         if self.terminal_shown_for != self.selected || cx.reduce_motion() {
@@ -332,7 +370,9 @@ impl SpaceApp {
             return;
         }
         let Some(key) = self.selected else { return };
-        self.terminals.panes.entry(key).or_default().open = true;
+        let pane = self.terminals.panes.entry(key).or_default();
+        pane.open = true;
+        pane.view = Some(PaneView::Terminal);
         self.terminal_slide(cx);
         self.open_terminal(key, None, window, cx);
         cx.notify();
@@ -469,7 +509,8 @@ impl SpaceApp {
                 pane.selected -= 1;
             }
         }
-        let closed = pane.tabs.is_empty();
+        // The last tab closes the pane, when it's showing the terminal.
+        let closed = pane.tabs.is_empty() && pane.view == Some(PaneView::Terminal);
         if closed {
             pane.open = false;
             pane.maximized = false;
@@ -507,7 +548,7 @@ impl SpaceApp {
 
     pub(crate) fn toggle_terminal_maximized(&mut self, cx: &mut Context<Self>) {
         let Some(key) = self.selected else { return };
-        if let Some(pane) = self.terminals.panes.get_mut(&key).filter(|p| p.open) {
+        if let Some(pane) = self.terminals.panes.get_mut(&key).filter(|p| p.open && p.view == Some(PaneView::Terminal)) {
             pane.maximized = !pane.maximized;
             cx.notify();
         }

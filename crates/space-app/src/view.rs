@@ -17,6 +17,7 @@ use space_ui::components::settings::{
     Catalog, FieldView, ModelChoice, PluginApproval, PluginRow, PluginSettingsView, SettingsHandlers, SettingsPage,
 };
 use space_ui::components::follow_scroll::FollowScrollArea;
+use space_ui::components::right_pane::PaneView;
 use space_ui::components::images::{Pic, ViewerHandlers, viewer};
 use space_ui::components::message_actions::ActionHandlers;
 use space_ui::components::trajectory::{TrajectoryHandlers, TrajectoryView, ViewTab, view_tabs};
@@ -33,7 +34,7 @@ use space_ui::ClickHandler;
 
 use crate::app::{
     CloseSettings, CloseTerminal, CloseThread, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizeTerminal, NewTerminal, NewThread,
-    NextTerminal, OpenSettings, PreviousTerminal, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleTerminal, ToggleTrajectory,
+    NextTerminal, OpenSettings, PreviousTerminal, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleRightPane, ShowTerminal, ShowFiles, ToggleTrajectory,
     OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
 };
 use crate::settings::SaveKind;
@@ -75,7 +76,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
 
     // The terminal pane, when the current thread has it open (and a terminal plugin runs).
     let terminal_key = app.selected.filter(|k| {
-        !app.show_settings && app.host.has_terminal() && app.terminals.pane(*k).is_some_and(|p| p.open)
+        !app.show_settings && app.terminals.pane(*k).is_some_and(|p| p.open)
     });
     app.terminals.set_visible(terminal_key.and_then(|k| app.terminals.selected(k)).map(|s| s.id.clone()).as_deref());
     let terminal_open = terminal_key.is_some();
@@ -87,7 +88,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
     // Drawn while open, and while it slides away after hiding.
     let terminal_drawn = terminal_key.or_else(|| {
         app.selected.filter(|k| {
-            terminal_shown > 0. && !app.show_settings && app.host.has_terminal() && app.terminals.pane(*k).is_some()
+            terminal_shown > 0. && !app.show_settings && app.terminals.pane(*k).is_some()
         })
     });
     let title_bar = MainTitleBar::new(if app.show_settings {
@@ -97,8 +98,8 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
     })
     .sidebar(shown, nav.clone())
     .when_some((!app.show_settings).then(|| app.open_in_view(cx)).flatten(), |b, o| b.open_in(o))
-    .when(!app.show_settings && app.host.has_terminal(), |b| {
-        b.terminal(terminal_open, click(cx, |this, w, cx| this.toggle_terminal(w, cx)))
+    .when(!app.show_settings && app.current().is_some(), |b| {
+        b.right_pane(terminal_open, click(cx, |this, w, cx| this.toggle_right_pane(w, cx)))
     });
     let content = if app.show_settings {
         settings(app, window, cx)
@@ -141,7 +142,9 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.toggle_settings(window, cx)))
         .on_action(cx.listener(|this, _: &ScrollToBottom, _, cx| this.scroll_to_bottom(cx)))
         .on_action(cx.listener(|this, _: &CyclePermissionMode, _, cx| this.cycle_mode(cx)))
-        .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| this.toggle_terminal(window, cx)))
+        .on_action(cx.listener(|this, _: &ToggleRightPane, window, cx| this.toggle_right_pane(window, cx)))
+        .on_action(cx.listener(|this, _: &ShowTerminal, window, cx| this.show_pane_view(PaneView::Terminal, window, cx)))
+        .on_action(cx.listener(|this, _: &ShowFiles, window, cx| this.show_pane_view(PaneView::Files, window, cx)))
         .on_action(cx.listener(|this, _: &NewTerminal, window, cx| this.new_terminal(window, cx)))
         .on_action(cx.listener(|this, _: &CloseTerminal, window, cx| this.close_current_terminal(window, cx)))
         .on_action(cx.listener(|this, _: &NextTerminal, window, cx| this.step_terminal(1, window, cx)))
@@ -367,8 +370,38 @@ fn with_terminal(
         .into_any_element()
 }
 
-/// The pane: tabs, then the selected terminal (or why there's none).
+/// The right pane: its header (view switch, the view's controls, hide), then the view, or the
+/// chooser when the thread hasn't picked one.
 fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
+    use space_ui::components::right_pane::{ViewHandler, chooser, files_placeholder, header};
+    let view = app.terminals.pane(key).and_then(|p| p.view);
+    let on_view: ViewHandler = {
+        let this = cx.entity().downgrade();
+        Rc::new(move |v, w, cx| {
+            let _ = this.update(cx, |this, cx| this.show_pane_view(v, w, cx));
+        })
+    };
+    let on_hide = handler(cx, |this, w, cx| this.hide_terminal(w, cx));
+    let (controls, content) = match view {
+        None => (None, chooser(on_view.clone(), window).into_any_element()),
+        Some(PaneView::Files) => (None, files_placeholder().into_any_element()),
+        Some(PaneView::Terminal) => {
+            let (strip, content) = terminal_view_parts(app, key, window, cx);
+            (Some(strip), content)
+        }
+    };
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .bg(color::bg())
+        .child(header(view, controls, on_view, on_hide))
+        .child(content)
+        .into_any_element()
+}
+
+/// The Terminal view: its tabs (for the header), then the selected terminal (or why there's none).
+fn terminal_view_parts(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Context<SpaceApp>) -> (Div, AnyElement) {
     use space_ui::components::terminal::{StripHandlers, stopped_notice, tab_strip};
     let (tabs, selected, maximized, opening, error) = {
         let pane = app.terminals.pane(key).expect("open pane");
@@ -390,7 +423,6 @@ fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Con
         },
         on_new: handler(cx, |this, w, cx| this.new_terminal(w, cx)),
         on_maximize: handler(cx, |this, _, cx| this.toggle_terminal_maximized(cx)),
-        on_hide: handler(cx, |this, w, cx| this.hide_terminal(w, cx)),
     };
     let session = app.terminals.selected(key);
     let stopped = session.as_ref().is_some_and(|s| s.state.lock().unwrap().stopped);
@@ -414,18 +446,17 @@ fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Con
                 .p_3()
                 .text_size(text::SM)
                 .text_color(color::text_3())
-                .child(if opening > 0 { "Starting a shell…" } else { "" })
+                .child(if opening > 0 {
+                    "Starting a shell…"
+                } else if !app.host.has_terminal() {
+                    "The terminal plugin isn't running."
+                } else {
+                    ""
+                })
                 .into_any_element(),
         },
     };
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .bg(color::bg())
-        .child(tab_strip(&tabs, selected, maximized, &handlers))
-        .child(content)
-        .into_any_element()
+    (tab_strip(&tabs, selected, maximized, &handlers), content)
 }
 
 fn body(app: &SpaceApp, streaming: Option<(usize, usize)>, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {

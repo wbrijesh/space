@@ -13,6 +13,7 @@ pub mod model_picker;
 pub mod open_in;
 pub mod pastes;
 pub mod quote;
+pub mod right_pane;
 pub mod settings;
 pub mod shell;
 pub mod terminal;

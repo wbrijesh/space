@@ -12,7 +12,7 @@ use space_terminal::{CursorShape, Frame, FrameCell};
 
 use super::tip::TipExt as _;
 use super::widgets::{icon_button, pill_button};
-use crate::actions::{MaximizeTerminal, NewTerminal, ToggleTerminal};
+use crate::actions::{MaximizeTerminal, NewTerminal};
 use crate::theme::{color, radius, size, text};
 
 /// The terminal's text size.
@@ -218,17 +218,16 @@ pub struct StripHandlers {
     pub on_close: IndexHandler,
     pub on_new: Handler,
     pub on_maximize: Handler,
-    pub on_hide: Handler,
 }
 
 impl Default for StripHandlers {
     fn default() -> Self {
         let noop: Handler = Rc::new(|_, _| {});
-        Self { on_select: Rc::new(|_, _, _| {}), on_close: Rc::new(|_, _, _| {}), on_new: noop.clone(), on_maximize: noop.clone(), on_hide: noop }
+        Self { on_select: Rc::new(|_, _, _| {}), on_close: Rc::new(|_, _, _| {}), on_new: noop.clone(), on_maximize: noop }
     }
 }
 
-/// The pane's header: a tab per terminal, then new, maximize and hide.
+/// The Terminal view's part of the pane's header: a tab per terminal, then new and maximize.
 pub fn tab_strip(tabs: &[TerminalTab], selected: usize, maximized: bool, h: &StripHandlers) -> Div {
     let tab = |ix: usize, t: &TerminalTab| {
         let on = ix == selected;
@@ -274,16 +273,13 @@ pub fn tab_strip(tabs: &[TerminalTab], selected: usize, maximized: bool, h: &Str
             )
             .on_click(move |_, w, cx| select(ix, w, cx))
     };
-    let (new, maximize, hide) = (h.on_new.clone(), h.on_maximize.clone(), h.on_hide.clone());
+    let (new, maximize) = (h.on_new.clone(), h.on_maximize.clone());
     div()
-        .h(STRIP_H)
-        .flex_none()
+        .flex_1()
+        .min_w_0()
         .flex()
         .items_center()
         .gap_1()
-        .px_2()
-        .border_b_1()
-        .border_color(color::border())
         .child(div().id("terminal-tabs").flex_1().min_w_0().flex().items_center().gap_1().overflow_x_scroll().children(
             tabs.iter().enumerate().map(|(ix, t)| tab(ix, t)),
         ))
@@ -293,7 +289,6 @@ pub fn tab_strip(tabs: &[TerminalTab], selected: usize, maximized: bool, h: &Str
                 .tip_action(if maximized { "Restore" } else { "Maximize" }, &MaximizeTerminal)
                 .on_click(move |_, w, cx| maximize(w, cx)),
         )
-        .child(icon_button("terminal-hide", Lucide::X, true, false).tip_action("Hide terminal", &ToggleTerminal).on_click(move |_, w, cx| hide(w, cx)))
 }
 
 /// Under a terminal whose shell ended.
@@ -349,7 +344,13 @@ pub fn sample_frame(cols: u16, rows: u16) -> Frame {
 
 #[cfg(feature = "dev")]
 pub fn previews() -> Vec<crate::preview::ComponentPreview> {
+    use super::right_pane::{PaneView, header};
     use crate::preview::{Area, ComponentPreview, Example};
+    /// The pane's header around the Terminal view's tabs, as the app shows it.
+    fn strip(tabs: &[TerminalTab], selected: usize, maximized: bool) -> Div {
+        let controls = tab_strip(tabs, selected, maximized, &StripHandlers::default());
+        header(Some(PaneView::Terminal), Some(controls), Rc::new(|_, _, _| {}), Rc::new(|_, _| {}))
+    }
     let tabs = vec![
         TerminalTab { title: "zsh".into(), unread: false, ended: false },
         TerminalTab { title: "cargo".into(), unread: true, ended: false },
@@ -366,7 +367,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 .bg(color::bg())
                 .border_1()
                 .border_color(color::border())
-                .child(tab_strip(&tabs, 0, false, &StripHandlers::default()))
+                .child(strip(&tabs, 0, false))
                 .child(div().flex_1().child(terminal_grid(Arc::new(sample_frame(80, 14)), true, Rc::new(|_, _, _| {}))))
                 .into_any_element()
         }),
@@ -378,7 +379,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 .bg(color::bg())
                 .border_1()
                 .border_color(color::border())
-                .child(tab_strip(&t2, 2, true, &StripHandlers::default()))
+                .child(strip(&t2, 2, true))
                 .child(div().h(px(80.)))
                 .child(ended_notice(Some(130)))
                 .into_any_element()

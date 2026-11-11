@@ -129,6 +129,14 @@ pub fn separator() -> Div {
     div().my_1().mx_neg_1().h(px(1.)).bg(color::border())
 }
 
+/// `action`'s key binding as a label ("⌘J"), its glyphs a hair apart as macOS menus space them;
+/// `None` when it has none.
+pub fn shortcut_label(action: &dyn Action, window: &Window) -> Option<String> {
+    let binding = window.highest_precedence_binding_for_action(action)?;
+    let keys = Kbd::format(binding.keystrokes().first()?.as_keystroke());
+    Some(keys.chars().map(String::from).collect::<Vec<_>>().join("\u{200A}"))
+}
+
 /// One item of a [`context_menu`]: its label, what picking it does, and optionally the action
 /// whose key binding shows on the right. The action only names the shortcut (read from the
 /// key bindings, so it can't drift); picking the item runs `on_pick`.
@@ -217,12 +225,7 @@ fn context_menu_card(
 ) -> Div {
     let rows = items.iter().enumerate().map(|(ix, item)| {
         // macOS spaces a shortcut's glyphs apart (⌘ R), which reads easier at a small size.
-        let keys = item
-            .action
-            .as_ref()
-            .and_then(|a| window.highest_precedence_binding_for_action(a.as_ref()))
-            .and_then(|b| b.keystrokes().first().map(|k| Kbd::format(k.as_keystroke())))
-            .map(|k| k.chars().map(String::from).collect::<Vec<_>>().join("\u{200A}"));
+        let keys = item.action.as_ref().and_then(|a| shortcut_label(a.as_ref(), window));
         let (pick, state) = (item.on_pick.clone(), state.clone());
         div()
             .id(("context-item", ix))
