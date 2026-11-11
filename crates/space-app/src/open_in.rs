@@ -219,6 +219,21 @@ impl SpaceApp {
         cx.notify();
     }
 
+    /// Open a file (or folder) from the Files view in the app "Open in" uses.
+    pub(crate) fn open_file(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let Some(app) = self.open_in_app().map(|a| a.known) else { return };
+        let path = path.to_path_buf();
+        cx.spawn(async move |this, cx| {
+            if let Err(e) = cx.background_spawn(async move { open(&path, None, &app) }).await {
+                let _ = this.update(cx, |this, cx| {
+                    this.banner = Some(e);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
     pub(crate) fn copy_thread_path(&mut self, cx: &mut Context<Self>) {
         self.open_in_menu = false;
         if let Some(dir) = self.current().map(|t| t.cwd.clone()) {

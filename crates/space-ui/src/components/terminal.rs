@@ -227,53 +227,65 @@ impl Default for StripHandlers {
     }
 }
 
-/// The Terminal view's part of the pane's header: a tab per terminal, then new and maximize.
-pub fn tab_strip(tabs: &[TerminalTab], selected: usize, maximized: bool, h: &StripHandlers) -> Div {
-    let tab = |ix: usize, t: &TerminalTab| {
-        let on = ix == selected;
-        let group: SharedString = format!("terminal-tab-{ix}").into();
-        let (select, close) = (h.on_select.clone(), h.on_close.clone());
-        div()
-            .id(("terminal-tab", ix))
-            .group(group.clone())
-            .flex_none()
-            .max_w(px(180.))
-            .h(px(24.))
-            .pl_2()
-            .pr_1()
-            .flex()
-            .items_center()
-            .gap_1p5()
-            .rounded(radius::MD)
-            .text_size(text::SM)
-            .cursor_pointer()
-            .map(|d| if on { d.bg(color::hover()).text_color(color::text()) } else { d.text_color(color::text_3()) })
-            .hover(|s| s.bg(color::hover()).text_color(color::text()))
-            .child(Icon::new(Lucide::SquareTerminal).size(size::ICON).text_color(if t.ended { color::text_3() } else { color::text_2() }))
-            .child(div().min_w_0().truncate().when(t.ended, |d| d.text_color(color::text_3())).child(t.title.clone()))
-            .when(t.unread && !on, |d| d.child(div().size(px(6.)).flex_none().rounded_full().bg(color::blue())))
-            .child(
-                div()
-                    .id(("terminal-tab-close", ix))
-                    .size(px(18.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(radius::SM)
-                    .text_color(color::text_3())
-                    .when(!on, |d| d.invisible().group_hover(group, |s| s.visible()))
-                    .hover(|s| s.bg(color::pressed()).text_color(color::text()))
-                    .child(Icon::new(Lucide::X).size(size::ICON_SM))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(move |_, w, cx| {
-                        cx.stop_propagation();
-                        close(ix, w, cx)
-                    }),
-            )
-            .on_click(move |_, w, cx| select(ix, w, cx))
-    };
-    let (new, maximize) = (h.on_new.clone(), h.on_maximize.clone());
+/// A terminal's tab: its program, a dot for output not seen, and × (shown on hover).
+pub fn terminal_tab(ix: usize, t: &TerminalTab, on: bool, h: &StripHandlers) -> Stateful<Div> {
+    let group: SharedString = format!("terminal-tab-{ix}").into();
+    let (select, close) = (h.on_select.clone(), h.on_close.clone());
+    div()
+        .id(("terminal-tab", ix))
+        .group(group.clone())
+        .flex_none()
+        .max_w(px(180.))
+        .h(px(24.))
+        .pl_2()
+        .pr_1()
+        .flex()
+        .items_center()
+        .gap_1p5()
+        .rounded(radius::MD)
+        .text_size(text::SM)
+        .cursor_pointer()
+        .map(|d| if on { d.bg(color::hover()).text_color(color::text()) } else { d.text_color(color::text_3()) })
+        .hover(|s| s.bg(color::hover()).text_color(color::text()))
+        .child(Icon::new(Lucide::SquareTerminal).size(size::ICON).text_color(if t.ended { color::text_3() } else { color::text_2() }))
+        .child(div().min_w_0().truncate().when(t.ended, |d| d.text_color(color::text_3())).child(t.title.clone()))
+        .when(t.unread && !on, |d| d.child(div().size(px(6.)).flex_none().rounded_full().bg(color::blue())))
+        .child(
+            div()
+                .id(("terminal-tab-close", ix))
+                .size(px(18.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(radius::SM)
+                .text_color(color::text_3())
+                .when(!on, |d| d.invisible().group_hover(group, |s| s.visible()))
+                .hover(|s| s.bg(color::pressed()).text_color(color::text()))
+                .child(Icon::new(Lucide::X).size(size::ICON_SM))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(move |_, w, cx| {
+                    cx.stop_propagation();
+                    close(ix, w, cx)
+                }),
+        )
+        .on_click(move |_, w, cx| select(ix, w, cx))
+}
+
+pub fn new_terminal_button(h: &StripHandlers) -> Stateful<Div> {
+    let new = h.on_new.clone();
+    icon_button("terminal-new", Lucide::Plus, true, false).tip_action("New terminal", &NewTerminal).on_click(move |_, w, cx| new(w, cx))
+}
+
+pub fn maximize_button(maximized: bool, h: &StripHandlers) -> Stateful<Div> {
+    let maximize = h.on_maximize.clone();
+    icon_button("terminal-maximize", if maximized { Lucide::Minimize2 } else { Lucide::Maximize2 }, true, false)
+        .tip_action(if maximized { "Restore" } else { "Maximize" }, &MaximizeTerminal)
+        .on_click(move |_, w, cx| maximize(w, cx))
+}
+
+/// The terminals' tabs (`selected`: the one shown, if the terminal is), then new and maximize.
+pub fn tab_strip(tabs: &[TerminalTab], selected: Option<usize>, maximized: bool, h: &StripHandlers) -> Div {
     div()
         .flex_1()
         .min_w_0()
@@ -281,14 +293,10 @@ pub fn tab_strip(tabs: &[TerminalTab], selected: usize, maximized: bool, h: &Str
         .items_center()
         .gap_1()
         .child(div().id("terminal-tabs").flex_1().min_w_0().flex().items_center().gap_1().overflow_x_scroll().children(
-            tabs.iter().enumerate().map(|(ix, t)| tab(ix, t)),
+            tabs.iter().enumerate().map(|(ix, t)| terminal_tab(ix, t, selected == Some(ix), h)),
         ))
-        .child(icon_button("terminal-new", Lucide::Plus, true, false).tip_action("New terminal", &NewTerminal).on_click(move |_, w, cx| new(w, cx)))
-        .child(
-            icon_button("terminal-maximize", if maximized { Lucide::Minimize2 } else { Lucide::Maximize2 }, true, false)
-                .tip_action(if maximized { "Restore" } else { "Maximize" }, &MaximizeTerminal)
-                .on_click(move |_, w, cx| maximize(w, cx)),
-        )
+        .child(new_terminal_button(h))
+        .child(maximize_button(maximized, h))
 }
 
 /// Under a terminal whose shell ended.
@@ -344,12 +352,11 @@ pub fn sample_frame(cols: u16, rows: u16) -> Frame {
 
 #[cfg(feature = "dev")]
 pub fn previews() -> Vec<crate::preview::ComponentPreview> {
-    use super::right_pane::{PaneView, header};
+    use super::right_pane::header;
     use crate::preview::{Area, ComponentPreview, Example};
-    /// The pane's header around the Terminal view's tabs, as the app shows it.
+    /// The pane's header around the terminals' tabs, as the app shows it.
     fn strip(tabs: &[TerminalTab], selected: usize, maximized: bool) -> Div {
-        let controls = tab_strip(tabs, selected, maximized, &StripHandlers::default());
-        header(Some(PaneView::Terminal), Some(controls), Rc::new(|_, _, _| {}), Rc::new(|_, _| {}))
+        header(tab_strip(tabs, Some(selected), maximized, &StripHandlers::default()), Rc::new(|_, _| {}))
     }
     let tabs = vec![
         TerminalTab { title: "zsh".into(), unread: false, ended: false },

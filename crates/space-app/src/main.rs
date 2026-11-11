@@ -42,6 +42,9 @@ mod terminal;
 mod terminal_view;
 mod text_prompt;
 mod paste;
+mod diff;
+mod files;
+mod files_view;
 mod open_in;
 mod pin;
 mod quote;
@@ -180,6 +183,7 @@ fn main() -> Result<()> {
         open_settings: false,
         open_trajectory: false,
         open_terminal: false,
+        open_files: false,
     };
     #[cfg(feature = "dev")]
     if let Some(name) = &args.scenario {

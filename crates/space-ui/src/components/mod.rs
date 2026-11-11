@@ -3,6 +3,8 @@
 //! `previews()` function listing named example states (see [`crate::preview`]).
 
 pub mod composer;
+pub mod file_tree;
+pub mod file_viewer;
 pub mod find;
 pub mod follow_scroll;
 pub mod images;

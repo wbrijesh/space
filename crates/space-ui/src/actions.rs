@@ -26,6 +26,7 @@ gpui::actions!(
         ToggleRightPane,
         ShowTerminal,
         ShowFiles,
+        CloseFile,
         NewTerminal,
         CloseTerminal,
         NextTerminal,

@@ -363,6 +363,8 @@ fn syntax_theme() -> std::sync::Arc<gpui::component::highlighter::HighlightTheme
     let style = serde_json::json!({
         "editor.background": "#262626",
         "editor.foreground": "#ececec",
+        // The Files view's line numbers: opaque, as the pane, so scrolled code doesn't show through.
+        "editor.gutter.background": "#141414",
         "syntax": {
             "attribute": c(blue),
             "boolean": c(blue),

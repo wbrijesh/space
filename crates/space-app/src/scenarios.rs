@@ -30,6 +30,8 @@ pub struct Scenario {
     pub permissions: bool,
     /// Also run the real trajectory plugin, and open the selected thread's Trajectory tab.
     pub trajectory: bool,
+    /// Open the right pane on Files (the project folder: the repo, or the folder given).
+    pub files: bool,
     /// Also run the real terminal plugin (with a scripted shell: a colour test, then `sh`), and
     /// open the selected thread's terminal pane.
     pub terminal: bool,
@@ -348,6 +350,14 @@ pub fn all() -> Vec<Scenario> {
             ..Default::default()
         },
         Scenario {
+            name: "files",
+            description: "The right pane's Files view beside a finished thread, on the project folder (the repo, \
+                          or the folder given after the scenario name).",
+            threads: vec![explain_thread()],
+            files: true,
+            ..Default::default()
+        },
+        Scenario {
             name: "settings",
             description: "The Settings page (⌘,) with the stub's models and a saved default.",
             threads: vec![explain_thread()],
@@ -584,6 +594,7 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         open_settings: scenario.settings_page,
         open_trajectory: scenario.trajectory,
         open_terminal: scenario.terminal,
+        open_files: scenario.files,
     };
     Ok((host, options))
 }

@@ -296,19 +296,25 @@ impl SpaceApp {
         self.open_pane(key, view, window, cx);
     }
 
-    /// ⌘J / ⌃` (Terminal) and Show Files: open the pane on that view; when it's shown already
-    /// (and, for Terminal, focused), hide the pane and go back to the composer.
+    /// ⌘J / ⌃` (Terminal) and ⌘P (Files, on its tree): open the pane on that view; when it's
+    /// shown already (Terminal focused, or the tree showing), hide the pane and go back to the
+    /// composer.
     pub(crate) fn show_pane_view(&mut self, view: PaneView, window: &mut Window, cx: &mut Context<Self>) {
         if self.show_settings {
             return;
         }
         let Some(key) = self.selected else { return };
         let shown = self.terminals.panes.get(&key).is_some_and(|p| p.open && p.view == Some(view));
-        if shown && (view == PaneView::Files || self.terminal_focused(key, window, cx)) {
+        let tree_shown = self.file_tabs.get(&key).is_none_or(|t| t.active.is_none());
+        if shown && (if view == PaneView::Files { tree_shown } else { self.terminal_focused(key, window, cx) }) {
             self.hide_terminal(window, cx);
             return;
         }
         self.open_pane(key, Some(view), window, cx);
+        // Files opens on the tree, not on the file shown last.
+        if view == PaneView::Files {
+            self.select_file_tab(None, window, cx);
+        }
     }
 
     /// Open thread `key`'s pane on `view` (`None`: the chooser). Terminal starts a shell the
@@ -322,6 +328,10 @@ impl SpaceApp {
         // Only the terminal is maximized.
         if pane.view != Some(PaneView::Terminal) {
             pane.maximized = false;
+        }
+        if view == Some(PaneView::Files) {
+            let focus = self.files.focus.clone();
+            window.focus(&focus, cx);
         }
         if view == Some(PaneView::Terminal) {
             let start = pane.tabs.is_empty() && pane.opening == 0;
@@ -509,8 +519,15 @@ impl SpaceApp {
                 pane.selected -= 1;
             }
         }
-        // The last tab closes the pane, when it's showing the terminal.
-        let closed = pane.tabs.is_empty() && pane.view == Some(PaneView::Terminal);
+        // The last terminal closes the pane, when it's showing the terminal and no file is open
+        // beside it (else the pane goes to the files).
+        let last = pane.tabs.is_empty() && pane.view == Some(PaneView::Terminal);
+        let files_open = self.file_tabs.get(&key).is_some_and(|t| !t.tabs.is_empty());
+        let Some(pane) = self.terminals.panes.get_mut(&key) else { return };
+        if last && files_open {
+            pane.view = Some(PaneView::Files);
+        }
+        let closed = last && !files_open;
         if closed {
             pane.open = false;
             pane.maximized = false;
@@ -532,6 +549,7 @@ impl SpaceApp {
             && ix < pane.tabs.len()
         {
             pane.selected = ix;
+            pane.view = Some(PaneView::Terminal);
             self.focus_terminal(key, window, cx);
             cx.notify();
         }

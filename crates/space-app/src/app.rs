@@ -31,7 +31,7 @@ pub use space_ui::actions::{
     CloseSettings, CloseThread, CyclePermissionMode, FocusComposer, NextThread, PreviousThread, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious,
     ScrollToBottom,
     ToggleSidebar,
-    ShowChat, ShowTrajectory, OpenInLastApp,
+    ShowChat, ShowTrajectory, CloseFile, OpenInLastApp,
     CloseTerminal, MaximizeTerminal, NewTerminal, NextTerminal, PreviousTerminal, TerminalClear, TerminalCopy, TerminalPaste,
     ToggleRightPane, ShowTerminal, ShowFiles, OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
 };
@@ -73,6 +73,8 @@ pub struct Options {
     pub open_trajectory: bool,
     /// Dev scenarios: open the selected thread's terminal pane.
     pub open_terminal: bool,
+    /// Dev scenarios: open the selected thread's right pane on Files.
+    pub open_files: bool,
 }
 
 /// A thread opened at launch: an optional prompt sent once its session exists and an
@@ -164,10 +166,13 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("up", RecallPrevious, Some("Composer > Input")),
             KeyBinding::new("down", RecallNext, Some("Composer > Input")),
             KeyBinding::new("cmd-q", Quit, None),
-            // The terminal pane. ⌘J (or ⌃`, as in VS Code) from anywhere; the rest while a
-            // terminal has focus. ⌘J is bound last, so menus and tooltips show it.
+            // The right pane, from anywhere: ⌘J (or ⌃`, as in VS Code) Terminal, ⌘⌥B show / hide,
+            // ⌘P the file tree; the rest while a terminal has focus. ⌘J is bound after ⌃`, so
+            // menus and tooltips show it.
             KeyBinding::new("ctrl-`", ShowTerminal, None),
             KeyBinding::new("cmd-j", ShowTerminal, None),
+            KeyBinding::new("cmd-alt-b", ToggleRightPane, None),
+            KeyBinding::new("cmd-p", ShowFiles, None),
             KeyBinding::new("cmd-shift-enter", MaximizeTerminal, Some("Terminal")),
             KeyBinding::new("cmd-t", NewTerminal, Some("Terminal")),
             KeyBinding::new("cmd-w", CloseThread, None),
@@ -176,6 +181,11 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-alt-up", PreviousThread, None),
             // In the terminal, ⌘W closes the terminal tab instead.
             KeyBinding::new("cmd-w", CloseTerminal, Some("Terminal")),
+            // ⌘W in the Files view, also from what's focused inside it (a binding without a
+            // context matches at the focused element, so each needs its own).
+            KeyBinding::new("cmd-w", CloseFile, Some("Files")),
+            KeyBinding::new("cmd-w", CloseFile, Some("FileTree")),
+            KeyBinding::new("cmd-w", CloseFile, Some("Files > Input")),
             KeyBinding::new("ctrl-tab", NextTerminal, Some("Terminal")),
             KeyBinding::new("ctrl-shift-tab", PreviousTerminal, Some("Terminal")),
             KeyBinding::new("cmd-c", TerminalCopy, Some("Terminal")),
@@ -372,6 +382,10 @@ pub struct SpaceApp {
     pub(crate) open_in_apps: Vec<crate::open_in::Installed>,
     pub(crate) open_in_icons: crate::open_in::Icons,
     pub(crate) open_in_menu: bool,
+    /// The Files view: each thread's tree (in memory), and its filter, list and watcher.
+    pub(crate) file_trees: HashMap<u64, crate::files::Tree>,
+    pub(crate) file_tabs: HashMap<u64, crate::files_view::FileTabs>,
+    pub(crate) files: crate::files_view::FilesView,
     /// A finished selection in the transcript that can be quoted: its thread and text.
     pub(crate) quote_offer: Option<(u64, String)>,
     pub(crate) transcript_area: crate::quote::Area,
@@ -603,6 +617,9 @@ impl SpaceApp {
             open_in_apps: Vec::new(),
             open_in_icons: Default::default(),
             open_in_menu: false,
+            file_trees: HashMap::new(),
+            file_tabs: HashMap::new(),
+            files: crate::files_view::FilesView::new(window, cx),
             quote_offer: None,
             transcript_area: Default::default(),
             next_image_id: 0,
@@ -662,6 +679,9 @@ impl SpaceApp {
         } else {
             let input = this.input.clone();
             input.update(cx, |s, cx| s.focus(window, cx));
+        }
+        if options.open_files {
+            this.show_pane_view(space_ui::components::right_pane::PaneView::Files, window, cx);
         }
         if options.open_terminal {
             this.show_pane_view(space_ui::components::right_pane::PaneView::Terminal, window, cx);

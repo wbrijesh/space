@@ -14,7 +14,7 @@ path = "src/main.rs"
 # Dev tooling: component gallery (⌥⌘G, --gallery), scenarios (--scenario), animation-clock
 # controls, input scripts. On by default; ship with `--no-default-features` (`just release`).
 default = ["dev"]
-dev = ["space-ui/dev", "dep:schemars", "dep:notify"]
+dev = ["space-ui/dev", "dep:schemars"]
 # Live Rust edits under `dx serve --hot-patch` (`just run`): turns on gpui-pre's `hot-reload`,
 # which gpui-kit doesn't forward. GPUI also requires a debug build, so it can't reach a release.
 hot = ["dep:gpui-hot-reload"]
@@ -25,8 +25,11 @@ space-ui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars = { workspace = true, optional = true }
-# `just run`: watch plugin sources to rebuild and restart them (src/reload.rs).
-notify = { version = "8", optional = true }
+# The Files view's watcher; and `just run`'s plugin rebuilds (src/reload.rs).
+notify = "8"
+# The Files view's listings and search (ripgrep's walker: ignore files apply).
+ignore = "0.4"
+similar = { version = "2.7", features = ["unicode"] }
 space-protocol.workspace = true
 space-terminal.workspace = true
 anyhow.workspace = true

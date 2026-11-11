@@ -151,6 +151,13 @@ fn dictionary(pairs: &[(&CFString, &CFType)]) -> CFRetained<CFDictionary<CFStrin
 }
 
 /// The first frame's pixel size, from its properties (no decoding).
+/// An image file's size in pixels (from its properties; nothing is decoded).
+pub fn file_size(path: &Path) -> Option<(u64, u64)> {
+    let data = fs::read(path).ok()?;
+    let source = unsafe { CGImageSource::with_data(&CFData::from_bytes(&data), None) }?;
+    source_size(&source)
+}
+
 fn source_size(source: &CGImageSource) -> Option<(u64, u64)> {
     let props = unsafe { source.properties_at_index(0, None) }?;
     let props = unsafe { props.cast_unchecked::<CFString, CFType>() };
