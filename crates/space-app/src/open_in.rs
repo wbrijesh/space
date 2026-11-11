@@ -40,6 +40,8 @@ const fn app(id: &'static str, name: &'static str, kind: Kind, line_scheme: Opti
 pub const KNOWN: &[Known] = &[
     app("com.microsoft.VSCode", "VS Code", Kind::Editor, Some("vscode")),
     app("com.microsoft.VSCodeInsiders", "VS Code Insiders", Kind::Editor, Some("vscode-insiders")),
+    app("com.vscodium", "VSCodium", Kind::Editor, Some("vscodium")),
+    app("com.vscodium.VSCodiumInsiders", "VSCodium Insiders", Kind::Editor, Some("vscodium-insiders")),
     app("com.todesktop.230313mzl4w4u92", "Cursor", Kind::Editor, Some("cursor")),
     app("com.exafunction.windsurf", "Windsurf", Kind::Editor, Some("windsurf")),
     app("dev.zed.Zed", "Zed", Kind::Editor, Some("zed")),
@@ -135,10 +137,15 @@ impl Icons {
 
 /// Open `path` in `app`: a file at `line` where the app has a URL for that, else the path.
 /// Blocks until `open` says whether it worked; the error is a short sentence.
+///
+/// A file can't open in Finder or a terminal: Finder reveals it, a terminal opens at its folder.
 pub fn open(path: &Path, line: Option<u32>, app: &Known) -> Result<(), String> {
     let mut cmd = std::process::Command::new("/usr/bin/open");
-    match (line, app.line_scheme) {
-        (Some(line), Some(scheme)) if path.is_file() => cmd.arg(format!("{scheme}://file{}:{line}", path.display())),
+    let file = path.is_file();
+    match (app.kind, line, app.line_scheme) {
+        (Kind::Finder, ..) if file => cmd.arg("-R").arg(path),
+        (Kind::Terminal, ..) if file => cmd.args(["-b", app.id]).arg(path.parent().unwrap_or(path)),
+        (_, Some(line), Some(scheme)) if file => cmd.arg(format!("{scheme}://file{}:{line}", path.display())),
         _ => cmd.args(["-b", app.id]).arg(path),
     };
     match cmd.output() {
