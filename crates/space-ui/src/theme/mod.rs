@@ -189,6 +189,8 @@ pub mod size {
     pub const CHIP_H: Pixels = px(24.);
     /// Square icon buttons.
     pub const ICON_BUTTON: Pixels = px(28.);
+    /// Context menus (right-click) are at least this wide, like macOS menus.
+    pub const CONTEXT_MENU_W: Pixels = px(220.);
     /// Transcript rows (thought, tool, working).
     pub const ROW_H: Pixels = px(30.);
     /// Sidebar thread rows.

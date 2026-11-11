@@ -1,13 +1,14 @@
 //! Sidebar thread row: one line with the thread title and an activity indicator; right-click
-//! for Close Thread.
+//! for Rename Thread… and Close Thread.
 
-use gpui::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use super::loaders::Dots;
+use super::menu::{ContextItem, context_menu};
 use super::widgets::status_dot;
 use crate::ClickHandler;
+use crate::actions::{CloseThread, RenameThread};
 use crate::theme::{color, radius, size, text};
 
 /// What the right edge of a row shows.
@@ -124,7 +125,8 @@ impl ThreadRow {
 }
 
 impl RenderOnce for ThreadRow {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let menu_key = self.id.to_string();
         let indicator: Option<AnyElement> = match self.indicator {
             RowIndicator::None => None,
             RowIndicator::Working => Some(Dots::new().into_any_element()),
@@ -173,18 +175,21 @@ impl RenderOnce for ThreadRow {
         if self.on_close.is_none() && self.on_rename.is_none() {
             return row.into_any_element();
         }
-        let (on_rename, on_close) = (self.on_rename, self.on_close);
-        row.context_menu(move |mut menu, _, _| {
-            if let Some(f) = on_rename.clone() {
-                menu = menu.item(PopupMenuItem::new("Rename Thread…").on_click(move |e, w, cx| f(e, w, cx)));
-            }
-            if let Some(f) = on_close.clone() {
-                menu = menu.item(PopupMenuItem::new("Close Thread").on_click(move |e, w, cx| f(e, w, cx)));
-            }
-            menu
-        })
-        .into_any_element()
+        context_menu(row, menu_key, row_menu(self.on_rename, self.on_close), window, cx).into_any_element()
     }
+}
+
+/// A row's right-click menu: Rename Thread… and Close Thread, with their shortcuts.
+fn row_menu(on_rename: Option<ClickHandler>, on_close: Option<ClickHandler>) -> Vec<ContextItem> {
+    let pick = |f: ClickHandler| move |w: &mut Window, cx: &mut App| f(&ClickEvent::default(), w, cx);
+    let mut items = Vec::new();
+    if let Some(f) = on_rename {
+        items.push(ContextItem::new("Rename Thread…", pick(f)).shortcut(&RenameThread));
+    }
+    if let Some(f) = on_close {
+        items.push(ContextItem::new("Close Thread", pick(f)).shortcut(&CloseThread));
+    }
+    items
 }
 
 /// A row's number while ⌘ is held: a small key cap in monospace. Rows the typed digits no longer lead to fade.
@@ -235,6 +240,17 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 row("⌘ held", |r| r.shortcut(Some(("3".into(), true)))),
                 row("⌘ held, selected and working", |r| r.selected(true).indicator(RowIndicator::Working).shortcut(Some(("12".into(), true)))),
                 row("⌘ held, not what's typed", |r| r.shortcut(Some(("4".into(), false)))),
+                Example::new("right-click menu", |window, cx| {
+                    let noop: ClickHandler = std::rc::Rc::new(|_, _, _| {});
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(ThreadRow::new("menu-row", "Fix the failing smoke test in space-core").force_hover(true))
+                        .child(div().pl_8().child(super::menu::context_menu_preview(&row_menu(Some(noop.clone()), Some(noop)), window, cx)))
+                        .into_any_element()
+                })
+                .width(size::SIDEBAR_W - px(20.)),
             ]),
     ]
 }

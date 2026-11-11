@@ -47,6 +47,9 @@ Conventions:
 * Hover labels are `.tip("…")` / `.tip_action("…", &Action)` (`tip.rs`), anchored under the element
   with its shortcut; not GPUI's tooltip.
 * Menus are built from `menu.rs` (trigger, card, rows), so they all look and behave alike.
+  Right-click menus too: `menu::context_menu(element, key, items, …)`, where each
+  `ContextItem::new(label, on_pick).shortcut(&Action)` shows that action's key binding on the
+  right, read from the keymap.
 * Text the user types outside the composer (a new name) is asked for in a native sheet
   (`space-app/src/text_prompt.rs`).
 

@@ -9,6 +9,7 @@
 //! wait 500            sleep 500 ms
 //! move 120 300        move the mouse to window coordinates (logical px)
 //! click 120 300       move + left mouse down + up
+//! rclick 120 300      the same with the right button (context menus)
 //! scroll 400 300 -120 trackpad scroll at (400, 300) moving the view 120 px (negative: up)
 //! key cmd-n           dispatch a keystroke
 //! type some text      type text into the focused element
@@ -58,9 +59,10 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
             eprintln!("script: {line}");
             match cmd {
                 "wait" => cx.background_executor().timer(Duration::from_millis(num(0) as u64)).await,
-                "move" | "click" => {
+                "move" | "click" | "rclick" => {
                     let position = point(px(num(0)), px(num(1)));
-                    let click = cmd == "click";
+                    let click = cmd != "move";
+                    let button = if cmd == "rclick" { MouseButton::Right } else { MouseButton::Left };
                     let _ = window.update(cx, |_, window, cx| {
                         window.dispatch_event(
                             PlatformInput::MouseMove(MouseMoveEvent {
@@ -73,7 +75,7 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                         if click {
                             window.dispatch_event(
                                 PlatformInput::MouseDown(MouseDownEvent {
-                                    button: MouseButton::Left,
+                                    button,
                                     position,
                                     modifiers: Modifiers::default(),
                                     click_count: 1,
@@ -83,7 +85,7 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                             );
                             window.dispatch_event(
                                 PlatformInput::MouseUp(MouseUpEvent {
-                                    button: MouseButton::Left,
+                                    button,
                                     position,
                                     modifiers: Modifiers::default(),
                                     click_count: 1,

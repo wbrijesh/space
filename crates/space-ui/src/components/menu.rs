@@ -2,7 +2,13 @@
 //! itself, with 32px rows, a heading, separators and a check on the right. The composer's
 //! folder, permission-mode and model menus are built from these, so they look and behave the
 //! same. The app keeps which menu is open; a click outside or Esc closes it.
+//!
+//! [`context_menu`] is the right-click menu, in the same card and rows, with each item's
+//! shortcut on the right as macOS menus show it.
 
+use std::rc::Rc;
+
+use gpui::component::kbd::Kbd;
 use gpui::component::{Icon, IconName};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -107,4 +113,116 @@ pub fn heading(label: impl Into<SharedString>) -> Div {
 
 pub fn separator() -> Div {
     div().my_1().mx_neg_1().h(px(1.)).bg(color::border())
+}
+
+/// One item of a [`context_menu`]: its label, what picking it does, and optionally the action
+/// whose key binding shows on the right. The action only names the shortcut (read from the
+/// key bindings, so it can't drift); picking the item runs `on_pick`.
+pub struct ContextItem {
+    label: SharedString,
+    action: Option<Box<dyn Action>>,
+    on_pick: PickHandler,
+}
+
+/// What picking a context menu item does.
+pub type PickHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
+impl ContextItem {
+    pub fn new(label: impl Into<SharedString>, on_pick: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        Self { label: label.into(), action: None, on_pick: Rc::new(on_pick) }
+    }
+
+    /// Show `action`'s key binding beside the label (nothing when it has none).
+    pub fn shortcut(mut self, action: &dyn Action) -> Self {
+        self.action = Some(action.boxed_clone());
+        self
+    }
+}
+
+/// Where an open context menu is, the focus it took (for Esc) and the focus it took it from.
+struct ContextMenuState {
+    at: Option<Point<Pixels>>,
+    focus: FocusHandle,
+    previous: Option<FocusHandle>,
+}
+
+/// Give `el` a right-click menu of `items`: Space's menu card at the pointer, at least
+/// [`size::CONTEXT_MENU_W`] wide, a row per item with its shortcut right-aligned. Picking an
+/// item, Esc or a click outside closes it. `key` names the menu's state (unique per element).
+pub fn context_menu(el: Stateful<Div>, key: impl Into<SharedString>, items: Vec<ContextItem>, window: &mut Window, cx: &mut App) -> Stateful<Div> {
+    let key: SharedString = format!("context-menu-{}", key.into()).into();
+    let state = window.use_keyed_state(key, cx, |_, cx| ContextMenuState { at: None, focus: cx.focus_handle(), previous: None });
+    let open_at = state.read(cx).at;
+    let opener = state.clone();
+    el.on_mouse_down(MouseButton::Right, move |e, window, cx| {
+        cx.stop_propagation();
+        let previous = window.focused(cx);
+        let focus = opener.update(cx, |s, cx| {
+            s.at = Some(e.position);
+            s.previous = previous;
+            cx.notify();
+            s.focus.clone()
+        });
+        window.focus(&focus, cx);
+    })
+    .when_some(open_at, |d, at| {
+        let card = context_menu_card(&items, Some(state), window, cx);
+        d.child(deferred(anchored().position(at).snap_to_window_with_margin(px(8.)).child(card)).with_priority(1))
+    })
+}
+
+/// Close the menu and give focus back to where it was.
+fn close_context_menu(state: &Entity<ContextMenuState>, window: &mut Window, cx: &mut App) {
+    let previous = state.update(cx, |s, cx| {
+        s.at = None;
+        cx.notify();
+        s.previous.take()
+    });
+    if let Some(previous) = previous {
+        window.focus(&previous, cx);
+    }
+}
+
+/// The open menu's card. `state`: the menu it belongs to (`None` in previews: nothing closes).
+fn context_menu_card(items: &[ContextItem], state: Option<Entity<ContextMenuState>>, window: &mut Window, cx: &mut App) -> Div {
+    let rows = items.iter().enumerate().map(|(ix, item)| {
+        let keys = item
+            .action
+            .as_ref()
+            .and_then(|a| window.highest_precedence_binding_for_action(a.as_ref()))
+            .and_then(|b| b.keystrokes().first().map(|k| Kbd::format(k.as_keystroke())));
+        let (pick, state) = (item.on_pick.clone(), state.clone());
+        row(("context-item", ix))
+            .child(div().flex_1().min_w_0().truncate().child(item.label.clone()))
+            .children(keys.map(|k| div().flex_none().text_size(text::SM).text_color(color::text_3()).child(k)))
+            .on_click(move |_, window, cx| {
+                if let Some(state) = &state {
+                    close_context_menu(state, window, cx);
+                }
+                pick(window, cx);
+            })
+    });
+    let card = surface().min_w(size::CONTEXT_MENU_W).children(rows);
+    match state {
+        Some(state) => {
+            let focus = state.read(cx).focus.clone();
+            let (esc, out) = (state.clone(), state);
+            card.key_context("ContextMenu")
+                .track_focus(&focus)
+                .on_key_down(move |e, window, cx| {
+                    if e.keystroke.key == "escape" {
+                        cx.stop_propagation();
+                        close_context_menu(&esc, window, cx);
+                    }
+                })
+                .on_mouse_down_out(move |_, window, cx| close_context_menu(&out, window, cx))
+        }
+        None => card,
+    }
+}
+
+/// A context menu drawn open, for previews.
+#[cfg(feature = "dev")]
+pub fn context_menu_preview(items: &[ContextItem], window: &mut Window, cx: &mut App) -> Div {
+    context_menu_card(items, None, window, cx)
 }
