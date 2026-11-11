@@ -59,9 +59,11 @@ pub fn popover(right: bool, menu: Div, close: impl Fn(&mut Window, &mut App) + '
     ))
 }
 
-/// The menu's card.
+/// The menu's card. It occludes what's under it, so hovering or clicking it never reaches
+/// the rows or buttons behind (a menu floats over them).
 pub fn surface() -> Div {
     div()
+        .occlude()
         .min_w(px(240.))
         .max_w(px(360.))
         .p_1()
