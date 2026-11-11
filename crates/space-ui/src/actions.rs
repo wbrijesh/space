@@ -6,6 +6,7 @@ gpui::actions!(
         NewThread,
         CloseThread,
         RenameThread,
+        TogglePinThread,
         NextThread,
         PreviousThread,
         ToggleSidebar,

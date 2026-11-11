@@ -126,8 +126,16 @@ async fn a_saved_thread_comes_back_after_a_restart_and_continues() {
     drain(&mut events).await.iter().for_each(|e| state.apply(e));
     assert_eq!(last_agent_text(&state), Some("I remember 1 earlier prompt(s)."));
 
+    // A pin is saved with the summary and read back, from the list and from the thread.
+    let mut pinned = host.load_thread("t1").await.unwrap().0;
+    pinned.pinned_ms = Some(pinned.updated_ms + 5);
+    pinned.updated_ms += 5;
+    host.save_thread("t1", Some(pinned.clone()), count, &[]).await.unwrap();
+    assert_eq!(host.list_threads().await.unwrap()[0].pinned_ms, pinned.pinned_ms);
+    assert_eq!(host.load_thread("t1").await.unwrap().0.pinned_ms, pinned.pinned_ms);
+
     // Closing keeps it, marked closed (an older summary sent late doesn't reopen it), and
-    // resuming clears the mark.
+    // resuming clears the mark; the pin stays through both.
     let mut closed = host.load_thread("t1").await.unwrap().0;
     let stale = closed.clone();
     closed.closed_ms = Some(closed.updated_ms + 10);
@@ -138,6 +146,7 @@ async fn a_saved_thread_comes_back_after_a_restart_and_continues() {
     let reopened = ThreadMeta { closed_ms: None, updated_ms: closed.updated_ms + 10, ..closed };
     host.save_thread("t1", Some(reopened), count, &[]).await.unwrap();
     assert_eq!(host.list_threads().await.unwrap()[0].closed_ms, None);
+    assert_eq!(host.list_threads().await.unwrap()[0].pinned_ms, pinned.pinned_ms);
 
     // Deleting removes the folder, the agent's files with it.
     host.delete_thread("t1").await.unwrap();

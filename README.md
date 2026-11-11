@@ -20,7 +20,7 @@ cask clears macOS's download mark so it opens normally.
 
 | | |
 |---|---|
-| **Threads** | ⌘N new · ⌘W close · ⌘R rename · ⌘[ / ⌘] back / forward · ⌘⌥↑ / ⌘⌥↓ previous / next · hold ⌘ and type a row's number to jump · ⌘B sidebar |
+| **Threads** | ⌘N new · ⌘W close · ⌘R rename · right-click a row to pin it · ⌘[ / ⌘] back / forward · ⌘⌥↑ / ⌘⌥↓ previous / next · hold ⌘ and type a row's number to jump · ⌘B sidebar |
 | **Composer** | ⏎ send · ⇧⏎ newline · ↑ / ↓ your earlier messages · ⌘L focus · ⇧⌘R next permission mode · Esc stops the agent |
 | **While the agent works** | ⏎ queues a message for when it's done · ⌘⏎ sends it into the running turn, after the current step |
 | **Transcript** | ⌘F find · ⌘G / ⇧⌘G next / previous · ⌘↓ scroll to the bottom · ⇧⌘T Trajectory |
@@ -33,6 +33,8 @@ cask clears macOS's download mark so it opens normally.
 - **Closing** a thread keeps it: a new, empty thread in the same folder offers it under **Resume**.
   Closed threads are deleted after 30 days (Settings ▸ Threads).
 - **Titles** come from the agent's model after your first message. A name you give (⌘R) stays.
+- **Pinned** threads stay at the top of the sidebar, in their usual order, and keep their pin while
+  closed.
 - **Folders.** Each thread works in one folder, picked under the composer before its first message.
   Opened from Spotlight or the Dock, Space starts where you worked last.
 - **Terminals** belong to a thread and start in its folder; they keep running while hidden.

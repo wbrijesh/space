@@ -66,6 +66,7 @@ impl SpaceApp {
             titled: thread.name.is_some(),
             renamed: thread.renamed,
             closed_ms: None,
+            pinned_ms: thread.pinned_ms,
         }
     }
 
@@ -371,6 +372,7 @@ impl SpaceApp {
         thread.resume = meta.agent.clone().zip(meta.session_id.clone());
         thread.name = (meta.titled || meta.renamed).then(|| meta.title.clone());
         thread.renamed = meta.renamed;
+        thread.pinned_ms = meta.pinned_ms;
         thread.unloaded = true;
         thread.meta = Some(meta);
         thread
@@ -429,10 +431,18 @@ mod tests {
         let json = serde_json::to_value(&meta).unwrap();
         assert_eq!(json["renamed"], true);
         assert_eq!(serde_json::from_value::<ThreadMeta>(json).unwrap(), meta);
+        // Pinned: written, and read back.
+        let pinned = ThreadMeta { pinned_ms: Some(42), ..Default::default() };
+        let json = serde_json::to_value(&pinned).unwrap();
+        assert_eq!(json["pinnedMs"], 42);
+        assert_eq!(serde_json::from_value::<ThreadMeta>(json).unwrap().pinned_ms, Some(42));
         // Saved before renaming existed (or never renamed): not renamed, and not written.
         let json = serde_json::to_value(ThreadMeta::default()).unwrap();
         assert!(json.get("renamed").is_none());
-        assert!(!serde_json::from_value::<ThreadMeta>(serde_json::json!({"id": "a", "title": "t", "project": "/p", "createdMs": 1, "updatedMs": 2})).unwrap().renamed);
+        let old = serde_json::from_value::<ThreadMeta>(serde_json::json!({"id": "a", "title": "t", "project": "/p", "createdMs": 1, "updatedMs": 2})).unwrap();
+        assert!(!old.renamed);
+        assert_eq!(old.pinned_ms, None);
+        assert!(serde_json::to_value(&old).unwrap().get("pinnedMs").is_none());
     }
 
     #[test]

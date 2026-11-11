@@ -210,7 +210,8 @@ thread that fails to open is read again when next opened, and nothing is sent in
 saved threads; opening one reads its events and replays them through `SessionState::apply` (a turn cut
 short ends as cancelled, so no card waits). Writing in it loads its session again (`session/load`) when
 the agent can; otherwise the composer offers "Continue in new session". Closing a thread (⌘W) stops
-its turn and terminals and saves it with `closedMs`; it's listed under Resume, and deleted
+its turn and terminals and saves it with `closedMs`; it's listed under Resume (a pin,
+`pinnedMs`, stays through closing and resuming), and deleted
 (`store/delete`, observers get `thread/deleted`) once older than Settings ▸ Threads allows. A new thread
 isn't saved or listed until its first message. Without a store, threads live in memory. A reloaded session's guards start with what
 the thread shows (`Session::seed_history`: its messages, and its tool calls by title), so their first

@@ -53,6 +53,8 @@ pub struct ScenarioThread {
     /// Repo-relative images sent with `prompt`, and in the draft.
     pub images: &'static [&'static str],
     pub draft_images: &'static [&'static str],
+    /// Pinned to the top of the sidebar.
+    pub pinned: bool,
 }
 
 const ICON: &str = "crates/space-app/resources/AppIcon.png";
@@ -244,6 +246,19 @@ pub fn all() -> Vec<Scenario> {
                 explain_thread(),
             ],
             select: Some(8),
+            ..Default::default()
+        },
+        Scenario {
+            name: "pinned-threads",
+            description: "Six threads, two of them pinned: the pinned ones lead the sidebar (⌘-numbers follow it).",
+            threads: vec![
+                ScenarioThread { pinned: true, ..done_thread("Release checklist", "Tag, upload, update the cask.") },
+                done_thread("Bump the gpui-kit version", "Bumped `gpui-kit` to 0.9.0; all tests pass."),
+                ScenarioThread { pinned: true, ..done_thread("Guardrail notes", "Fail closed: a held call never runs unchecked.") },
+                done_thread("Fix the flaky stub test", "The test raced the stub's exit; it now waits for the status."),
+                error_thread(),
+                explain_thread(),
+            ],
             ..Default::default()
         },
         Scenario {
@@ -531,6 +546,7 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
             scrolled_up: t.scrolled_up,
             images: t.images.iter().map(|p| repo.join(p)).collect(),
             draft_images: t.draft_images.iter().map(|p| repo.join(p)).collect(),
+            pinned: t.pinned,
         })
         .collect();
     let options = Options {

@@ -28,10 +28,6 @@ impl SpaceApp {
         }
     }
 
-    /// The listed threads, in sidebar order (a new thread with nothing sent isn't listed).
-    pub(crate) fn listed_threads(&self) -> Vec<u64> {
-        self.threads.iter().rev().filter(|t| !t.is_empty()).map(|t| t.key).collect()
-    }
 
     /// The listed rows in view (as last laid out); all of them before the first layout. A row
     /// counts when its middle is in view.

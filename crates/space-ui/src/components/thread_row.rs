@@ -8,7 +8,7 @@ use super::loaders::Dots;
 use super::menu::{ContextItem, context_menu};
 use super::widgets::status_dot;
 use crate::ClickHandler;
-use crate::actions::{CloseThread, RenameThread};
+use crate::actions::{CloseThread, RenameThread, TogglePinThread};
 use crate::theme::{color, radius, size, text};
 
 /// What the right edge of a row shows.
@@ -60,6 +60,8 @@ pub struct ThreadRow {
     on_click: Option<ClickHandler>,
     on_close: Option<ClickHandler>,
     on_rename: Option<ClickHandler>,
+    /// Pin or unpin it: whether it's pinned, whether it can be (it's saved), and the handler.
+    on_pin: Option<(bool, bool, ClickHandler)>,
     /// While ⌘ is held: its number, and whether it still matches the digits typed so far.
     shortcut: Option<(SharedString, bool)>,
 }
@@ -76,6 +78,7 @@ impl ThreadRow {
             on_click: None,
             on_close: None,
             on_rename: None,
+            on_pin: None,
             shortcut: None,
         }
     }
@@ -114,6 +117,13 @@ impl ThreadRow {
     /// The row's context menu offers Rename Thread….
     pub fn on_rename(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
         self.on_rename = Some(std::rc::Rc::new(f));
+        self
+    }
+
+    /// The row's context menu offers Pin Thread (Unpin Thread when `pinned`), dimmed and inert
+    /// unless `enabled` (a thread with nothing sent isn't saved, so it can't be pinned).
+    pub fn on_pin(mut self, pinned: bool, enabled: bool, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
+        self.on_pin = Some((pinned, enabled, std::rc::Rc::new(f)));
         self
     }
 
@@ -172,17 +182,23 @@ impl RenderOnce for ThreadRow {
             .children(indicator)
             .children(self.shortcut.map(|(n, matches)| shortcut_badge(n, matches)))
             .when_some(self.on_click, |d, f| d.on_click(move |e, w, cx| f(e, w, cx)));
-        if self.on_close.is_none() && self.on_rename.is_none() {
+        let items = row_menu(self.on_pin, self.on_rename, self.on_close);
+        if items.is_empty() {
             return row.into_any_element();
         }
-        context_menu(row, menu_key, row_menu(self.on_rename, self.on_close), window, cx).into_any_element()
+        context_menu(row, menu_key, items, window, cx).into_any_element()
     }
 }
 
-/// A row's right-click menu: Rename Thread… and Close Thread, with their shortcuts.
-fn row_menu(on_rename: Option<ClickHandler>, on_close: Option<ClickHandler>) -> Vec<ContextItem> {
+/// A row's right-click menu: Pin (or Unpin) Thread, Rename Thread… and Close Thread, with the
+/// shortcuts of their actions.
+fn row_menu(on_pin: Option<(bool, bool, ClickHandler)>, on_rename: Option<ClickHandler>, on_close: Option<ClickHandler>) -> Vec<ContextItem> {
     let pick = |f: ClickHandler| move |w: &mut Window, cx: &mut App| f(&ClickEvent::default(), w, cx);
     let mut items = Vec::new();
+    if let Some((pinned, enabled, f)) = on_pin {
+        let label = if pinned { "Unpin Thread" } else { "Pin Thread" };
+        items.push(ContextItem::new(label, pick(f)).shortcut(&TogglePinThread).disabled(!enabled));
+    }
     if let Some(f) = on_rename {
         items.push(ContextItem::new("Rename Thread…", pick(f)).shortcut(&RenameThread));
     }
@@ -247,7 +263,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                         .flex_col()
                         .gap_1()
                         .child(ThreadRow::new("menu-row", "Fix the failing smoke test in space-core").force_hover(true))
-                        .child(div().pl_8().child(super::menu::context_menu_preview(&row_menu(Some(noop.clone()), Some(noop)), Some(0), window, cx)))
+                        .child(div().pl_8().child(super::menu::context_menu_preview(&row_menu(Some((false, true, noop.clone())), Some(noop.clone()), Some(noop)), Some(1), window, cx)))
                         .into_any_element()
                 })
                 .width(size::SIDEBAR_W - px(20.)),

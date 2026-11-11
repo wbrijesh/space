@@ -124,6 +124,8 @@ pub struct ContextItem {
     label: SharedString,
     action: Option<Box<dyn Action>>,
     on_pick: PickHandler,
+    /// Shown dimmed, and picking it does nothing.
+    disabled: bool,
 }
 
 /// What picking a context menu item does.
@@ -131,7 +133,13 @@ pub type PickHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
 impl ContextItem {
     pub fn new(label: impl Into<SharedString>, on_pick: impl Fn(&mut Window, &mut App) + 'static) -> Self {
-        Self { label: label.into(), action: None, on_pick: Rc::new(on_pick) }
+        Self { label: label.into(), action: None, on_pick: Rc::new(on_pick), disabled: false }
+    }
+
+    /// Dim the item and make it inert (it can't apply here).
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
     }
 
     /// Show `action`'s key binding beside the label (nothing when it has none).
@@ -212,18 +220,24 @@ fn context_menu_card(
             .items_center()
             .gap_4()
             .rounded(radius::SM)
-            .cursor_pointer()
-            .hover(|s| s.bg(color::menu_highlight()))
-            .when(highlight == Some(ix), |d| d.bg(color::menu_highlight()))
             // Keep the click from reaching what's under the menu.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(div().flex_1().min_w_0().truncate().child(item.label.clone()))
             .children(keys.map(|k| div().flex_none().text_color(color::text_3()).child(k)))
-            .on_click(move |_, window, cx| {
-                if let Some(state) = &state {
-                    close_context_menu(state, window, cx);
+            .map(|d| {
+                if item.disabled {
+                    d.text_color(color::text_3()).cursor_default()
+                } else {
+                    d.cursor_pointer()
+                        .hover(|s| s.bg(color::menu_highlight()))
+                        .when(highlight == Some(ix), |d| d.bg(color::menu_highlight()))
+                        .on_click(move |_, window, cx| {
+                            if let Some(state) = &state {
+                                close_context_menu(state, window, cx);
+                            }
+                            pick(window, cx);
+                        })
                 }
-                pick(window, cx);
             })
             .into_any_element()
     });

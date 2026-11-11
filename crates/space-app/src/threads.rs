@@ -42,6 +42,8 @@ pub struct Thread {
     pub name: Option<String>,
     /// You renamed it (⌘R): `name` is yours, and a generated title doesn't replace it.
     pub renamed: bool,
+    /// When you pinned it (Unix ms): listed at the top of the sidebar.
+    pub pinned_ms: Option<u64>,
     /// The agent session to load to continue a saved conversation: (agent plugin, session id).
     pub resume: Option<(String, String)>,
     pub cwd: PathBuf,
@@ -108,6 +110,7 @@ impl Thread {
             loading: false,
             name: None,
             renamed: false,
+            pinned_ms: None,
             resume: None,
             branch: format::git_branch(&cwd),
             cwd,
@@ -428,6 +431,8 @@ impl SpaceApp {
                 t.images = drafts.into_iter().zip(first_id..).map(|(p, id)| DraftImage::ready(id, p)).collect();
                 t.draft = s.draft.unwrap_or_default();
                 t.mode = s.mode;
+                // Pinned in seed order, so the pinned section keeps the seed's order.
+                t.pinned_ms = s.pinned.then_some(key);
             }
             keys.push(key);
             scrolled_up.push(s.scrolled_up);

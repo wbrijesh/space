@@ -33,7 +33,7 @@ pub use space_ui::actions::{
     ToggleSidebar,
     ToggleTrajectory,
     CloseTerminal, MaximizeTerminal, NewTerminal, NextTerminal, PreviousTerminal, TerminalClear, TerminalCopy, TerminalPaste,
-    ToggleTerminal, OpenFind, FindNext, FindPrevious, CloseFind, RenameThread,
+    ToggleTerminal, OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
 };
 use space_ui::assets::SpaceAssets;
 use space_ui::components::composer;
@@ -89,6 +89,8 @@ pub struct SeedThread {
     /// Dev scenarios: images sent with `prompt`, and images in the draft.
     pub images: Vec<PathBuf>,
     pub draft_images: Vec<PathBuf>,
+    /// Dev scenarios: pinned (listed at the top of the sidebar).
+    pub pinned: bool,
 }
 
 /// What the process opens.

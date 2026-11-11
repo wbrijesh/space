@@ -566,6 +566,10 @@ pub struct ThreadMeta {
     /// until Space deletes it. `None`: open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closed_ms: Option<u64>,
+    /// When you pinned the thread (Unix milliseconds): it's listed at the top of the sidebar.
+    /// Kept while it's closed. `None`: not pinned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_ms: Option<u64>,
 }
 
 /// `title/generate` params: the thread's first message.
