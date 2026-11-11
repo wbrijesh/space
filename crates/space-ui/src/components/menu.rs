@@ -124,6 +124,8 @@ pub struct ContextItem {
     label: SharedString,
     action: Option<Box<dyn Action>>,
     on_pick: PickHandler,
+    /// A line between groups of items, not an item.
+    separator: bool,
 }
 
 /// What picking a context menu item does.
@@ -131,7 +133,12 @@ pub type PickHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
 impl ContextItem {
     pub fn new(label: impl Into<SharedString>, on_pick: impl Fn(&mut Window, &mut App) + 'static) -> Self {
-        Self { label: label.into(), action: None, on_pick: Rc::new(on_pick) }
+        Self { label: label.into(), action: None, on_pick: Rc::new(on_pick), separator: false }
+    }
+
+    /// A line between groups (an action that ends or removes something sits apart from the rest).
+    pub fn separator() -> Self {
+        Self { label: SharedString::default(), action: None, on_pick: Rc::new(|_, _| {}), separator: true }
     }
 
     /// Show `action`'s key binding beside the label (nothing when it has none).
@@ -149,7 +156,8 @@ struct ContextMenuState {
 }
 
 /// Give `el` a right-click menu of `items`: Space's menu card at the pointer, at least
-/// [`size::CONTEXT_MENU_W`] wide, a row per item with its shortcut right-aligned. Picking an
+/// [`size::CONTEXT_MENU_W`] wide, compact rows with the shortcut right-aligned and dimmed, a
+/// clearly lighter highlight under the pointer. Picking an
 /// item, Esc or a click outside closes it. `key` names the menu's state (unique per element).
 pub fn context_menu(el: Stateful<Div>, key: impl Into<SharedString>, items: Vec<ContextItem>, window: &mut Window, cx: &mut App) -> Stateful<Div> {
     let key: SharedString = format!("context-menu-{}", key.into()).into();
@@ -168,7 +176,7 @@ pub fn context_menu(el: Stateful<Div>, key: impl Into<SharedString>, items: Vec<
         window.focus(&focus, cx);
     })
     .when_some(open_at, |d, at| {
-        let card = context_menu_card(&items, Some(state), window, cx);
+        let card = context_menu_card(&items, Some(state), None, window, cx);
         d.child(deferred(anchored().position(at).snap_to_window_with_margin(px(8.)).child(card)).with_priority(1))
     })
 }
@@ -185,26 +193,51 @@ fn close_context_menu(state: &Entity<ContextMenuState>, window: &mut Window, cx:
     }
 }
 
-/// The open menu's card. `state`: the menu it belongs to (`None` in previews: nothing closes).
-fn context_menu_card(items: &[ContextItem], state: Option<Entity<ContextMenuState>>, window: &mut Window, cx: &mut App) -> Div {
+/// The open menu's card. `state`: the menu it belongs to (`None` in previews: nothing closes);
+/// `highlight`: an item drawn as if the pointer were on it (previews).
+fn context_menu_card(
+    items: &[ContextItem],
+    state: Option<Entity<ContextMenuState>>,
+    highlight: Option<usize>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Div {
     let rows = items.iter().enumerate().map(|(ix, item)| {
+        if item.separator {
+            return div().my_1().mx_2().h(px(1.)).bg(color::border_strong()).into_any_element();
+        }
+        // macOS spaces a shortcut's glyphs apart (⌘ R), which reads easier at a small size.
         let keys = item
             .action
             .as_ref()
             .and_then(|a| window.highest_precedence_binding_for_action(a.as_ref()))
-            .and_then(|b| b.keystrokes().first().map(|k| Kbd::format(k.as_keystroke())));
+            .and_then(|b| b.keystrokes().first().map(|k| Kbd::format(k.as_keystroke())))
+            .map(|k| k.chars().map(String::from).collect::<Vec<_>>().join("\u{200A}"));
         let (pick, state) = (item.on_pick.clone(), state.clone());
-        row(("context-item", ix))
+        div()
+            .id(("context-item", ix))
+            .h(size::CONTEXT_ROW_H)
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap_4()
+            .rounded(radius::SM)
+            .cursor_pointer()
+            .hover(|s| s.bg(color::menu_highlight()))
+            .when(highlight == Some(ix), |d| d.bg(color::menu_highlight()))
+            // Keep the click from reaching what's under the menu.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(div().flex_1().min_w_0().truncate().child(item.label.clone()))
-            .children(keys.map(|k| div().flex_none().text_size(text::SM).text_color(color::text_3()).child(k)))
+            .children(keys.map(|k| div().flex_none().text_color(color::text_3()).child(k)))
             .on_click(move |_, window, cx| {
                 if let Some(state) = &state {
                     close_context_menu(state, window, cx);
                 }
                 pick(window, cx);
             })
+            .into_any_element()
     });
-    let card = surface().min_w(size::CONTEXT_MENU_W).children(rows);
+    let card = surface().min_w(size::CONTEXT_MENU_W).p(px(5.)).text_size(text::SM).children(rows);
     match state {
         Some(state) => {
             let focus = state.read(cx).focus.clone();
@@ -223,8 +256,8 @@ fn context_menu_card(items: &[ContextItem], state: Option<Entity<ContextMenuStat
     }
 }
 
-/// A context menu drawn open, for previews.
+/// A context menu drawn open, for previews, with item `highlight` under the pointer.
 #[cfg(feature = "dev")]
-pub fn context_menu_preview(items: &[ContextItem], window: &mut Window, cx: &mut App) -> Div {
-    context_menu_card(items, None, window, cx)
+pub fn context_menu_preview(items: &[ContextItem], highlight: Option<usize>, window: &mut Window, cx: &mut App) -> Div {
+    context_menu_card(items, None, highlight, window, cx)
 }

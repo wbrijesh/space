@@ -45,6 +45,8 @@ pub mod color {
         hover = 0x262626ff;
         /// Pressed / selected fill.
         pressed = 0x2e2e2eff;
+        /// The item under the pointer in a context menu: clearly lighter than the menu's card.
+        menu_highlight = 0x3a3a3aff;
         /// Code blocks in replies: a little darker than the thread, so they stand apart from
         /// your messages' bubbles; with a lighter border (and the rule under their top bar).
         code_bg = 0x0f0f0fff;
@@ -191,6 +193,8 @@ pub mod size {
     pub const ICON_BUTTON: Pixels = px(28.);
     /// Context menus (right-click) are at least this wide, like macOS menus.
     pub const CONTEXT_MENU_W: Pixels = px(220.);
+    /// A context menu's rows: compact, like macOS menus.
+    pub const CONTEXT_ROW_H: Pixels = px(26.);
     /// Transcript rows (thought, tool, working).
     pub const ROW_H: Pixels = px(30.);
     /// Sidebar thread rows.

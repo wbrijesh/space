@@ -187,6 +187,9 @@ fn row_menu(on_rename: Option<ClickHandler>, on_close: Option<ClickHandler>) -> 
         items.push(ContextItem::new("Rename Thread…", pick(f)).shortcut(&RenameThread));
     }
     if let Some(f) = on_close {
+        if !items.is_empty() {
+            items.push(ContextItem::separator());
+        }
         items.push(ContextItem::new("Close Thread", pick(f)).shortcut(&CloseThread));
     }
     items
@@ -247,7 +250,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                         .flex_col()
                         .gap_1()
                         .child(ThreadRow::new("menu-row", "Fix the failing smoke test in space-core").force_hover(true))
-                        .child(div().pl_8().child(super::menu::context_menu_preview(&row_menu(Some(noop.clone()), Some(noop)), window, cx)))
+                        .child(div().pl_8().child(super::menu::context_menu_preview(&row_menu(Some(noop.clone()), Some(noop)), Some(0), window, cx)))
                         .into_any_element()
                 })
                 .width(size::SIDEBAR_W - px(20.)),
