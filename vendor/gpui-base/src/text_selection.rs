@@ -1859,16 +1859,24 @@ impl WindowSelectionState {
 
     /// Where the selection ends on screen: the caret box at the end of the
     /// last participant (in document order) with painted selected text, if
-    /// that caret is in its view. `None` while dragging.
-    fn end_caret(&self) -> Option<Bounds<Pixels>> {
-        let snapshot = self.snapshot()?;
-        if snapshot.is_selecting() {
-            return None;
-        }
+    /// that caret is in its view. A window selection counts once it's
+    /// finished; without one, a participant's own selection (a reply's
+    /// double or triple click) counts. `None` while dragging.
+    fn end_caret(&self, cx: &App) -> Option<Bounds<Pixels>> {
+        let window_selection = match self.snapshot() {
+            Some(snapshot) if snapshot.is_selecting() => return None,
+            Some(_) => true,
+            None => false,
+        };
         let participants = self.participants.borrow();
         let last = participants
             .values()
-            .filter(|p| p.registration.scope == self.active_scope && p.participant.upgrade().is_some())
+            .filter(|p| p.registration.scope == self.active_scope)
+            .filter(|p| {
+                p.participant.upgrade().is_some_and(|participant| {
+                    window_selection || participant.read(cx).local_selection
+                })
+            })
             .filter_map(|p| {
                 let (start, end) = p.registration.selection_edges?;
                 (start != end).then_some((p.document_order, end, p.registration.hitbox.bounds))
@@ -2901,7 +2909,7 @@ impl TextSelection {
     /// caret box after its last character (Space patch). `None` without a
     /// selection, while dragging, or when that end isn't in view.
     pub fn end_caret(window: &Window, cx: &mut App) -> Option<Bounds<Pixels>> {
-        live_text_selection_state(window, cx).and_then(|state| state.read(cx).end_caret())
+        live_text_selection_state(window, cx).and_then(|state| state.read(cx).end_caret(cx))
     }
 
     /// Clears window selection and every participant's local selection.

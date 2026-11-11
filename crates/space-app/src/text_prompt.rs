@@ -101,7 +101,7 @@ pub(crate) fn ask(window: &Window, prompt: TextPrompt<'_>) -> oneshot::Receiver<
 }
 
 /// The window's `NSWindow`, through its content view.
-fn ns_window(window: &Window) -> Option<Retained<NSWindow>> {
+pub(crate) fn ns_window(window: &Window) -> Option<Retained<NSWindow>> {
     let handle = raw_window_handle::HasWindowHandle::window_handle(window).ok()?;
     let RawWindowHandle::AppKit(h) = handle.as_raw() else { return None };
     // SAFETY: GPUI's AppKit window hands out its live content view; it outlives this call.

@@ -8,10 +8,10 @@
 //! ```text
 //! wait 500            sleep 500 ms
 //! move 120 300        move the mouse to window coordinates (logical px)
-//! click 120 300       move + left mouse down + up
+//! click 120 300 [2]   move + left mouse down + up (2: a double click, 3: a triple click)
 //! rclick 120 300      the same with the right button (context menus)
 //! drag 100 300 400 300  press at the first point, move to the second (frame by frame), release
-//! quote               print the composer's quote, what the Quote button would quote, and the selection
+//! selection           print the window's selected text and where it ends, and the quote state
 //! scroll 400 300 -120 trackpad scroll at (400, 300) moving the view 120 px (negative: up)
 //! key cmd-n           dispatch a keystroke
 //! type some text      type text into the focused element
@@ -24,7 +24,7 @@
 //! title               print the selected thread's title
 //! editmenu            print the Edit menu's items: AppKit action and key equivalent
 //! terminals           print the selected thread's terminal pane: open, its tabs, how far it's shown
-//! shot name           run `$SPACE_SHOT_CMD name` (e.g. a script calling `screencapture -l`)
+//! shot name           capture this window to `$SPACE_SHOT_DIR/name.png` (or run `$SPACE_SHOT_CMD name`)
 //! shotnow name        same as `shot` without the 250 ms settle delay (animation frames)
 //! quit                quit the app
 //! ```
@@ -74,24 +74,20 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                             }),
                             cx,
                         );
-                        if click {
+                        let clicks = if click { (args.get(2).and_then(|n| n.parse::<usize>().ok())).unwrap_or(1) } else { 0 };
+                        for click_count in 1..=clicks {
                             window.dispatch_event(
                                 PlatformInput::MouseDown(MouseDownEvent {
                                     button,
                                     position,
                                     modifiers: Modifiers::default(),
-                                    click_count: 1,
+                                    click_count,
                                     first_mouse: false,
                                 }),
                                 cx,
                             );
                             window.dispatch_event(
-                                PlatformInput::MouseUp(MouseUpEvent {
-                                    button,
-                                    position,
-                                    modifiers: Modifiers::default(),
-                                    click_count: 1,
-                                }),
+                                PlatformInput::MouseUp(MouseUpEvent { button, position, modifiers: Modifiers::default(), click_count }),
                                 cx,
                             );
                         }
@@ -123,13 +119,7 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                         cx.background_executor().timer(Duration::from_millis(20)).await;
                     }
                 }
-                "selectable" => {
-                    let at = point(px(num(0)), px(num(1)));
-                    let _ = window.update(cx, |_, window, cx| {
-                        eprintln!("script: selectable {:?} = {}", at, gpui::base::TextSelection::is_selectable_at(at, window, cx));
-                    });
-                }
-                "quote" => {
+                "selection" => {
                     let _ = window.update(cx, |root, _, cx| {
                         let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
                         if let Some(app) = app {
@@ -198,8 +188,19 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                     if cmd == "shot" {
                         cx.background_executor().timer(Duration::from_millis(250)).await;
                     }
-                    if let Some(shot) = std::env::var_os("SPACE_SHOT_CMD") {
-                        let name = args.first().copied().unwrap_or("shot").to_string();
+                    let name = args.first().copied().unwrap_or("shot").to_string();
+                    if let Some(dir) = std::env::var_os("SPACE_SHOT_DIR") {
+                        // The window itself, by its window number (no shadow), even when it's behind others.
+                        let number = window.update(cx, |_, window, _| crate::text_prompt::ns_window(window).map(|w| w.windowNumber())).ok().flatten();
+                        let path = std::path::Path::new(&dir).join(format!("{name}.png"));
+                        match number {
+                            Some(n) => {
+                                let ok = std::process::Command::new("screencapture").args(["-x", "-o", "-l", &n.to_string()]).arg(&path).status();
+                                eprintln!("script: shot {} ({})", path.display(), if ok.is_ok_and(|s| s.success()) { "ok" } else { "failed" });
+                            }
+                            None => eprintln!("script: shot: no native window"),
+                        }
+                    } else if let Some(shot) = std::env::var_os("SPACE_SHOT_CMD") {
                         let _ = std::process::Command::new(shot).arg(name).status();
                     }
                 }

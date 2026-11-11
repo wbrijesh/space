@@ -53,6 +53,7 @@ pub fn composer_quote(quote: &str, on_remove: Handler) -> Div {
         .items_start()
         .gap_2()
         .px_1()
+        .py_1()
         .child(bar())
         .child(
             div()
@@ -69,7 +70,7 @@ pub fn composer_quote(quote: &str, on_remove: Handler) -> Div {
             div()
                 .id("remove-quote")
                 .flex_none()
-                .size(px(18.))
+                .size(px(22.))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -77,7 +78,7 @@ pub fn composer_quote(quote: &str, on_remove: Handler) -> Div {
                 .text_color(color::text_3())
                 .cursor_pointer()
                 .hover(|s| s.bg(color::hover()).text_color(color::text()))
-                .child(Icon::new(IconName::Close).size(size::ICON_XS))
+                .child(Icon::new(IconName::Close).size(size::ICON_MD))
                 .on_click(move |_, w, cx| on_remove(w, cx)),
         )
 }

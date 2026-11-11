@@ -62,6 +62,12 @@ test: build-ts
     cargo test --workspace
     cd plugins/pi-agent && bun test src && bun scripts/host-test.ts
 
+# While iterating: clippy and tests for the given crates only (e.g. `just check space-ui space-app`);
+# run `just lint` and `just test` before committing
+check +crates="space-app":
+    cargo clippy {{prepend("-p ", crates)}} --all-targets -- -D warnings
+    cargo test {{prepend("-p ", crates)}}
+
 lint:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo clippy -p space-app --no-default-features --all-targets -- -D warnings

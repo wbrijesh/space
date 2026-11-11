@@ -59,6 +59,7 @@ Arguments go to the app: a project folder, `--gallery`, or `--scenario list`.
 |---|---|
 | `just run [ARGS]` | build everything and run Space |
 | `just test` | Rust tests and the TypeScript plugins' tests; a scripted stub agent, so no model calls |
+| `just check [crates]` | while iterating: clippy and tests for those crates only (default `space-app`) |
 | `just lint` | clippy (with and without dev tooling) and the TypeScript typecheck |
 | `just protocol` | regenerate the TypeScript protocol bindings from the Rust types |
 | `just install` | release build into `~/Applications/Space.app` (Spotlight) |

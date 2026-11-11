@@ -54,6 +54,11 @@ reference and note read as superscript digits ("claim¹", "¹ The source") inste
 
 Selection end, in `src/text_selection.rs`: `TextSelection::end_caret` returns where a finished
 selection ends on screen (the caret box after its last character, from the edges participants
-paint for touch handles), so the app can float a button there.
+paint for touch handles), so the app can float a button there. It counts a finished window
+selection, or without one a participant's local selection (a `TextView`'s double or triple click).
+
+`SelectableText`, in `src/selectable_text.rs`: registers, projects the selection, then registers
+again with its painted ends; `in_paint_order` orders it among `TextView`s; `highlights` and
+`layout` for find.
 
 To update gpui-base, copy the new version here and re-apply these changes.

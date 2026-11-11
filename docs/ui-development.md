@@ -146,12 +146,41 @@ stays available in optimized builds for profiling. CI and lint run both configur
 
 ## Interaction scripts
 
-`SPACE_SCRIPT=<file>` replays clicks, scrolls, keys and typing through GPUI's own event dispatch,
-and can print app state and take screenshots (`shot NAME` runs `$SPACE_SHOT_CMD NAME`). The
-commands are listed at the top of `crates/space-app/src/devscript.rs`. Use it for checks that need
-no OS input permissions, in a window that doesn't have to be in front: macOS sends a background app
-no keys, so scripts drive GPUI directly, and commands like `editmenu` and `terminals` print what a
-screenshot can't show.
+`SPACE_SCRIPT=<file>` replays clicks (`click X Y 2` double-clicks), drags, scrolls, keys and typing
+through GPUI's own event dispatch, and prints what a screenshot can't show (`selection`,
+`composer`, `context`, `terminals`, ...). The commands are listed at the top of
+`crates/space-app/src/devscript.rs`. macOS sends a background app no keys, so scripts drive GPUI
+directly: no OS input permissions, and the window needn't be in front.
+
+A check, start to finish (coordinates are logical px, half a Retina screenshot's pixels):
+
+```
+printf 'wait 3500\nclick 470 224 2\nselection\nshot after\nquit\n' > /tmp/s
+SPACE_SCRIPT=/tmp/s SPACE_SHOT_DIR=/tmp ./target/debug/Space --scenario quote
+```
+
+End scripts with `quit`, so the run returns when it's done. `shot NAME` captures this window to
+`$SPACE_SHOT_DIR/NAME.png` (or runs `$SPACE_SHOT_CMD NAME`).
+
+## GPUI input, in short
+
+What cost time to learn here:
+
+* **Mouse handlers run in paint order.** The capture phase goes from what's painted first (back) to
+  last (front); the bubble phase the other way. gpui-base's `TextSelectionLayer` is painted first
+  (by `Root`), so its capture handler sees every press before the app's: a left press clears the
+  selection before any button handler runs. Keep what a button needs from the selection
+  beforehand (see `quote.rs`).
+* **`.occlude()` hides what's under an element**, ancestors included: a press on an occluding
+  overlay doesn't reach the root's `capture_any_mouse_down`. Give the overlay its own handler.
+* **Two kinds of selection.** A drag makes a window selection (`TextSelection`); a double or triple
+  click in a reply (`TextView`) is a selection local to that view, with no window snapshot. Both
+  paint their ends (`selection_edges`), which `TextSelection::end_caret` reads.
+* **Selection state settles after paint.** Text projects the selection while it paints, so read
+  `TextSelection::selected_text` a frame or two after the event (`window.on_next_frame`), not in
+  the handler.
+* **Plain text (`SelectableText`) registers, then projects.** It has no view to notify, so a
+  projection made from a stale registration stays stale until something else redraws.
 
 Other dev variables: `SPACE_CLOCK` (above), `SPACE_GALLERY_PAGE` / `SPACE_GALLERY_ONLY` (above),
 `SPACE_PERF=1` (how often the transcript is rebuilt), `SPACE_AGENT_IDLE_SECS` (put the agent to sleep
