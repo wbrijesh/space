@@ -20,7 +20,7 @@
 //! rename some name    rename the selected thread as the Rename sheet would (then print its title)
 //! title               print the selected thread's title
 //! editmenu            print the Edit menu's items: AppKit action and key equivalent
-//! terminals           print the selected thread's terminal pane: open, and its tabs
+//! terminals           print the selected thread's terminal pane: open, its tabs, how far it's shown
 //! shot name           run `$SPACE_SHOT_CMD name` (e.g. a script calling `screencapture -l`)
 //! shotnow name        same as `shot` without the 250 ms settle delay (animation frames)
 //! quit                quit the app
@@ -221,7 +221,9 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                         if let Some(app) = app {
                             let app = app.read(cx);
                             let pane = app.selected.and_then(|k| app.terminals.panes.get(&k));
-                            eprintln!("script: terminals {:?}", pane.map(|p| (p.open, p.tabs.len(), p.opening)));
+                            let clock = space_ui::clock::AnimationClock::global(cx);
+                            let (shown, _) = app.terminal_shown.at(clock.now(), clock.pinned());
+                            eprintln!("script: terminals {:?} shown {shown:.2}", pane.map(|p| (p.open, p.tabs.len(), p.opening)));
                         }
                     });
                 }

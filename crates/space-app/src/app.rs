@@ -335,6 +335,10 @@ pub struct SpaceApp {
     pub(crate) sidebar_open: bool,
     /// The sidebar's shown fraction, sliding toward `sidebar_open`.
     pub(crate) sidebar_shown: space_ui::theme::motion::Spring,
+    /// How far the current thread's terminal pane is shown (0..1), and the thread it's for:
+    /// switching threads snaps it instead of sliding.
+    pub(crate) terminal_shown: space_ui::theme::motion::Spring,
+    pub(crate) terminal_shown_for: Option<u64>,
     pub(crate) banner: Option<String>,
     /// The image viewer: a message's pictures and the one shown.
     pub(crate) viewer: Option<(Vec<space_ui::components::images::Pic>, usize)>,
@@ -569,6 +573,8 @@ impl SpaceApp {
             transcript_scroll: FollowScroll::new(),
             sidebar_open: true,
             sidebar_shown: space_ui::theme::motion::Spring::new(1., space_ui::theme::motion::SIDEBAR_SLIDE),
+            terminal_shown: space_ui::theme::motion::Spring::new(0., space_ui::theme::motion::TERMINAL_SLIDE),
+            terminal_shown_for: None,
             banner,
             closed_threads: Vec::new(),
             sidebar_scroll: ScrollHandle::new(),

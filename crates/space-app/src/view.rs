@@ -56,8 +56,9 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
     // A stopped turn's queued messages go back into the composer.
     app.restore_stopped_queue(window, cx);
     let clock = space_ui::clock::AnimationClock::global(cx);
-    let (shown, moving) = app.sidebar_shown.at(clock.now(), clock.pinned());
-    if moving && clock.is_running() {
+    let (now, pinned, clock_running) = (clock.now(), clock.pinned(), clock.is_running());
+    let (shown, moving) = app.sidebar_shown.at(now, pinned);
+    if moving && clock_running {
         window.request_animation_frame();
     }
     let nav = TitleBarNav {
@@ -78,6 +79,17 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
     });
     app.terminals.set_visible(terminal_key.and_then(|k| app.terminals.selected(k)).map(|s| s.id.clone()).as_deref());
     let terminal_open = terminal_key.is_some();
+    app.terminal_slide(cx);
+    let (terminal_shown, terminal_moving) = app.terminal_shown.at(now, pinned);
+    if terminal_moving && clock_running {
+        window.request_animation_frame();
+    }
+    // Drawn while open, and while it slides away after hiding.
+    let terminal_drawn = terminal_key.or_else(|| {
+        app.selected.filter(|k| {
+            terminal_shown > 0. && !app.show_settings && app.host.has_terminal() && app.terminals.pane(*k).is_some()
+        })
+    });
     let title_bar = MainTitleBar::new(if app.show_settings {
         "Settings".to_string()
     } else {
@@ -92,8 +104,8 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
     } else {
         let streaming = app.prepare_transcript(window, cx);
         let body = body(app, streaming, window, cx);
-        match terminal_key {
-            Some(key) => with_terminal(app, key, body, shown, window, cx),
+        match terminal_drawn {
+            Some(key) => with_terminal(app, key, body, shown, terminal_shown, window, cx),
             None => body,
         }
     };
@@ -274,13 +286,29 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
     sidebar_column(SidebarTitleBar::new(nav).shown(shown), rows, &app.sidebar_scroll)
 }
 
-/// The thread's body with the terminal pane beside it (or instead of it, maximized).
-fn with_terminal(app: &mut SpaceApp, key: u64, body: AnyElement, sidebar: f32, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
+/// The thread's body with the terminal pane beside it (or instead of it, maximized). `shown`:
+/// how far the pane has slid in (0..1); its column grows to its width while the pane inside
+/// keeps that width, so it slides in from the right without its terminal resizing.
+fn with_terminal(
+    app: &mut SpaceApp,
+    key: u64,
+    body: AnyElement,
+    sidebar: f32,
+    shown: f32,
+    window: &mut Window,
+    cx: &mut Context<SpaceApp>,
+) -> AnyElement {
     let Some(pane) = app.terminals.pane(key) else { return body };
     let maximized = pane.maximized;
     let main_width = f32::from(window.viewport_size().width) - f32::from(size::SIDEBAR_W) * sidebar;
     let width = px((main_width * app.terminals.width).round());
+    let sliding = !maximized && shown < 1.;
     let pane = terminal_pane(app, key, window, cx);
+    let pane = if sliding {
+        div().absolute().top_0().left_0().h_full().w(width).flex().flex_col().child(pane).into_any_element()
+    } else {
+        pane
+    };
     div()
         .flex_1()
         .min_h_0()
@@ -292,7 +320,8 @@ fn with_terminal(app: &mut SpaceApp, key: u64, body: AnyElement, sidebar: f32, w
                 .h_full()
                 .flex()
                 .flex_col()
-                .map(|d| if maximized { d.flex_1().min_w_0() } else { d.flex_none().w(width) })
+                .map(|d| if maximized { d.flex_1().min_w_0() } else { d.flex_none().w(width * shown) })
+                .when(sliding, |d| d.overflow_hidden())
                 .child(pane)
                 // Beside the chat: a hairline like the title bar's, and a handle on it to resize.
                 .when(!maximized, |d| {

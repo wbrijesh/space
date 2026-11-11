@@ -291,8 +291,28 @@ impl SpaceApp {
         if pane.tabs.is_empty() && pane.opening == 0 {
             self.open_terminal(key, None, window, cx);
         }
+        self.terminal_slide(cx);
         self.focus_terminal(key, window, cx);
         cx.notify();
+    }
+
+    /// Point the pane's slide at whether the current thread's pane is open: it slides in and
+    /// out as it opens and hides, and snaps when the thread changes (another thread's pane is
+    /// just there) or under reduced motion. Called where a pane opens or closes, so the slide
+    /// starts then, and on every render.
+    pub(crate) fn terminal_slide(&mut self, cx: &mut Context<Self>) {
+        let open = self.selected.is_some_and(|k| {
+            !self.show_settings && self.host.has_terminal() && self.terminals.pane(k).is_some_and(|p| p.open)
+        });
+        let target = if open { 1. } else { 0. };
+        if self.terminal_shown_for != self.selected || cx.reduce_motion() {
+            self.terminal_shown.snap(target);
+            self.terminal_shown_for = self.selected;
+        } else if self.terminal_shown.target() != target {
+            let clock = space_ui::clock::AnimationClock::global(cx);
+            let (now, pinned) = (clock.now(), clock.pinned());
+            self.terminal_shown.set(target, now, pinned);
+        }
     }
 
     pub(crate) fn hide_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -301,6 +321,7 @@ impl SpaceApp {
             pane.open = false;
             pane.maximized = false;
         }
+        self.terminal_slide(cx);
         self.focus_composer(window, cx);
         cx.notify();
     }
@@ -312,6 +333,7 @@ impl SpaceApp {
         }
         let Some(key) = self.selected else { return };
         self.terminals.panes.entry(key).or_default().open = true;
+        self.terminal_slide(cx);
         self.open_terminal(key, None, window, cx);
         cx.notify();
     }
@@ -451,6 +473,7 @@ impl SpaceApp {
         if closed {
             pane.open = false;
             pane.maximized = false;
+            self.terminal_slide(cx);
         }
         if refocus && self.selected == Some(key) {
             if closed {

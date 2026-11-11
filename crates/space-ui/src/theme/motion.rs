@@ -38,6 +38,9 @@ pub const TIP_FADE: Duration = Duration::from_millis(120);
 /// the rest settles softly. See [`Spring`].
 pub const SIDEBAR_SLIDE: Duration = Duration::from_millis(250);
 
+/// The terminal pane slides in from the right edge and out again, on the same kind of spring.
+pub const TERMINAL_SLIDE: Duration = Duration::from_millis(350);
+
 /// Fast start, gentle stop (cubic). Used for the toggle knob.
 pub fn ease_out(t: f32) -> f32 {
     1. - (1. - t.clamp(0., 1.)).powi(3)
@@ -125,6 +128,7 @@ pub const ALL: &[(&str, Duration, &str)] = &[
     ("SCROLL_GLIDE", SCROLL_GLIDE, "ease_out glide to the bottom (scroll-to-bottom button, ⌘↓)"),
     ("POP", POP, "ease_out fade + scale from 0.92 (scroll-to-bottom button)"),
     ("SIDEBAR_SLIDE", SIDEBAR_SLIDE, "critically damped spring, start to settled: sidebar slides in/out, content resizes"),
+    ("TERMINAL_SLIDE", TERMINAL_SLIDE, "critically damped spring: the terminal pane slides in/out from the right, the chat resizes"),
 ];
 
 #[cfg(test)]
