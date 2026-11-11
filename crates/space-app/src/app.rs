@@ -31,7 +31,7 @@ pub use space_ui::actions::{
     CloseSettings, CloseThread, CyclePermissionMode, FocusComposer, NextThread, PreviousThread, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious,
     ScrollToBottom,
     ToggleSidebar,
-    ToggleTrajectory,
+    ShowChat, ShowTrajectory, OpenInLastApp,
     CloseTerminal, MaximizeTerminal, NewTerminal, NextTerminal, PreviousTerminal, TerminalClear, TerminalCopy, TerminalPaste,
     ToggleRightPane, ShowTerminal, ShowFiles, OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
 };
@@ -148,7 +148,10 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-l", FocusComposer, None),
             KeyBinding::new("cmd-,", OpenSettings, None),
             KeyBinding::new("cmd-shift-r", CyclePermissionMode, None),
-            KeyBinding::new("cmd-shift-t", ToggleTrajectory, None),
+            KeyBinding::new("cmd-shift-c", ShowChat, None),
+            KeyBinding::new("cmd-shift-t", ShowTrajectory, None),
+            KeyBinding::new("cmd-shift-p", TogglePinThread, None),
+            KeyBinding::new("cmd-o", OpenInLastApp, None),
             // ⌘↓ scrolls the transcript to the bottom, also from the composer (where the
             // textarea would move the caret to the end) unless its text spans several lines.
             // Not context-free: a `None` binding counts as the deepest match and would beat
@@ -208,6 +211,9 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
                 items: vec![MenuItem::action("New Thread", NewThread),
                     MenuItem::action("Rename Thread…", RenameThread),
                     MenuItem::action("Close Thread", CloseThread),
+                    MenuItem::separator(),
+                    MenuItem::action("Pin or Unpin Thread", TogglePinThread),
+                    MenuItem::action("Open Thread's Folder", OpenInLastApp),
                 ],
                 disabled: false,
             },
@@ -243,7 +249,9 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
                     MenuItem::action("Next Thread", NextThread),
                     MenuItem::action("Previous Thread", PreviousThread),
                     MenuItem::separator(),
-                    MenuItem::action("Trajectory", ToggleTrajectory),
+                    MenuItem::action("Chat", ShowChat),
+                    MenuItem::action("Trajectory", ShowTrajectory),
+                    MenuItem::separator(),
                     MenuItem::action("Right Pane", ToggleRightPane),
                     MenuItem::action("Terminal", ShowTerminal),
                     MenuItem::action("Files", ShowFiles),

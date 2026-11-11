@@ -123,6 +123,10 @@ pub fn view_tabs(selected: ViewTab, on_select: TabHandler) -> Div {
             .border_b_2()
             .map(|d| if on { d.border_color(color::accent()).text_color(color::text()) } else { d.border_color(transparent_black()).text_color(color::text_2()).hover(|s| s.text_color(color::text())) })
             .child(label)
+            .map(|d| match t {
+                ViewTab::Chat => d.tip_action(label, &crate::actions::ShowChat),
+                ViewTab::Trajectory => d.tip_action(label, &crate::actions::ShowTrajectory),
+            })
             .on_click(move |_, w, cx| f(t, w, cx))
     };
     div()

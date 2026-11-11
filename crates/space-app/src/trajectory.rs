@@ -114,12 +114,6 @@ impl SpaceApp {
         }
     }
 
-    /// ⌘⇧T: switch the selected thread between Chat and Trajectory.
-    pub(crate) fn toggle_trajectory(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tab = if self.view_tab() == ViewTab::Trajectory { ViewTab::Chat } else { ViewTab::Trajectory };
-        self.show_tab(tab, window, cx);
-    }
-
     /// The shown state is the selected thread's, and up to date: the tab only follows changes
     /// while it's shown, so turns sent while Chat was shown are read now.
     pub(crate) fn ensure_trajectory(&mut self, cx: &mut Context<Self>) {
