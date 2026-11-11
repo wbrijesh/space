@@ -187,9 +187,6 @@ fn row_menu(on_rename: Option<ClickHandler>, on_close: Option<ClickHandler>) -> 
         items.push(ContextItem::new("Rename Thread…", pick(f)).shortcut(&RenameThread));
     }
     if let Some(f) = on_close {
-        if !items.is_empty() {
-            items.push(ContextItem::separator());
-        }
         items.push(ContextItem::new("Close Thread", pick(f)).shortcut(&CloseThread));
     }
     items

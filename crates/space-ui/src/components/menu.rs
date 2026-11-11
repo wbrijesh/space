@@ -124,8 +124,6 @@ pub struct ContextItem {
     label: SharedString,
     action: Option<Box<dyn Action>>,
     on_pick: PickHandler,
-    /// A line between groups of items, not an item.
-    separator: bool,
 }
 
 /// What picking a context menu item does.
@@ -133,12 +131,7 @@ pub type PickHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
 impl ContextItem {
     pub fn new(label: impl Into<SharedString>, on_pick: impl Fn(&mut Window, &mut App) + 'static) -> Self {
-        Self { label: label.into(), action: None, on_pick: Rc::new(on_pick), separator: false }
-    }
-
-    /// A line between groups (an action that ends or removes something sits apart from the rest).
-    pub fn separator() -> Self {
-        Self { label: SharedString::default(), action: None, on_pick: Rc::new(|_, _| {}), separator: true }
+        Self { label: label.into(), action: None, on_pick: Rc::new(on_pick) }
     }
 
     /// Show `action`'s key binding beside the label (nothing when it has none).
@@ -203,9 +196,6 @@ fn context_menu_card(
     cx: &mut App,
 ) -> Div {
     let rows = items.iter().enumerate().map(|(ix, item)| {
-        if item.separator {
-            return div().my_1().mx_2().h(px(1.)).bg(color::border_strong()).into_any_element();
-        }
         // macOS spaces a shortcut's glyphs apart (⌘ R), which reads easier at a small size.
         let keys = item
             .action
