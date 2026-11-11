@@ -123,7 +123,7 @@ The harness is the ACP **client**; agent plugins are ACP **agents**.
 | client → agent | `initialize` | Protocol version and capabilities; `_meta["space/steer"]: true` from agents that take steering |
 | client → agent | `session/new` | `cwd` = the thread's folder; `_meta["space/dataDir"]` = a folder for the session's own files, when a session store is installed |
 | client → agent | `session/load` | Continue a saved thread's session (agents with `loadSession`), same `_meta`; what the agent replays meanwhile isn't shown (the thread already is) |
-| client → agent | `session/prompt` | Image blocks (base64 bytes plus the saved file's `file://` uri; only to agents with `promptCapabilities.image`), long pastes as text `resource` blocks (`text/plain`, the saved file's `file://` uri; a `resource_link` to that file for agents without `promptCapabilities.embeddedContext`), then text and `resource_link` blocks; `_meta["space/context"]` carries hidden context sections |
+| client → agent | `session/prompt` | Image blocks (base64 bytes plus the saved file's `file://` uri; only to agents with `promptCapabilities.image`), long pastes as text `resource` blocks (`text/plain`, the saved file's `file://` uri; a `resource_link` to that file for agents without `promptCapabilities.embeddedContext`), then text (a quoted selection first, as a markdown blockquote) and `resource_link` blocks; `_meta["space/context"]` carries hidden context sections |
 | client → agent | `session/cancel` (notification) | Abort the running turn |
 | agent → client | `session/update` (notification) | message/thought chunks, `tool_call`, `tool_call_update`, `plan` |
 | agent → client | `session/request_permission` | The agent's own approval card |

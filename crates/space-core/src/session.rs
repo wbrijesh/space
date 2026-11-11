@@ -134,6 +134,37 @@ pub struct TextRef {
     pub chars: u64,
 }
 
+/// What the user sends: the text, a quote it answers, and what goes with it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UserInput {
+    pub text: String,
+    /// Text quoted from the transcript, sent before the message.
+    pub quote: Option<String>,
+    pub attachments: Vec<PathBuf>,
+    pub images: Vec<ImageRef>,
+    pub texts: Vec<TextRef>,
+}
+
+impl UserInput {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self { text: text.into(), ..Default::default() }
+    }
+
+    /// The text the agent gets: the quote as a markdown blockquote ("> " on each line) and a
+    /// blank line, then the message.
+    pub fn prompt_text(&self) -> String {
+        let Some(quote) = self.quote.as_deref().map(str::trim).filter(|q| !q.is_empty()) else { return self.text.clone() };
+        let quoted: Vec<String> = quote.lines().map(|l| if l.trim().is_empty() { ">".to_string() } else { format!("> {l}") }).collect();
+        let quoted = quoted.join("\n");
+        if self.text.trim().is_empty() { quoted } else { format!("{quoted}\n\n{}", self.text) }
+    }
+
+    /// The transcript's record of it.
+    pub fn into_message(self, at_ms: Option<u64>) -> SessionEvent {
+        SessionEvent::UserMessage { text: self.text, quote: self.quote, attachments: self.attachments, images: self.images, texts: self.texts, at_ms }
+    }
+}
+
 /// Everything that can happen in a session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SessionEvent {
@@ -143,6 +174,9 @@ pub enum SessionEvent {
     /// and `texts` (long pastes) as embedded resources.
     UserMessage {
         text: String,
+        /// Text quoted from the transcript; the agent got it before `text`, as a blockquote.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quote: Option<String>,
         attachments: Vec<PathBuf>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<ImageRef>,
@@ -182,7 +216,7 @@ pub enum SessionEvent {
 /// One entry in the rendered transcript.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TranscriptItem {
-    User { text: String, attachments: Vec<PathBuf>, images: Vec<ImageRef>, texts: Vec<TextRef>, at_ms: Option<u64> },
+    User { text: String, quote: Option<String>, attachments: Vec<PathBuf>, images: Vec<ImageRef>, texts: Vec<TextRef>, at_ms: Option<u64> },
     Agent(String),
     Thought(String),
     Tool(ToolCallInfo),
@@ -231,8 +265,9 @@ impl SessionState {
                 self.plugin_id.clone_from(plugin_id);
                 self.cwd.clone_from(cwd);
             }
-            SessionEvent::UserMessage { text, attachments, images, texts, at_ms } => self.items.push(TranscriptItem::User {
+            SessionEvent::UserMessage { text, quote, attachments, images, texts, at_ms } => self.items.push(TranscriptItem::User {
                 text: text.clone(),
+                quote: quote.clone(),
                 attachments: attachments.clone(),
                 images: images.clone(),
                 texts: texts.clone(),
@@ -393,11 +428,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_quote_goes_first_as_a_blockquote() {
+        let input = |text: &str, quote: Option<&str>| UserInput { quote: quote.map(String::from), ..UserInput::text(text) };
+        assert_eq!(input("why?", None).prompt_text(), "why?");
+        assert_eq!(input("why?", Some("one\n\ntwo")).prompt_text(), "> one\n>\n> two\n\nwhy?");
+        assert_eq!(input("", Some("just this")).prompt_text(), "> just this");
+        assert_eq!(input("why?", Some("  ")).prompt_text(), "why?");
+        let SessionEvent::UserMessage { text, quote, .. } = input("why?", Some("one")).into_message(None) else { panic!() };
+        assert_eq!((text.as_str(), quote.as_deref()), ("why?", Some("one")));
+        // Threads saved before quotes load.
+        let old: SessionEvent = serde_json::from_str(r#"{"UserMessage":{"text":"hi","attachments":[]}}"#).unwrap();
+        assert!(matches!(old, SessionEvent::UserMessage { quote: None, .. }));
+    }
+
+    #[test]
     fn merges_chunks_and_patches_tools() {
         let mut s = SessionState::new("s1");
         let ev = |e: SessionEvent| e;
         for e in [
-            ev(SessionEvent::UserMessage { text: "hi".into(), attachments: vec![], images: vec![], texts: vec![], at_ms: None }),
+            ev(SessionEvent::UserMessage { text: "hi".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: None }),
             ev(SessionEvent::TurnStarted),
             ev(SessionEvent::AgentThought { text: "think".into() }),
             ev(SessionEvent::AgentThought { text: "ing".into() }),
@@ -471,7 +520,7 @@ mod tests {
     fn times_and_usage_round_trip_and_old_events_still_load() {
         let usage = TurnUsage { input: 4, output: 4, cache_read: Some(0), cache_write: Some(2668), reasoning: None, models: vec!["a/b".into()] };
         let events = [
-            SessionEvent::UserMessage { text: "hi".into(), attachments: vec![], images: vec![], texts: vec![], at_ms: Some(5) },
+            SessionEvent::UserMessage { text: "hi".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: Some(5) },
             SessionEvent::TurnEnded { stop_reason: "end_turn".into(), at_ms: Some(9), usage: Some(usage) },
         ];
         for e in &events {

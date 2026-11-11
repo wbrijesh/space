@@ -1,5 +1,6 @@
 //! End-to-end tests of the host against the `space-stub-agent` binary.
 
+use space_core::UserInput;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -290,7 +291,7 @@ async fn images_go_as_image_blocks_after_the_message_event() {
     let path = root.path().join("abc.png");
     std::fs::write(&path, b"12345").unwrap();
     let image = space_core::ImageRef { path: path.clone(), mime: "image/png".into(), width: 2, height: 1, name: Some("shot.png".into()) };
-    let stop = session.prompt_with("what is this", vec![], vec![image.clone()], vec![]).await.unwrap();
+    let stop = session.prompt_with(UserInput { images: vec![image.clone()], ..UserInput::text("what is this") }).await.unwrap();
     assert_eq!(stop, "end_turn");
     until(&mut events, &mut state, &mut seen, turn_ended).await;
 
@@ -301,7 +302,7 @@ async fn images_go_as_image_blocks_after_the_message_event() {
 
     // A missing file fails the send before anything is shown.
     let gone = space_core::ImageRef { path: root.path().join("gone.png"), mime: "image/png".into(), width: 1, height: 1, name: None };
-    assert!(session.prompt_with("again", vec![], vec![gone], vec![]).await.is_err());
+    assert!(session.prompt_with(UserInput { images: vec![gone], ..UserInput::text("again") }).await.is_err());
     assert!(!session.is_running());
 }
 
@@ -318,7 +319,7 @@ async fn pasted_texts_go_inline_or_as_links() {
     let path = root.path().join("abc.txt");
     std::fs::write(&path, "é".repeat(5000)).unwrap();
     let paste = space_core::TextRef { path: path.clone(), mime: "text/plain".into(), chars: 5000 };
-    session.prompt_with("summarize", vec![], vec![], vec![paste.clone()]).await.unwrap();
+    session.prompt_with(UserInput { texts: vec![paste.clone()], ..UserInput::text("summarize") }).await.unwrap();
     until(&mut events, &mut state, &mut seen, turn_ended).await;
     let TranscriptItem::User { texts, .. } = &state.items[0] else { panic!("{:?}", state.items[0]) };
     assert_eq!(texts, &[paste]);
@@ -327,7 +328,7 @@ async fn pasted_texts_go_inline_or_as_links() {
 
     // A missing file fails the send before anything is shown.
     let gone = space_core::TextRef { path: root.path().join("gone.txt"), mime: "text/plain".into(), chars: 1 };
-    assert!(session.prompt_with("again", vec![], vec![], vec![gone]).await.is_err());
+    assert!(session.prompt_with(UserInput { texts: vec![gone], ..UserInput::text("again") }).await.is_err());
 
     // An agent without embedded context gets a link to the file.
     let tmp = tempfile::tempdir().unwrap();
@@ -346,7 +347,7 @@ async fn pasted_texts_go_inline_or_as_links() {
     let session = agent.new_session(PathBuf::from(tmp.path())).await.unwrap();
     let (mut state, mut seen) = (SessionState::new(session.id()), Vec::new());
     let paste = space_core::TextRef { path: path.clone(), mime: "text/plain".into(), chars: 5000 };
-    session.prompt_with("summarize", vec![], vec![], vec![paste]).await.unwrap();
+    session.prompt_with(UserInput { texts: vec![paste], ..UserInput::text("summarize") }).await.unwrap();
     until(&mut events, &mut state, &mut seen, turn_ended).await;
     let reply: String = state.items.iter().filter_map(|i| if let TranscriptItem::Agent(t) = i { Some(t.as_str()) } else { None }).collect();
     assert!(reply.starts_with(&format!("Saw pasted text (link file://{}). ", path.display())), "{reply}");
@@ -369,7 +370,7 @@ async fn an_agent_without_images_refuses_them() {
     assert!(!agent.accepts_images());
     let session = agent.new_session(PathBuf::from(tmp.path())).await.unwrap();
     let image = space_core::ImageRef { path: tmp.path().join("a.png"), mime: "image/png".into(), width: 1, height: 1, name: None };
-    let err = session.prompt_with("look", vec![], vec![image], vec![]).await.unwrap_err();
+    let err = session.prompt_with(UserInput { images: vec![image], ..UserInput::text("look") }).await.unwrap_err();
     assert!(err.to_string().contains("can't read images"), "{err}");
 }
 
@@ -424,12 +425,12 @@ async fn a_steered_message_joins_the_running_turn_at_its_next_step() {
     let mut seen = Vec::new();
 
     // Nothing runs: refused (the app sends it as a normal message instead).
-    assert!(session.steer("s0".into(), "too early".into(), vec![], vec![], vec![]).await.is_err());
+    assert!(session.steer("s0".into(), UserInput::text("too early")).await.is_err());
 
     let s = session.clone();
     let turn = tokio::spawn(async move { s.prompt("slow please").await });
     until(&mut events, &mut state, &mut seen, |e| matches!(e, HostEvent::Session { event: SessionEvent::AgentText { .. }, .. })).await;
-    session.steer("s1".into(), "also check the tests".into(), vec![], vec![], vec![]).await.unwrap();
+    session.steer("s1".into(), UserInput::text("also check the tests")).await.unwrap();
     until(&mut events, &mut state, &mut seen, |e| matches!(e, HostEvent::Steered { steer_id, .. } if steer_id == "s1")).await;
     // The message is in the transcript before what the agent says after it.
     let users: Vec<&str> =
@@ -446,7 +447,7 @@ async fn a_steered_message_joins_the_running_turn_at_its_next_step() {
     // Once the agent is replying (Space reports the turn started before the prompt reaches it).
     until(&mut events, &mut state, &mut seen, |e| matches!(e, HostEvent::Session { event: SessionEvent::TurnStarted, .. })).await;
     until(&mut events, &mut state, &mut seen, |e| matches!(e, HostEvent::Session { event: SessionEvent::AgentText { .. }, .. })).await;
-    session.steer("s2".into(), "never mind".into(), vec![], vec![], vec![]).await.unwrap();
+    session.steer("s2".into(), UserInput::text("never mind")).await.unwrap();
     assert_eq!(session.unsteer().await.unwrap(), ["s2"]);
     until(&mut events, &mut state, &mut seen, turn_ended).await;
     turn.await.unwrap().unwrap();

@@ -65,6 +65,8 @@ pub struct Thread {
     pub images: Vec<DraftImage>,
     /// Long pastes in the draft, in order.
     pub pastes: Vec<Paste>,
+    /// Text quoted from the transcript into the draft.
+    pub quote: Option<String>,
     /// Where the thread's sent images are kept (from the session store; known once a session
     /// was created).
     pub attachments_dir: Option<PathBuf>,
@@ -90,13 +92,26 @@ pub struct Thread {
     pub thought_secs: HashMap<usize, u64>,
 }
 
-/// A message waiting for the session to start.
-pub struct Queued {
+/// A message on its way: what the composer held when it was sent.
+#[derive(Clone, Default)]
+pub struct Outgoing {
     pub text: String,
+    /// Text quoted from the transcript.
+    pub quote: Option<String>,
     pub attachments: Vec<PathBuf>,
     pub images: Vec<Prepared>,
     pub pastes: Vec<Paste>,
 }
+
+impl Outgoing {
+    /// The message as the agent gets it, once its images and pastes are saved.
+    pub fn input(&self, images: Vec<space_core::ImageRef>, texts: Vec<space_core::TextRef>) -> space_core::UserInput {
+        space_core::UserInput { text: self.text.clone(), quote: self.quote.clone(), attachments: self.attachments.clone(), images, texts }
+    }
+}
+
+/// A message waiting for the session to start.
+pub type Queued = Outgoing;
 
 impl Thread {
     pub(crate) fn new(key: u64, cwd: PathBuf) -> Self {
@@ -128,6 +143,7 @@ impl Thread {
             recall: Default::default(),
             images: Vec::new(),
             pastes: Vec::new(),
+            quote: None,
             attachments_dir: None,
             queued: None,
             pending: Vec::new(),
@@ -369,7 +385,7 @@ impl SpaceApp {
                 if let Some(t) = this.thread_mut(key) {
                     t.creating = false;
                     if let Some(q) = t.queued.take() {
-                        this.prompt(key, q.text, q.attachments, q.images, q.pastes, cx);
+                        this.prompt(key, q, cx);
                     }
                 }
                 cx.notify();
@@ -432,7 +448,8 @@ impl SpaceApp {
             let first_id = self.next_image_id;
             self.next_image_id += drafts.len() as u64;
             if let Some(t) = self.thread_mut(key) {
-                t.queued = s.prompt.map(|text| Queued { text, attachments: Vec::new(), images, pastes: Vec::new() });
+                t.queued = s.prompt.map(|text| Queued { text, images, quote: s.quote, ..Default::default() });
+                t.quote = s.draft_quote;
                 t.images = drafts.into_iter().zip(first_id..).map(|(p, id)| DraftImage::ready(id, p)).collect();
                 t.draft = s.draft.unwrap_or_default();
                 t.mode = s.mode;
@@ -468,7 +485,7 @@ impl SpaceApp {
         self.touch_agent();
         let text = self.input.read(cx).value().trim().to_string();
         let Some(thread) = self.thread_mut(key) else { return };
-        if text.is_empty() && thread.attachments.is_empty() && thread.images.is_empty() && thread.pastes.is_empty() {
+        if text.is_empty() && thread.attachments.is_empty() && thread.images.is_empty() && thread.pastes.is_empty() && thread.quote.is_none() {
             return;
         }
         // Images still being prepared: the send button waits for them.
@@ -491,24 +508,26 @@ impl SpaceApp {
         thread.recall.end();
         let images: Vec<Prepared> = std::mem::take(&mut thread.images).into_iter().filter_map(|i| i.prepared).collect();
         let pastes = std::mem::take(&mut thread.pastes);
+        let quote = thread.quote.take();
         thread.draft.clear();
         self.input.update(cx, |s, cx| s.clean(window, cx));
+        let message = Outgoing { text, quote, attachments, images, pastes };
 
         // The agent is working: the message waits (for the turn, or for the current step).
         if running {
-            self.queue_message(key, when, text, attachments, images, pastes, cx);
+            self.queue_message(key, when, message, cx);
             return;
         }
         let thread = self.thread_mut(key).expect("thread exists");
         if thread.live_session().is_some() {
-            self.prompt(key, text, attachments, images, pastes, cx);
+            self.prompt(key, message, cx);
         } else {
             // No session yet (agent starting) or its agent exited: send once there is one (the
             // old session is loaded again if the agent can).
             if let Some(old) = thread.session.take() {
                 thread.resume = Some((old.agent().plugin_id().to_string(), old.id().to_string()));
             }
-            thread.queued = Some(Queued { text, attachments, images, pastes });
+            thread.queued = Some(message);
             thread.error = None;
             if !thread.creating {
                 self.create_session(key, cx);
@@ -520,18 +539,19 @@ impl SpaceApp {
 
     /// Send a message: its images and long pastes are saved in the thread's attachments folder
     /// first (one that can't be saved stops the send and says why), then the prompt goes out.
-    pub(crate) fn prompt(&mut self, key: u64, text: String, attachments: Vec<PathBuf>, images: Vec<Prepared>, pastes: Vec<Paste>, cx: &mut Context<Self>) {
+    pub(crate) fn prompt(&mut self, key: u64, message: Outgoing, cx: &mut Context<Self>) {
         let Some(thread) = self.thread(key) else { return };
         let Some(session) = thread.session.clone() else { return };
         // A thread that was saved already had its first message.
         let first = thread.name.is_none()
             && thread.meta.is_none()
             && !thread.state.items.iter().any(|i| matches!(i, TranscriptItem::User { .. }));
-        if first && !text.trim().is_empty() {
-            self.request_title(key, session.id().to_string(), text.clone(), cx);
+        if first && !message.text.trim().is_empty() {
+            self.request_title(key, session.id().to_string(), message.text.clone(), cx);
         }
         let dir = thread_attachments_dir(self.thread(key));
         cx.spawn(async move |this, cx| {
+            let (images, pastes) = (message.images.clone(), message.pastes.clone());
             let saved = cx.background_spawn(async move { crate::paste::save_all(&images, &pastes, &dir) }).await;
             let (images, texts) = match saved {
                 Ok(saved) => saved,
@@ -544,7 +564,7 @@ impl SpaceApp {
                 }
             };
             // Failures are reported as session events (Error + TurnEnded).
-            let _ = session.prompt_with(text, attachments, images, texts).await;
+            let _ = session.prompt_with(message.input(images, texts)).await;
         })
         .detach();
     }
@@ -597,7 +617,7 @@ mod tests {
     fn a_generated_title_replaces_the_first_line() {
         let mut thread = Thread::new(1, PathBuf::from("/nonexistent"));
         assert_eq!(thread.title(), "New thread");
-        thread.apply(&SessionEvent::UserMessage { text: "please fix the login page\nit redirects".into(), attachments: vec![], images: vec![], texts: vec![], at_ms: None });
+        thread.apply(&SessionEvent::UserMessage { text: "please fix the login page\nit redirects".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: None });
         // Until a title arrives (or if none does): the first line.
         assert_eq!(thread.title(), "please fix the login page");
         thread.name = Some("Fix login redirect".into());

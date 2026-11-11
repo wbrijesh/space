@@ -2,11 +2,12 @@ use std::ops::Range;
 
 use gpui::{
     App, BorderStyle, Bounds, Corners, Edges, Element, ElementId, GlobalElementId, Hitbox,
-    HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, PaintQuad, Pixels, Point,
-    SharedString, StyledText, TextStyleRefinement, Window, transparent_black,
+    HighlightStyle, HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, PaintQuad,
+    Pixels, Point, SharedString, StyledText, TextLayout, TextStyleRefinement, Window,
+    transparent_black,
 };
 
-use crate::{TextSelectionHandle, TextSelectionRegistration, TextSelectionRun};
+use crate::{TextSelectionHandle, TextSelectionProjection, TextSelectionRegistration, TextSelectionRun};
 
 /// Plain text that participates in the window-scoped [`TextSelection`](crate::TextSelection).
 ///
@@ -24,6 +25,7 @@ pub struct SelectableText {
     document_order: u64,
     text_style: Option<TextStyleRefinement>,
     selection_color: Option<Hsla>,
+    paint_order: bool,
 }
 
 impl SelectableText {
@@ -50,7 +52,28 @@ impl SelectableText {
             document_order: 0,
             text_style: None,
             selection_color: None,
+            paint_order: false,
         }
+    }
+
+    /// Orders this run among the window's selectable text by where it paints,
+    /// like a `TextView` does, so one selection can run across both (Space
+    /// patch).
+    pub fn in_paint_order(mut self) -> Self {
+        self.paint_order = true;
+        self
+    }
+
+    /// Highlights ranges of the text, as [`StyledText::with_highlights`]
+    /// (Space patch).
+    pub fn highlights(mut self, highlights: Vec<(Range<usize>, HighlightStyle)>) -> Self {
+        self.styled_text = StyledText::new(self.text.clone()).with_highlights(highlights);
+        self
+    }
+
+    /// The text's layout, once laid out (Space patch).
+    pub fn layout(&self) -> &TextLayout {
+        self.styled_text.layout()
     }
 
     /// Places this run in reading order among the others sharing its handle.
@@ -127,6 +150,31 @@ fn selection_quad_bounds(
     quads
 }
 
+impl SelectableText {
+    fn registration(
+        &self,
+        hitbox: &Hitbox,
+        bounds: Bounds<Pixels>,
+        edges: Option<(Bounds<Pixels>, Bounds<Pixels>)>,
+        handle: &TextSelectionHandle,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> TextSelectionRegistration {
+        let registration =
+            TextSelectionRegistration::new(hitbox.clone(), bounds).with_text_bounds(vec![bounds]);
+        let registration = if self.paint_order {
+            registration.in_paint_order()
+        } else {
+            registration.with_document_order(self.document_order)
+        };
+        let registration = match edges {
+            Some((start, end)) => registration.with_selection_edges(start, end),
+            None => registration,
+        };
+        registration.with_rendered_element(handle, window, cx)
+    }
+}
+
 impl IntoElement for SelectableText {
     type Element = Self;
 
@@ -137,7 +185,7 @@ impl IntoElement for SelectableText {
 
 impl Element for SelectableText {
     type RequestLayoutState = TextSelectionHandle;
-    type PrepaintState = Hitbox;
+    type PrepaintState = (Hitbox, TextSelectionProjection);
 
     fn id(&self) -> Option<ElementId> {
         Some(self.id.clone())
@@ -188,12 +236,36 @@ impl Element for SelectableText {
         self.styled_text
             .prepaint(global_id, inspector_id, bounds, &mut (), window, cx);
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
-        let registration = TextSelectionRegistration::new(hitbox.clone(), bounds)
-            .with_document_order(self.document_order)
-            .with_text_bounds(vec![bounds])
-            .with_rendered_element(handle, window, cx);
+        let registration = self.registration(&hitbox, bounds, None, handle, window, cx);
         handle.register(registration, window, cx);
-        hitbox
+        // Plain text projects the selection right after registering.
+        let layout = self.styled_text.layout().clone();
+        let copy_text_before = handle.projected_copy_text(cx);
+        let projection = handle.update_runs(
+            &[TextSelectionRun::new(self.text.clone(), layout.clone(), bounds)
+                .with_document_order(self.document_order)],
+            cx,
+        );
+        if copy_text_before != handle.projected_copy_text(cx) {
+            window.refresh();
+        }
+        // Space patch: report the selection's painted ends, as a TextView does, so the window
+        // knows where a selection ends.
+        let ranges: Vec<Range<usize>> = projection.ranges().iter().flatten().cloned().collect();
+        if let (Some(first), Some(last)) = (ranges.first(), ranges.last())
+            && first.start < last.end
+            && let (Some(a), Some(b)) =
+                (layout.position_for_index(first.start), layout.position_for_index(last.end))
+        {
+            let line = layout.line_height();
+            let edges = (
+                crate::touch_selection::caret_line_box(a, line),
+                crate::touch_selection::caret_line_box(b, line),
+            );
+            let registration = self.registration(&hitbox, bounds, Some(edges), handle, window, cx);
+            handle.register(registration, window, cx);
+        }
+        (hitbox, projection)
     }
 
     fn paint(
@@ -201,23 +273,12 @@ impl Element for SelectableText {
         global_id: Option<&GlobalElementId>,
         inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        handle: &mut Self::RequestLayoutState,
-        _: &mut Self::PrepaintState,
+        _: &mut Self::RequestLayoutState,
+        (_, projection): &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
         let layout = self.styled_text.layout().clone();
-        let copy_text_before = handle.projected_copy_text(cx);
-        let projection = handle.update_runs(
-            &[
-                TextSelectionRun::new(self.text.clone(), layout.clone(), bounds)
-                    .with_document_order(self.document_order),
-            ],
-            cx,
-        );
-        if copy_text_before != handle.projected_copy_text(cx) {
-            window.refresh();
-        }
         let color = self
             .selection_color
             .unwrap_or_else(|| crate::Theme::global(cx).tokens.colors.selection);
@@ -256,7 +317,7 @@ mod tests {
                 div()
                     .w(px(240.))
                     .h(px(32.))
-                    .child(SelectableText::new("local", "alpha beta")),
+                    .child(SelectableText::new("local", "alpha beta").in_paint_order()),
             )
         }
     }
@@ -294,6 +355,29 @@ mod tests {
         cx.update(|window, cx| {
             let _ = window.draw(cx);
             assert_eq!(TextSelection::selected_text(window, cx), "alpha beta");
+        });
+    }
+
+    #[gpui::test]
+    fn a_finished_selection_reports_where_it_ends(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| SelectableTextTestView);
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert_eq!(TextSelection::end_caret(window, cx), None);
+        });
+        cx.simulate_mouse_down(point(px(1.), px(12.)), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(point(px(30.), px(12.)), Some(MouseButton::Left), Modifiers::default());
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert_eq!(TextSelection::end_caret(window, cx), None, "not while dragging");
+        });
+        cx.simulate_mouse_up(point(px(30.), px(12.)), MouseButton::Left, Modifiers::default());
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            let end = TextSelection::end_caret(window, cx).expect("an end");
+            assert!(end.origin.x > px(5.) && end.origin.x <= px(31.), "{end:?}");
+            let text = TextSelection::selected_text(window, cx);
+            assert!(!text.is_empty() && "alpha beta".starts_with(&text), "{text:?}");
         });
     }
 

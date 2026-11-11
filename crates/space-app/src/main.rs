@@ -43,6 +43,7 @@ mod terminal_view;
 mod text_prompt;
 mod paste;
 mod pin;
+mod quote;
 mod rename;
 mod threads;
 mod trajectory;

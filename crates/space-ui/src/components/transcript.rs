@@ -17,6 +17,8 @@ use space_core::{PermissionDecision, PermissionRequest, PlanEntry, SessionState,
 
 use super::images::{OpenPicsHandler, Pic, message_images};
 use super::pastes::{self, OpenTextHandler, paste_chip};
+use super::quote::SentQuote;
+use gpui::base::SelectableText;
 use super::message_actions::{ActionHandlers, MessageActions, message_actions};
 use super::turns::{TurnFold, TurnToggleHandler, folds_away, foldable_turns, turn_summary_row};
 use super::loaders::Spinner;
@@ -76,11 +78,13 @@ pub struct UserExtras<'a> {
     pub texts: &'a [TextRef],
     pub unsaved_texts: Vec<u64>,
     pub on_open_text: Option<OpenTextHandler>,
+    /// Text it quotes from the transcript.
+    pub quote: Option<&'a str>,
 }
 
 pub fn user_message(id: impl Into<SharedString>, text_: &str, extras: UserExtras<'_>, fold: Option<UserFold>, marks: Option<BubbleMarks>) -> Div {
     let id = id.into();
-    let UserExtras { attachments, pics, on_open, texts, unsaved_texts, on_open_text } = extras;
+    let UserExtras { attachments, pics, on_open, texts, unsaved_texts, on_open_text, quote } = extras;
     let pastes: Vec<Stateful<Div>> = texts
         .iter()
         .enumerate()
@@ -94,12 +98,21 @@ pub fn user_message(id: impl Into<SharedString>, text_: &str, extras: UserExtras
         .chain(unsaved_texts.iter().enumerate().map(|(ix, chars)| paste_chip(format!("{id}-draft-text-{ix}"), *chars, None, None)))
         .collect();
     let has_bubble = !text_.trim().is_empty() || !attachments.is_empty() || !pastes.is_empty();
+    let quote = quote.map(str::trim).filter(|q| !q.is_empty()).map(|q| {
+        // Right-aligned with the bubble, no wider than it can be.
+        div().flex().justify_end().child(
+            div().w(relative(BUBBLE_SHARE)).flex().justify_end().child(
+                div().max_w(size::USER_BUBBLE_MAX_W).px_1().child(SentQuote::new(format!("{id}-quote"), q.to_string())),
+            ),
+        )
+    });
     div()
         .flex()
         .flex_col()
         .gap_1p5()
-        .when(!pics.is_empty(), |d| d.child(message_images(id, pics, on_open)))
-        .when(has_bubble, |d| d.child(user_bubble(text_, attachments, pastes, fold, marks)))
+        .children(quote)
+        .when(!pics.is_empty(), |d| d.child(message_images(id.clone(), pics, on_open)))
+        .when(has_bubble, |d| d.child(user_bubble(id, text_, attachments, pastes, fold, marks)))
 }
 
 /// Share of the column a bubble may take (and never more than [`size::USER_BUBBLE_MAX_W`]).
@@ -140,16 +153,18 @@ pub fn is_long_message(text_: &str, window: &Window) -> bool {
     }
 }
 
-/// A bubble's text, with find's matches highlighted (and the current one scrolled to when asked).
-fn bubble_text(body: String, marks: Option<BubbleMarks>) -> AnyElement {
-    let Some(marks) = marks.filter(|m| !m.ranges.is_empty()) else { return body.into_any_element() };
+/// A bubble's text: selectable (one selection can run on into the replies, and be quoted), with
+/// find's matches highlighted (and the current one scrolled to when asked).
+fn bubble_text(id: SharedString, body: String, marks: Option<BubbleMarks>) -> AnyElement {
+    let text = SelectableText::new(ElementId::Name(id), body).in_paint_order();
+    let Some(marks) = marks.filter(|m| !m.ranges.is_empty()) else { return text.into_any_element() };
     let style = |bg: Hsla| HighlightStyle { background_color: Some(bg), ..Default::default() };
     let highlights = marks
         .ranges
         .iter()
         .map(|r| (r.clone(), style(if marks.current.as_ref() == Some(r) { color::find_current() } else { color::find_match() })))
         .collect::<Vec<_>>();
-    let styled = StyledText::new(body).with_highlights(highlights);
+    let styled = text.highlights(highlights);
     let (Some(current), Some((pending, on_reveal))) = (marks.current, marks.reveal) else { return styled.into_any_element() };
     // After the text is laid out: scroll to the current match's line.
     let layout = styled.layout().clone();
@@ -171,7 +186,15 @@ fn bubble_text(body: String, marks: Option<BubbleMarks>) -> AnyElement {
     div().relative().child(styled).child(reveal).into_any_element()
 }
 
-pub fn user_bubble(text_: &str, attachments: &[PathBuf], pastes: Vec<Stateful<Div>>, fold: Option<UserFold>, marks: Option<BubbleMarks>) -> Div {
+pub fn user_bubble(
+    id: impl Into<SharedString>,
+    text_: &str,
+    attachments: &[PathBuf],
+    pastes: Vec<Stateful<Div>>,
+    fold: Option<UserFold>,
+    marks: Option<BubbleMarks>,
+) -> Div {
+    let text_id: SharedString = format!("{}-text", id.into()).into();
     let mut bubble = div()
         .min_w_0()
         .max_w(size::USER_BUBBLE_MAX_W)
@@ -192,10 +215,10 @@ pub fn user_bubble(text_: &str, attachments: &[PathBuf], pastes: Vec<Stateful<Di
     if !text_.is_empty() {
         let body = text_.trim().to_string();
         bubble = match fold {
-            None => bubble.child(bubble_text(body, marks)),
+            None => bubble.child(bubble_text(text_id, body, marks)),
             Some((ix, open, on_toggle)) => {
                 let line = text::BODY * text::LEADING;
-                let body = bubble_text(body, marks);
+                let body = bubble_text(text_id, body, marks);
                 let text_el = if open {
                     div().child(body)
                 } else {
@@ -890,7 +913,7 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
             continue;
         }
         let el = match item {
-            TranscriptItem::User { text, attachments, images, texts, at_ms } => {
+            TranscriptItem::User { text, quote, attachments, images, texts, at_ms } => {
                 // An unfinished turn before it (no end): as it is, without a row.
                 if !turn.is_empty() {
                     out.push(div().flex().flex_col().children(std::mem::take(&mut turn)).into_any_element());
@@ -909,6 +932,7 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
                     on_open: on_open_image.clone(),
                     texts,
                     on_open_text: on_open_text.clone(),
+                    quote: quote.as_deref(),
                     ..Default::default()
                 };
                 let message = user_message(format!("pics-{key}-{ix}"), text, extras, fold, marks);
@@ -1191,7 +1215,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     };
     let work = |at: Option<u64>| {
         vec![
-            SessionEvent::UserMessage { text: "Run the tests and fix what fails".into(), attachments: vec![], images: vec![], texts: vec![], at_ms: at },
+            SessionEvent::UserMessage { text: "Run the tests and fix what fails".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: at },
             SessionEvent::TurnStarted,
             SessionEvent::AgentThought { text: "Run the suite first.".into() },
             SessionEvent::ToolCall(tool(ToolStatus::Completed, TEST_OUTPUT)),
@@ -1228,16 +1252,23 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     let (t10, t11): (ToggleHandler, ToggleHandler) = (Rc::new(|_, _, _| {}), Rc::new(|_, _, _| {}));
     vec![
         ComponentPreview::new(Area::Transcript, "Messages", "User bubble and markdown reply.").stacked().examples([
-            ex("user", Rc::new(|| user_bubble("Explain how plugin discovery works", &[], vec![], None, None))),
+            ex("user", Rc::new(|| user_bubble("pv-user", "Explain how plugin discovery works", &[], vec![], None, None))),
             ex(
                 "user with attachments",
-                Rc::new(|| user_bubble("Review these", &[PathBuf::from("Cargo.toml"), PathBuf::from("crates")], vec![], None, None)),
+                Rc::new(|| user_bubble("pv-files", "Review these", &[PathBuf::from("Cargo.toml"), PathBuf::from("crates")], vec![], None, None)),
             ),
             ex(
                 "user with images",
                 Rc::new(|| {
                     let pics = vec![super::images::sample(1600, 900), super::images::sample(1024, 1024)];
                     user_message("preview-pics", "Why does the sidebar look like this?", UserExtras { pics, ..Default::default() }, None, None)
+                }),
+            ),
+            ex(
+                "user with a quote",
+                Rc::new(|| {
+                    let quote = "The guardrail asks when it is less than 80% sure, so an \"allow at 64%\" verdict still asks you.";
+                    user_message("preview-quote", "Why 80%? Can it be lower for read-only commands?", UserExtras { quote: Some(quote), ..Default::default() }, None, None)
                 }),
             ),
             ex(
@@ -1249,15 +1280,15 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                     user_message("preview-paste", "What is failing here?", extras, None, None)
                 }),
             ),
-            ex("long, folded", Rc::new(move || user_bubble(LONG_MESSAGE, &[], vec![], Some((0, false, t10.clone())), None))),
-            ex("long, shown in full", Rc::new(move || user_bubble(LONG_MESSAGE, &[], vec![], Some((1, true, t11.clone())), None))),
+            ex("long, folded", Rc::new(move || user_bubble("pv-long-0", LONG_MESSAGE, &[], vec![], Some((0, false, t10.clone())), None))),
+            ex("long, shown in full", Rc::new(move || user_bubble("pv-long-1", LONG_MESSAGE, &[], vec![], Some((1, true, t11.clone())), None))),
             ex(
                 "user, with find matches",
                 Rc::new(|| {
                     let text_ = "Explain how plugin discovery works, and which plugin wins";
                     let ranges = super::find::find_matches(text_, "plugin");
                     let current = ranges.get(1).cloned();
-                    user_bubble(text_, &[], vec![], None, Some(BubbleMarks { ranges, current, reveal: None }))
+                    user_bubble("pv-find", text_, &[], vec![], None, Some(BubbleMarks { ranges, current, reveal: None }))
                 }),
             ),
             ex("assistant markdown", Rc::new(|| agent_message("preview-md", MARKDOWN))),

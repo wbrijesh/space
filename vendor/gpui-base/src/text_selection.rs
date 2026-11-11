@@ -1857,6 +1857,27 @@ impl WindowSelectionState {
             })
     }
 
+    /// Where the selection ends on screen: the caret box at the end of the
+    /// last participant (in document order) with painted selected text, if
+    /// that caret is in its view. `None` while dragging.
+    fn end_caret(&self) -> Option<Bounds<Pixels>> {
+        let snapshot = self.snapshot()?;
+        if snapshot.is_selecting() {
+            return None;
+        }
+        let participants = self.participants.borrow();
+        let last = participants
+            .values()
+            .filter(|p| p.registration.scope == self.active_scope && p.participant.upgrade().is_some())
+            .filter_map(|p| {
+                let (start, end) = p.registration.selection_edges?;
+                (start != end).then_some((p.document_order, end, p.registration.hitbox.bounds))
+            })
+            .max_by_key(|(order, _, _)| *order)?;
+        let (_, end, viewport) = last;
+        crate::touch_selection::caret_in_view(end, viewport).then_some(end)
+    }
+
     /// Returns the current resolved selection endpoints.
     pub fn snapshot(&self) -> Option<TextSelectionSnapshot> {
         if !self.did_hit_text {
@@ -2874,6 +2895,13 @@ impl TextSelection {
     /// has an active participant-local selection such as select-all.
     pub fn has_selection(window: &mut Window, cx: &mut App) -> bool {
         live_text_selection_state(window, cx).is_some_and(|state| state.read(cx).has_selection(cx))
+    }
+
+    /// Where the finished selection ends on screen, in window coordinates: the
+    /// caret box after its last character (Space patch). `None` without a
+    /// selection, while dragging, or when that end isn't in view.
+    pub fn end_caret(window: &Window, cx: &mut App) -> Option<Bounds<Pixels>> {
+        live_text_selection_state(window, cx).and_then(|state| state.read(cx).end_caret())
     }
 
     /// Clears window selection and every participant's local selection.

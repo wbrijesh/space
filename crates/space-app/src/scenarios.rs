@@ -55,6 +55,9 @@ pub struct ScenarioThread {
     pub draft_images: &'static [&'static str],
     /// Pinned to the top of the sidebar.
     pub pinned: bool,
+    /// Quoted by `prompt`, and in the composer.
+    pub quote: Option<&'static str>,
+    pub draft_quote: Option<&'static str>,
 }
 
 const ICON: &str = "crates/space-app/resources/AppIcon.png";
@@ -286,6 +289,19 @@ pub fn all() -> Vec<Scenario> {
             ..Default::default()
         },
         Scenario {
+            name: "quote",
+            description: "A reply to select and quote; a sent message with a quote, and one in the composer.",
+            threads: vec![
+                ScenarioThread {
+                    quote: Some("Later roots win on duplicate ids."),
+                    draft_quote: Some("Invalid manifests are reported, not fatal."),
+                    draft: Some("Where are they reported?".into()),
+                    ..done_thread("So a project plugin replaces a bundled one with the same id?", "Yes. The project's `.space/plugins` is scanned last, so its plugin replaces the bundled one, and the replaced one is logged.")
+                },
+            ],
+            ..Default::default()
+        },
+        Scenario {
             name: "long-composer",
             description: "A finished thread with a 12-line draft in the composer.",
             threads: vec![ScenarioThread { draft: Some(twelve), ..explain_thread() }],
@@ -459,7 +475,11 @@ pub fn script(scenario: &Scenario) -> StubScript {
         turns: scenario
             .threads
             .iter()
-            .filter_map(|t| t.prompt.map(|p| ScriptedTurn { prompt: p.into(), steps: t.steps.clone() }))
+            .filter_map(|t| {
+                // The agent gets the quote before the message.
+                let input = space_core::UserInput { quote: t.quote.map(Into::into), ..space_core::UserInput::text(t.prompt?) };
+                Some(ScriptedTurn { prompt: input.prompt_text(), steps: t.steps.clone() })
+            })
             .collect(),
     }
 }
@@ -547,6 +567,8 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
             images: t.images.iter().map(|p| repo.join(p)).collect(),
             draft_images: t.draft_images.iter().map(|p| repo.join(p)).collect(),
             pinned: t.pinned,
+            quote: t.quote.map(Into::into),
+            draft_quote: t.draft_quote.map(Into::into),
         })
         .collect();
     let options = Options {

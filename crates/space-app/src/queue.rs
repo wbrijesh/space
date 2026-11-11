@@ -9,15 +9,12 @@
 //! Stopping the turn sends none of them: they go back into the composer. A turn that fails keeps
 //! them, with a button to send them now.
 
-use std::path::PathBuf;
-
 use gpui::*;
 use space_core::SessionId;
 
 use crate::app::SpaceApp;
 use crate::attach::DraftImage;
-use crate::images::Prepared;
-use crate::paste::Paste;
+use crate::threads::Outgoing;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum When {
@@ -30,10 +27,7 @@ pub(crate) enum When {
 #[derive(Clone)]
 pub(crate) struct Pending {
     pub(crate) id: String,
-    pub(crate) text: String,
-    pub(crate) attachments: Vec<PathBuf>,
-    pub(crate) images: Vec<Prepared>,
-    pub(crate) pastes: Vec<Paste>,
+    pub(crate) message: Outgoing,
     pub(crate) when: When,
 }
 
@@ -49,23 +43,13 @@ pub(crate) enum PendingAction {
 
 impl SpaceApp {
     /// Queue a message for a running turn.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn queue_message(
-        &mut self,
-        key: u64,
-        when: When,
-        text: String,
-        attachments: Vec<PathBuf>,
-        images: Vec<Prepared>,
-        pastes: Vec<Paste>,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn queue_message(&mut self, key: u64, when: When, message: Outgoing, cx: &mut Context<Self>) {
         self.next_pending += 1;
         let id = format!("queued-{}", self.next_pending);
         let can_steer = self.thread(key).and_then(|t| t.session.as_ref()).is_some_and(|s| s.agent().can_steer());
         let when = if when == When::Step && can_steer { When::Step } else { When::Done };
         let Some(thread) = self.thread_mut(key) else { return };
-        thread.pending.push(Pending { id: id.clone(), text, attachments, images, pastes, when });
+        thread.pending.push(Pending { id: id.clone(), message, when });
         if when == When::Step {
             self.steer(key, &id, cx);
         }
@@ -79,10 +63,10 @@ impl SpaceApp {
         let (Some(session), Some(p)) = (thread.session.clone(), thread.pending.iter().find(|p| p.id == id).cloned()) else { return };
         let dir = crate::attach::thread_attachments_dir(Some(thread));
         cx.spawn(async move |this, cx| {
-            let (images, pastes) = (p.images.clone(), p.pastes.clone());
+            let (images, pastes) = (p.message.images.clone(), p.message.pastes.clone());
             let saved = cx.background_spawn(async move { crate::paste::save_all(&images, &pastes, &dir) }).await;
             let result = match saved {
-                Ok((images, texts)) => session.steer(p.id.clone(), p.text.clone(), p.attachments.clone(), images, texts).await,
+                Ok((images, texts)) => session.steer(p.id.clone(), p.message.input(images, texts)).await,
                 Err(e) => Err(anyhow::anyhow!("couldn't save an attachment: {e}")),
             };
             if let Err(e) = result {
@@ -153,7 +137,9 @@ impl SpaceApp {
             return;
         }
         let p = thread.pending.remove(0);
-        self.prompt(key, p.text.trim().to_string(), p.attachments, p.images, p.pastes, cx);
+        let mut message = p.message;
+        message.text = message.text.trim().to_string();
+        self.prompt(key, message, cx);
         if self.selected == Some(key) {
             self.transcript_scroll.jump_to_bottom();
         }
@@ -218,21 +204,26 @@ impl SpaceApp {
             return;
         }
         let typed = self.input.read(cx).value().trim().to_string();
-        let mut parts: Vec<String> = messages.iter().map(|p| p.text.trim().to_string()).filter(|t| !t.is_empty()).collect();
+        let mut parts: Vec<String> = messages.iter().map(|p| p.message.text.trim().to_string()).filter(|t| !t.is_empty()).collect();
         if !typed.is_empty() {
             parts.push(typed);
         }
         let text = parts.join("\n\n");
         let mut ids = Vec::new();
-        for _ in messages.iter().flat_map(|p| &p.images) {
+        for _ in messages.iter().flat_map(|p| &p.message.images) {
             self.next_image_id += 1;
             ids.push(self.next_image_id);
         }
         let Some(thread) = self.thread_mut(key) else { return };
         let mut ids = ids.into_iter();
         for p in messages {
+            let p = p.message;
             thread.attachments.extend(p.attachments);
             thread.pastes.extend(p.pastes);
+            // One quote at a time: the latest one taken back stays.
+            if p.quote.is_some() {
+                thread.quote = p.quote;
+            }
             for image in p.images {
                 thread.images.push(DraftImage::ready(ids.next().unwrap_or_default(), image));
             }

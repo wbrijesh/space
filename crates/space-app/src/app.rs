@@ -91,6 +91,9 @@ pub struct SeedThread {
     pub draft_images: Vec<PathBuf>,
     /// Dev scenarios: pinned (listed at the top of the sidebar).
     pub pinned: bool,
+    /// Dev scenarios: a quote sent with `prompt`, and one in the composer.
+    pub quote: Option<String>,
+    pub draft_quote: Option<String>,
 }
 
 /// What the process opens.
@@ -355,6 +358,9 @@ pub struct SpaceApp {
     pub(crate) paste_view: Option<(SharedString, u64)>,
     /// The quit alert is up (a second ⌘Q doesn't open another).
     pub(crate) asking_to_quit: bool,
+    /// A finished selection in the transcript that can be quoted: its thread and text.
+    pub(crate) quote_offer: Option<(u64, String)>,
+    pub(crate) transcript_area: crate::quote::Area,
     /// The Trajectory tab: which threads show it, the shown one's data, the search field.
     pub(crate) trajectories: crate::trajectory::Trajectories,
     /// The message row that shows "Copied" for a moment, and the one whose usage panel is open.
@@ -580,6 +586,8 @@ impl SpaceApp {
             viewer_focus: cx.focus_handle(),
             paste_view: None,
             asking_to_quit: false,
+            quote_offer: None,
+            transcript_area: Default::default(),
             next_image_id: 0,
             copied: None,
             stream_reveal: Default::default(),
@@ -801,7 +809,7 @@ impl SpaceApp {
             // A new thread left untouched (nothing typed, attached or open in a terminal) goes:
             // it isn't listed, so nothing would lead back to it.
             if let Some(prev) = left
-                && self.thread(prev).is_some_and(|t| t.is_empty() && t.draft.trim().is_empty() && t.attachments.is_empty() && t.images.is_empty() && t.pastes.is_empty())
+                && self.thread(prev).is_some_and(|t| t.is_empty() && t.draft.trim().is_empty() && t.attachments.is_empty() && t.images.is_empty() && t.pastes.is_empty() && t.quote.is_none())
                 && !self.has_terminals(prev)
             {
                 self.drop_thread(prev, cx);

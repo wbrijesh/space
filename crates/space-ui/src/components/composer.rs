@@ -20,6 +20,7 @@ use space_core::protocol::{ConfigureSession, SpaceStatus};
 
 use super::images::draft_thumb;
 use super::pastes::{Handler as ChipHandler, paste_chip};
+use super::quote::composer_quote;
 use super::loaders::ContextRing;
 use super::model_picker::{PaneHandler, PickerPane, model_picker};
 use super::trajectory::duration_label;
@@ -103,6 +104,8 @@ pub struct ComposerHandlers {
     /// A pasted text's chip was clicked (open it) or its × (remove it).
     pub on_open_paste: IndexHandler,
     pub on_remove_paste: IndexHandler,
+    /// The quote's × was clicked.
+    pub on_remove_quote: Handler,
     /// Files dropped on the card.
     pub on_drop: PathsHandler,
     pub on_paste: PasteHandler,
@@ -156,6 +159,7 @@ impl Default for ComposerHandlers {
             on_remove_image: Rc::new(|_, _, _| {}),
             on_open_paste: Rc::new(|_, _, _| {}),
             on_remove_paste: Rc::new(|_, _, _| {}),
+            on_remove_quote: Rc::new(|_, _| {}),
             on_drop: Rc::new(|_, _, _| {}),
             on_paste: Rc::new(|_, _, _| false),
             on_context: Rc::new(|_, _, _| {}),
@@ -262,6 +266,8 @@ pub struct Composer {
     images: Vec<Option<ImageSource>>,
     /// Long pastes, by their length in characters.
     pastes: Vec<u64>,
+    /// Text quoted from the transcript.
+    quote: Option<SharedString>,
     controls: Option<ComposerControls>,
     handlers: ComposerHandlers,
     /// Messages waiting for the agent.
@@ -281,6 +287,7 @@ impl Composer {
             attachments: Vec::new(),
             images: Vec::new(),
             pastes: Vec::new(),
+            quote: None,
             controls: None,
             handlers: ComposerHandlers::default(),
             queued_messages: Vec::new(),
@@ -323,6 +330,11 @@ impl Composer {
         self
     }
 
+    pub fn quote(mut self, quote: Option<SharedString>) -> Self {
+        self.quote = quote;
+        self
+    }
+
     pub fn controls(mut self, controls: ComposerControls) -> Self {
         self.controls = Some(controls);
         self
@@ -336,12 +348,12 @@ impl Composer {
 
 impl RenderOnce for Composer {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let Self { id, input, running, queued, attachments, images, pastes, controls, handlers: h, queued_messages, after_step } = self;
+        let Self { id, input, running, queued, attachments, images, pastes, quote, controls, handlers: h, queued_messages, after_step } = self;
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
         let has_text = !input.read(cx).value().trim().is_empty();
         let blocker = controls.as_ref().and_then(|c| c.blocker.clone());
         let preparing = images.iter().any(Option::is_none);
-        let has_content = has_text || !attachments.is_empty() || !images.is_empty() || !pastes.is_empty();
+        let has_content = has_text || !attachments.is_empty() || !images.is_empty() || !pastes.is_empty() || quote.is_some();
         let can_send = has_content
             && !running
             && !queued
@@ -537,6 +549,7 @@ impl RenderOnce for Composer {
                 let drop = h.on_drop.clone();
                 move |paths: &ExternalPaths, w, cx| drop(paths.paths().to_vec(), w, cx)
             })
+            .children(quote.map(|q| composer_quote(&q, h.on_remove_quote.clone())))
             .children(thumbs)
             .children(chips)
             .child(body);
@@ -1152,6 +1165,13 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 c.attachments(vec![PathBuf::from("Cargo.toml"), PathBuf::from("README.md")])
             }),
             example("pasted text", "What is failing here?", |c| c.pastes(vec![5_230])),
+            example("quote", "Why 80%?", |c| {
+                c.quote(Some(
+                    "The guardrail asks when it is less than 80% sure, so an \"allow at 64%\" verdict still asks you. \
+                     Raising the folder from / to the project made it confident again."
+                        .into(),
+                ))
+            }),
             example("agent starting (locked)", "", |c| c.queued(true).controls(fixtures::controls(0, true))),
             example("read only", "Why does the composer flicker when it grows?", |c| {
                 c.controls(fixtures::with_mode(fixtures::controls(18_200, false), "read-only", true))

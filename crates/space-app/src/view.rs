@@ -114,6 +114,15 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
     div()
         .id("space-root")
         .key_context("Space")
+        // A press, release or scroll may start, finish, clear or move a selection to quote.
+        .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, w, cx| this.refresh_quote_offer(w, cx)))
+        .capture_any_mouse_up(cx.listener(|this, _: &MouseUpEvent, w, cx| this.refresh_quote_offer(w, cx)))
+        .on_scroll(cx.listener(|this, _: &ScrollEvent, w, cx| {
+            if this.quote_offer.is_some() {
+                this.refresh_quote_offer(w, cx);
+                cx.notify();
+            }
+        }))
         // Focus sink: a click on anything non-focusable lands here and blurs the composer.
         .track_focus(&app.focus)
         .on_action(cx.listener(|this, _: &NewThread, window, cx| this.new_thread(None, window, cx)))
@@ -231,6 +240,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .child(main)
         .child(nav.overlay(shown))
         .child(space_ui::components::tip::layer(window, cx))
+        .children(app.quote_button(window, cx))
         .children(app.paste_view.as_ref().map(|(body, chars)| {
             space_ui::components::pastes::text_view(body.clone(), *chars, &app.viewer_focus, handler(cx, |this, w, cx| this.close_paste_view(w, cx)))
         }))
@@ -488,6 +498,7 @@ fn body(app: &SpaceApp, streaming: Option<(usize, usize)>, window: &mut Window, 
                 attachments: q.attachments.as_slice(),
                 pics: q.images.iter().map(queued_pic).collect(),
                 unsaved_texts: q.pastes.iter().map(|p| p.chars).collect(),
+                quote: q.quote.as_deref(),
                 ..Default::default()
             };
             (q.text.as_str(), extras)
@@ -575,7 +586,10 @@ fn body(app: &SpaceApp, streaming: Option<(usize, usize)>, window: &mut Window, 
         };
         div().absolute().top_2().right_4().child(find_bar(&f.input, f.count(cx), on_step, on_close))
     });
-    let transcript = div().relative().flex_1().min_h_0().flex().flex_col().child(transcript).children(find_bar);
+    // Where a selection must end to be quoted.
+    let area = app.transcript_area.clone();
+    let measure = canvas(move |bounds, _, _| area.set(Some(bounds)), |_, _, _, _| {}).absolute().size_full();
+    let transcript = div().relative().flex_1().min_h_0().flex().flex_col().child(measure).child(transcript).children(find_bar);
 
     div().flex_1().min_h_0().flex().flex_col().children(tabs).child(transcript).child(bottom).into_any_element()
 }
@@ -1006,6 +1020,7 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
                 let _ = this.update(cx, |this, cx| this.remove_paste(ix, cx));
             })
         },
+        on_remove_quote: handler(cx, |this, _, cx| this.remove_quote(cx)),
         on_drop: {
             let this = cx.entity().downgrade();
             Rc::new(move |paths, _: &mut Window, cx: &mut App| {
@@ -1044,6 +1059,7 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         && thread.attachments.is_empty()
         && thread.images.is_empty()
         && thread.pastes.is_empty()
+        && thread.quote.is_none()
         && app.input.read(cx).value().trim().is_empty();
     let now = crate::app::now_ms();
     let resumable = if untouched {
@@ -1071,9 +1087,9 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         .pending
         .iter()
         .map(|p| space_ui::components::composer::QueuedView {
-            text: p.text.clone().into(),
+            text: p.message.text.clone().into(),
             after_step: p.when == crate::queue::When::Step,
-            extras: p.attachments.len() + p.images.len() + p.pastes.len(),
+            extras: p.message.attachments.len() + p.message.images.len() + p.message.pastes.len() + usize::from(p.message.quote.is_some()),
         })
         .collect();
     Composer::new("composer", &app.input)
@@ -1084,6 +1100,7 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         .attachments(thread.attachments.clone())
         .images(thread.images.iter().map(|i| i.pic().map(|p| p.src)).collect())
         .pastes(thread.pastes.iter().map(|p| p.chars).collect())
+        .quote(thread.quote.clone().map(Into::into))
         .controls(ComposerControls {
             cwd: thread.cwd.clone(),
             dirs: app.recent_dirs(),

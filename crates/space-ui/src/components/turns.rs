@@ -203,7 +203,7 @@ mod tests {
     use super::{StreamReveal, completed_label, folds_away, foldable_turns, short_span};
 
     fn user(at: Option<u64>) -> TranscriptItem {
-        TranscriptItem::User { text: "do it".into(), attachments: vec![], images: vec![], texts: vec![], at_ms: at }
+        TranscriptItem::User { text: "do it".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: at }
     }
     fn tool() -> TranscriptItem {
         TranscriptItem::Tool(ToolCallInfo {

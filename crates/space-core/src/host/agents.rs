@@ -25,7 +25,7 @@ use super::{Host, HostEvent, HostInner, PluginStatus, Refused, check_protocol, e
 use crate::{convert, now_ms};
 use crate::discovery::DiscoveredPlugin;
 use crate::process::{self, PluginProcess};
-use crate::session::{ImageRef, TextRef, PermissionDecision, PermissionOption, PermissionRequest, SessionEvent, SessionId, ToolCallPatch};
+use crate::session::{TextRef, UserInput, PermissionDecision, PermissionOption, PermissionRequest, SessionEvent, SessionId, ToolCallPatch};
 
 type Conn = acp::v1::ConnectionTo<Agent>;
 
@@ -66,10 +66,7 @@ pub(super) struct Shared {
 /// A steering message the agent hasn't handed to the model yet.
 struct PendingSteer {
     id: String,
-    text: String,
-    attachments: Vec<PathBuf>,
-    images: Vec<ImageRef>,
-    texts: Vec<TextRef>,
+    input: UserInput,
 }
 
 struct PendingPermission {
@@ -87,20 +84,20 @@ impl Shared {
             at.map(|i| list.remove(i))
         };
         let Some(p) = pending else { return };
-        let (host, id) = (&self.host, &steered.session_id);
+        let (host, id, input) = (&self.host, &steered.session_id, p.input);
+        let text = input.prompt_text();
         if host.tracing() {
             let path = |p: &PathBuf| p.display().to_string();
             let prompt = TraceEvent::Prompt {
                 at: now_ms(),
-                text: p.text.clone(),
-                files: p.attachments.iter().chain(p.texts.iter().map(|t| &t.path)).map(path).collect(),
-                images: p.images.iter().map(|i| path(&i.path)).collect(),
+                text: text.clone(),
+                files: input.attachments.iter().chain(input.texts.iter().map(|t| &t.path)).map(path).collect(),
+                images: input.images.iter().map(|i| path(&i.path)).collect(),
             };
             host.trace(id, vec![prompt]);
         }
-        host.record(id, HistoryItem::User { text: p.text.clone() });
-        let message = SessionEvent::UserMessage { text: p.text, attachments: p.attachments, images: p.images, texts: p.texts, at_ms: Some(now_ms()) };
-        host.emit_session(id, message);
+        host.record(id, HistoryItem::User { text });
+        host.emit_session(id, input.into_message(Some(now_ms())));
         host.emit(HostEvent::Steered { session_id: steered.session_id, steer_id: steered.id });
     }
 
@@ -586,7 +583,7 @@ impl Session {
     /// Send a text prompt and wait for the turn to end. Streams progress as
     /// [`HostEvent::Session`] events. Returns the ACP stop reason (`end_turn`, `cancelled`, ...).
     pub async fn prompt(&self, text: impl Into<String>) -> Result<String> {
-        self.prompt_with(text, Vec::new(), Vec::new(), Vec::new()).await
+        self.prompt_with(UserInput::text(text)).await
     }
 
     /// Like [`Session::prompt`], with files attached as ACP `resource_link` content blocks
@@ -594,9 +591,10 @@ impl Session {
     /// image blocks (the saved file's bytes, and its `file://` URI). Images need an agent that
     /// takes them ([`AgentHandle::accepts_images`]). `texts` (long pastes) go inline as ACP
     /// embedded resources, or as `resource_link`s to their files for an agent that doesn't take
-    /// embedded context.
-    pub async fn prompt_with(&self, text: impl Into<String>, attachments: Vec<PathBuf>, images: Vec<ImageRef>, texts: Vec<TextRef>) -> Result<String> {
-        let text = text.into();
+    /// embedded context. A quote goes before the text as a markdown blockquote.
+    pub async fn prompt_with(&self, input: UserInput) -> Result<String> {
+        let text = input.prompt_text();
+        let (attachments, images, texts) = (input.attachments.clone(), input.images.clone(), input.texts.clone());
         if !images.is_empty() && !self.inner.agent.accepts_images() {
             bail!("this agent can't read images");
         }
@@ -626,8 +624,7 @@ impl Session {
             };
             host.trace(&id, vec![prompt]);
         }
-        let message = SessionEvent::UserMessage { text: text.clone(), attachments: attachments.clone(), images, texts, at_ms: Some(now_ms()) };
-        host.emit_session(&id, message);
+        host.emit_session(&id, input.into_message(Some(now_ms())));
         host.emit_session(&id, SessionEvent::TurnStarted);
         host.record(&id, HistoryItem::User { text: text.clone() });
 
@@ -699,7 +696,8 @@ impl Session {
     /// `_space/session/steer`: a message for the running turn, delivered after its current step
     /// (needs [`AgentHandle::can_steer`]). Returns once the agent has it; when the agent hands it
     /// to the model it joins the transcript and [`HostEvent::Steered`] says so.
-    pub async fn steer(&self, id: String, text: String, attachments: Vec<PathBuf>, images: Vec<ImageRef>, texts: Vec<TextRef>) -> Result<()> {
+    pub async fn steer(&self, id: String, input: UserInput) -> Result<()> {
+        let UserInput { attachments, images, texts, .. } = &input;
         if !self.inner.agent.can_steer() {
             bail!("this agent can't take messages during a turn");
         }
@@ -723,13 +721,13 @@ impl Session {
         let request = SteerSession {
             session_id: self.inner.id.clone(),
             id: id.clone(),
-            text: text.clone(),
+            text: input.prompt_text(),
             images: blocks,
             texts: steer_texts,
             attachments: attachments.iter().map(|p| format!("file://{}", p.display())).collect(),
         };
         let shared = self.inner.agent.inner.shared.clone();
-        shared.steers.lock().unwrap().entry(self.inner.id.clone()).or_default().push(PendingSteer { id: id.clone(), text, attachments, images, texts });
+        shared.steers.lock().unwrap().entry(self.inner.id.clone()).or_default().push(PendingSteer { id: id.clone(), input });
         let agent = self.inner.agent.clone();
         let result = shared
             .host

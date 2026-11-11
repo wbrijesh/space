@@ -10,6 +10,8 @@
 //! move 120 300        move the mouse to window coordinates (logical px)
 //! click 120 300       move + left mouse down + up
 //! rclick 120 300      the same with the right button (context menus)
+//! drag 100 300 400 300  press at the first point, move to the second (frame by frame), release
+//! quote               print the composer's quote, what the Quote button would quote, and the selection
 //! scroll 400 300 -120 trackpad scroll at (400, 300) moving the view 120 px (negative: up)
 //! key cmd-n           dispatch a keystroke
 //! type some text      type text into the focused element
@@ -96,6 +98,50 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                         window.refresh();
                     });
                     cx.background_executor().timer(Duration::from_millis(16)).await;
+                }
+                "drag" => {
+                    let (from, to) = (point(px(num(0)), px(num(1))), point(px(num(2)), px(num(3))));
+                    let input = |e: PlatformInput| {
+                        move |window: &mut Window, cx: &mut App| {
+                            window.dispatch_event(e, cx);
+                            window.refresh();
+                        }
+                    };
+                    let left = MouseButton::Left;
+                    let none = Modifiers::default();
+                    let mut events = vec![
+                        PlatformInput::MouseMove(MouseMoveEvent { position: from, pressed_button: None, modifiers: none }),
+                        PlatformInput::MouseDown(MouseDownEvent { button: left, position: from, modifiers: none, click_count: 1, first_mouse: false }),
+                    ];
+                    for i in 1..=8 {
+                        let position = from + (to - from) * (i as f32 / 8.);
+                        events.push(PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: Some(left), modifiers: none }));
+                    }
+                    events.push(PlatformInput::MouseUp(MouseUpEvent { button: left, position: to, modifiers: none, click_count: 1 }));
+                    for e in events {
+                        let _ = window.update(cx, |_, window, cx| input(e)(window, cx));
+                        cx.background_executor().timer(Duration::from_millis(20)).await;
+                    }
+                }
+                "selectable" => {
+                    let at = point(px(num(0)), px(num(1)));
+                    let _ = window.update(cx, |_, window, cx| {
+                        eprintln!("script: selectable {:?} = {}", at, gpui::base::TextSelection::is_selectable_at(at, window, cx));
+                    });
+                }
+                "quote" => {
+                    let _ = window.update(cx, |root, _, cx| {
+                        let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
+                        if let Some(app) = app {
+                            let app = app.read(cx);
+                            let draft = app.selected.and_then(|k| app.thread(k)).and_then(|t| t.quote.clone());
+                            eprintln!("script: quote draft={draft:?} offer={:?}", app.quote_offer.as_ref().map(|(_, t)| t));
+                        }
+                    });
+                    let _ = window.update(cx, |_, window, cx| {
+                        let end = gpui::base::TextSelection::end_caret(window, cx);
+                        eprintln!("script: selection {:?} end={end:?}", gpui::base::TextSelection::selected_text(window, cx));
+                    });
                 }
                 "scroll" => {
                     let position = point(px(num(0)), px(num(1)));

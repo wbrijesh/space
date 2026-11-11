@@ -52,4 +52,8 @@ Footnotes, in `src/text/format/markdown.rs` (`footnote_label`): a numbered footn
 reference and note read as superscript digits ("claim¹", "¹ The source") instead of italic
 "[1]"; other labels keep their brackets. Test: `footnotes_are_superscript_numbers`.
 
+Selection end, in `src/text_selection.rs`: `TextSelection::end_caret` returns where a finished
+selection ends on screen (the caret box after its last character, from the edges participants
+paint for touch handles), so the app can float a button there.
+
 To update gpui-base, copy the new version here and re-apply these changes.
