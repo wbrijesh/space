@@ -42,6 +42,7 @@ mod terminal;
 mod terminal_view;
 mod text_prompt;
 mod paste;
+mod open_in;
 mod pin;
 mod quote;
 mod rename;

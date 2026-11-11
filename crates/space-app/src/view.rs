@@ -96,6 +96,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         app.current().map(|t| t.title()).unwrap_or_default()
     })
     .sidebar(shown, nav.clone())
+    .when_some((!app.show_settings).then(|| app.open_in_view(cx)).flatten(), |b, o| b.open_in(o))
     .when(!app.show_settings && app.host.has_terminal(), |b| {
         b.terminal(terminal_open, click(cx, |this, w, cx| this.toggle_terminal(w, cx)))
     });
@@ -129,6 +130,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &CloseThread, window, cx| this.close_current_thread(window, cx)))
         .on_action(cx.listener(|this, _: &RenameThread, window, cx| this.rename_current_thread(window, cx)))
         .on_action(cx.listener(|this, _: &TogglePinThread, _, cx| this.toggle_pin_current(cx)))
+        .on_action(cx.listener(|this, _: &space_ui::actions::OpenInLastApp, _, cx| this.open_thread_folder(None, cx)))
         .on_action(cx.listener(|this, _: &NextThread, window, cx| this.step_thread(1, window, cx)))
         .on_action(cx.listener(|this, _: &PreviousThread, window, cx| this.step_thread(-1, window, cx)))
         .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))

@@ -38,6 +38,8 @@ cask clears macOS's download mark so it opens normally.
   closed.
 - **Folders.** Each thread works in one folder, picked under the composer before its first message.
   Opened from Spotlight or the Dock, Space starts where you worked last.
+- **Open in** (title bar, right): opens the thread's folder in the app you used last; the chevron
+  lists the editors, Finder and terminals installed, and Copy Path.
 - **Terminals** belong to a thread and start in its folder; they keep running while hidden.
 - **Trajectory** shows every model request and tool call of a thread
   ([plugins/trajectory](plugins/trajectory/README.md)).

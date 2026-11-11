@@ -358,6 +358,10 @@ pub struct SpaceApp {
     pub(crate) paste_view: Option<(SharedString, u64)>,
     /// The quit alert is up (a second ⌘Q doesn't open another).
     pub(crate) asking_to_quit: bool,
+    /// "Open in": the known apps installed, their icons, and whether its menu is open.
+    pub(crate) open_in_apps: Vec<crate::open_in::Installed>,
+    pub(crate) open_in_icons: crate::open_in::Icons,
+    pub(crate) open_in_menu: bool,
     /// A finished selection in the transcript that can be quoted: its thread and text.
     pub(crate) quote_offer: Option<(u64, String)>,
     pub(crate) transcript_area: crate::quote::Area,
@@ -586,6 +590,9 @@ impl SpaceApp {
             viewer_focus: cx.focus_handle(),
             paste_view: None,
             asking_to_quit: false,
+            open_in_apps: Vec::new(),
+            open_in_icons: Default::default(),
+            open_in_menu: false,
             quote_offer: None,
             transcript_area: Default::default(),
             next_image_id: 0,
@@ -627,6 +634,7 @@ impl SpaceApp {
         };
         this.watch_agent_idle(cx);
         this.watch_midnight(cx);
+        this.refresh_open_in(cx);
         #[cfg(feature = "dev")]
         crate::reload::start(cx);
         this.seed_threads(options.seed, options.select, window, cx);

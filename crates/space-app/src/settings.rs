@@ -29,6 +29,8 @@ pub struct Settings {
     pub new_threads: NewThreads,
     pub threads: Threads,
     pub plugins: Plugins,
+    /// The app "Open in" used last (a bundle id); Finder when unset or uninstalled.
+    pub open_in: Option<String>,
     /// Older files: the alerts switches, before they were the alerts plugin's settings. Moved
     /// there on load, and no longer written.
     #[serde(skip_serializing)]

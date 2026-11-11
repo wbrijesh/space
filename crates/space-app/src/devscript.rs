@@ -195,8 +195,12 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                         let path = std::path::Path::new(&dir).join(format!("{name}.png"));
                         match number {
                             Some(n) => {
-                                let ok = std::process::Command::new("screencapture").args(["-x", "-o", "-l", &n.to_string()]).arg(&path).status();
-                                eprintln!("script: shot {} ({})", path.display(), if ok.is_ok_and(|s| s.success()) { "ok" } else { "failed" });
+                                let out = std::process::Command::new("screencapture").args(["-x", "-o", "-l", &n.to_string()]).arg(&path).output();
+                                match out {
+                                    Ok(o) if o.status.success() => eprintln!("script: shot {}", path.display()),
+                                    Ok(o) => eprintln!("script: shot failed: {}", String::from_utf8_lossy(&o.stderr).trim()),
+                                    Err(e) => eprintln!("script: shot failed: {e}"),
+                                }
                             }
                             None => eprintln!("script: shot: no native window"),
                         }

@@ -7,6 +7,7 @@ gpui::actions!(
         CloseThread,
         RenameThread,
         TogglePinThread,
+        OpenInLastApp,
         NextThread,
         PreviousThread,
         ToggleSidebar,

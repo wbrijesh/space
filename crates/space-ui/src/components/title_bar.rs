@@ -172,11 +172,19 @@ pub struct MainTitleBar {
     sidebar: f32,
     /// The terminal button: whether the pane is open, and the toggle.
     terminal: Option<(bool, ClickHandler)>,
+    /// Open the thread's folder in an app.
+    open_in: Option<super::open_in::OpenIn>,
 }
 
 impl MainTitleBar {
     pub fn new(title: impl Into<SharedString>) -> Self {
-        Self { title: title.into(), nav: None, sidebar: 1., terminal: None }
+        Self { title: title.into(), nav: None, sidebar: 1., terminal: None, open_in: None }
+    }
+
+    /// The "Open in" control at the right, left of the terminal button.
+    pub fn open_in(mut self, open_in: super::open_in::OpenIn) -> Self {
+        self.open_in = Some(open_in);
+        self
     }
 
     /// A terminal button at the right (filled while the pane is open).
@@ -219,6 +227,7 @@ impl RenderOnce for MainTitleBar {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(self.title),
             )
+            .when_some(self.open_in, |d, o| d.child(div().mr_1().child(super::open_in::open_in_control(o))))
             .when_some(self.terminal, |d, (open, toggle)| {
                 d.child(
                     icon_button("toggle-terminal", Lucide::SquareTerminal, true, open)
@@ -253,6 +262,22 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                         .child(div().flex_1().child(MainTitleBar::new(title).sidebar(1., nav.clone())))
                         .child(nav.overlay(1.))
                         .into_any_element()
+                })
+                .width(px(900.)),
+            )
+            .example(
+                Example::new("open in", move |_, _| {
+                    let nav = TitleBarNav::inert(false, true, true);
+                    let bar = MainTitleBar::new(title).sidebar(0., nav.clone()).open_in(super::open_in::fixture()).terminal(false, Rc::new(|_, _, _| {}));
+                    div().relative().child(bar).child(nav.overlay(0.)).into_any_element()
+                })
+                .width(px(900.)),
+            )
+            .example(
+                Example::new("open in, menu", move |_, _| {
+                    let o = super::open_in::fixture();
+                    let menu = super::open_in::open_in_menu(&o.apps, o.on_pick.clone(), o.on_copy_path.clone());
+                    div().flex().justify_end().child(menu).into_any_element()
                 })
                 .width(px(900.)),
             )

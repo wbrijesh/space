@@ -180,7 +180,7 @@ fn to_srgb8(image: &CGImage) -> Option<(CFRetained<CGImage>, bool)> {
 }
 
 /// PNG, or JPEG at [`JPEG_QUALITY`]. Only the quality is passed, so no metadata is written.
-fn encode(image: &CGImage, png: bool) -> Option<Vec<u8>> {
+pub(crate) fn encode(image: &CGImage, png: bool) -> Option<Vec<u8>> {
     let data = CFMutableData::new(None, 0)?;
     let kind = CFString::from_static_str(if png { "public.png" } else { "public.jpeg" });
     let dest = unsafe { CGImageDestination::with_data(&data, &kind, 1, None) }?;

@@ -59,6 +59,18 @@ pub fn popover(right: bool, menu: Div, close: impl Fn(&mut Window, &mut App) + '
     ))
 }
 
+/// `menu` below its trigger (add as the trigger's child), as [`popover`] does above it: for
+/// menus that drop from the title bar.
+pub fn dropdown(right: bool, menu: Div, close: impl Fn(&mut Window, &mut App) + 'static) -> Div {
+    let anchor = if right { Anchor::TopRight } else { Anchor::TopLeft };
+    div().absolute().bottom_0().map(|d| if right { d.right_0() } else { d.left_0() }).child(deferred(
+        anchored()
+            .anchor(anchor)
+            .snap_to_window_with_margin(px(8.))
+            .child(div().pt_1p5().child(menu.on_mouse_down_out(move |_, w, cx| close(w, cx)))),
+    ))
+}
+
 /// The menu's card. It occludes what's under it, so hovering or clicking it never reaches
 /// the rows or buttons behind (a menu floats over them).
 pub fn surface() -> Div {
