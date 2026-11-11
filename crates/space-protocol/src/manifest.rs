@@ -41,6 +41,8 @@ pub const EVENT_SESSION_CREATED: &str = "session/created";
 pub const EVENT_TURN_STARTED: &str = "turn/started";
 pub const EVENT_TURN_ENDED: &str = "turn/ended";
 pub const EVENT_TOOL_HELD: &str = "tool/held";
+/// The user is asked to approve a tool call (an approval card).
+pub const EVENT_PERMISSION_REQUESTED: &str = "permission/requested";
 pub const EVENT_TOOL_RESULT: &str = "tool/result";
 pub const EVENT_THREAD_TITLED: &str = "thread/titled";
 /// A thread was deleted (a plugin that keeps files per thread removes them).
@@ -53,6 +55,7 @@ pub const EVENTS: &[&str] = &[
     EVENT_TURN_STARTED,
     EVENT_TURN_ENDED,
     EVENT_TOOL_HELD,
+    EVENT_PERMISSION_REQUESTED,
     EVENT_TOOL_RESULT,
     EVENT_THREAD_TITLED,
     EVENT_THREAD_DELETED,

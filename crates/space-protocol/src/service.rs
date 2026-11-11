@@ -214,6 +214,16 @@ pub enum Observed {
     /// A tool call waits because a guard can't decide right now, and why.
     #[serde(rename = "tool/held")]
     ToolHeld { session_id: String, call_id: String, reason: String, watching: bool },
+    /// The user is asked to approve a tool call: the agent asked, or a guard wants the user to
+    /// decide. `reason`: the guard's, which can quote the call (only with `read:transcript`).
+    #[serde(rename = "permission/requested")]
+    PermissionRequested {
+        session_id: String,
+        call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        watching: bool,
+    },
     /// A tool call finished.
     #[serde(rename = "tool/result")]
     ToolResult {
@@ -244,6 +254,7 @@ impl Observed {
             Observed::TurnStarted { .. } => EVENT_TURN_STARTED,
             Observed::TurnEnded { .. } => EVENT_TURN_ENDED,
             Observed::ToolHeld { .. } => EVENT_TOOL_HELD,
+            Observed::PermissionRequested { .. } => EVENT_PERMISSION_REQUESTED,
             Observed::ToolResult { .. } => EVENT_TOOL_RESULT,
             Observed::ThreadTitled { .. } => EVENT_THREAD_TITLED,
             Observed::ThreadDeleted { .. } => EVENT_THREAD_DELETED,
@@ -257,6 +268,9 @@ impl Observed {
                 Observed::ToolResult { session_id, call_id, failed, output: None }
             }
             Observed::ThreadTitled { session_id, .. } => Observed::ThreadTitled { session_id, title: None },
+            Observed::PermissionRequested { session_id, call_id, watching, .. } => {
+                Observed::PermissionRequested { session_id, call_id, reason: None, watching }
+            }
             other => other,
         }
     }

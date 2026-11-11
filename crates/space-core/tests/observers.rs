@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
-use space_core::{DiscoveryOptions, EventReceiver, Host, HostEvent, HostOptions, Secrets, SessionEvent};
+use space_core::{DiscoveryOptions, EventReceiver, Host, HostEvent, HostOptions, PermissionDecision, Secrets, SessionEvent};
 
 const STUB: &str = env!("CARGO_BIN_EXE_space-stub-agent");
 const GUARD: &str = env!("CARGO_BIN_EXE_space-stub-guard");
@@ -99,6 +99,43 @@ async fn observers_are_told_what_they_observe_in_order() {
     // The tool's output is transcript: only with `read:transcript`.
     assert!(seen["all"][2]["output"].as_str().is_some_and(|o| o.contains("echo stub")), "{:?}", seen["all"][2]);
     assert!(seen["plain"][0].get("output").is_none(), "{:?}", seen["plain"][0]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn observers_are_told_of_approval_cards() {
+    let ask = r#"{"decision":"ask","reason":"Unsure about {tool}"}"#;
+    let root = root(&[
+        ("guard", "hooks=[{event='tools/pre-execute', order=10}]", ask),
+        ("reader", "observes=['permission/requested']\nuses=['read:transcript']", "{}"),
+        ("plain", "observes=['permission/requested']", "{}"),
+    ]);
+    let (host, mut events) = host(root.path());
+    host.start_services().await;
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.new_session(root.path()).await.unwrap();
+    let s = session.clone();
+    let turn = tokio::spawn(async move { s.prompt("hello").await });
+
+    let mut seen: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut request = None;
+    while request.is_none() || seen.len() < 2 {
+        let e = next(&mut events, |e| observed(e).is_some() || matches!(e, HostEvent::Session { event: SessionEvent::PermissionRequested(_), .. })).await;
+        match (&e, observed(&e)) {
+            (_, Some((id, event))) => drop(seen.insert(id, event)),
+            (HostEvent::Session { event: SessionEvent::PermissionRequested(req), .. }, _) => request = Some(req.request_id),
+            _ => {}
+        }
+    }
+    for id in ["reader", "plain"] {
+        let event = &seen[id];
+        assert_eq!((event["event"].as_str(), event["sessionId"].as_str(), event["watching"].as_bool()), (Some("permission/requested"), Some(session.id()), Some(false)));
+    }
+    // The guard's reason can quote the call: only with `read:transcript`.
+    assert_eq!(seen["reader"]["reason"], "Unsure about bash");
+    assert!(seen["plain"].get("reason").is_none(), "{:?}", seen["plain"]);
+
+    session.resolve_permission(request.unwrap(), PermissionDecision::Selected("allow".into())).unwrap();
+    assert_eq!(turn.await.unwrap().unwrap(), "end_turn");
 }
 
 #[tokio::test(flavor = "multi_thread")]

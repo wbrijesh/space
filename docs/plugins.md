@@ -50,7 +50,8 @@ stops while none runs. Without a provider it isn't started, and Settings says wh
 Declare everything else your plugin needs. Nothing undeclared is delivered or allowed:
 - `observes = ["turn/ended"]`: events you're told about (`events/observe`; `observe` in Rust):
   `session/created`, `turn/started`, `turn/ended` (with `stopReason` and whether the user is
-  `watching` the thread), `tool/held` (a guard can't decide; the reason), `tool/result`,
+  `watching` the thread), `tool/held` (a guard can't decide; the reason), `permission/requested`
+  (an approval card; the guard's reason with `read:transcript`), `tool/result`,
   `thread/titled` (generated or renamed) and `thread/deleted`. `trace` (every model request and tool
   call, as `trace/record` batches; needs `read:trace`) is observed the same way but never dropped. They come one at a time, in order, and nothing waits on you; fall too far behind
   and your own newest events are dropped.

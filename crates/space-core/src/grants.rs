@@ -139,6 +139,7 @@ pub fn describe(permission: &str) -> String {
         ("observes", manifest::EVENT_TURN_STARTED) => "Is told when the agent starts working",
         ("observes", manifest::EVENT_TURN_ENDED) => "Is told when the agent finishes",
         ("observes", manifest::EVENT_TOOL_HELD) => "Is told when a tool call waits for a guard",
+        ("observes", manifest::EVENT_PERMISSION_REQUESTED) => "Is told when a tool call needs your approval",
         ("observes", manifest::EVENT_TOOL_RESULT) => "Is told which tools ran and how they ended",
         ("observes", manifest::EVENT_THREAD_TITLED) => "Is told when a thread gets its title",
         ("observes", manifest::EVENT_THREAD_DELETED) => "Is told when a thread is deleted",

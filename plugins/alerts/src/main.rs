@@ -1,7 +1,7 @@
-//! `space-alerts`: tells you when an agent finishes or pauses. A notification when you're not
-//! looking at the thread (with the sound unless it's off), the sound alone when you are. A
-//! tool call waiting for a guard alerts once per turn. Each of the two can be turned off in
-//! Settings.
+//! `space-alerts`: tells you when an agent finishes, pauses or needs your approval. A
+//! notification when you're not looking at the thread (with the sound unless it's off), the
+//! sound alone when you are. A tool call waiting for a guard alerts once per turn; each approval
+//! card alerts. Each of the two can be turned off in Settings.
 //!
 //! It only decides; Space posts the notification (`host/notify`), so clicking it opens the
 //! thread, and when Space can't post notifications only the sound plays.
@@ -54,6 +54,8 @@ fn alert(event: &Observed, prefs: Prefs, paused: &mut HashSet<String>) -> Option
             }
             (session_id, format!("Paused: {}", reason.trim_end_matches('.')), *watching)
         }
+        // Each card waits for you, so each one alerts.
+        Observed::PermissionRequested { session_id, watching, .. } => (session_id, "Needs your approval".to_string(), *watching),
         _ => return None,
     };
     let banner = !watching && prefs.notify;
@@ -91,8 +93,8 @@ impl Plugin for Alerts {
         };
         SettingsSchema {
             fields: vec![
-                switch(NOTIFY, "Notify when an agent finishes", "Shows a notification when you're not looking at the thread."),
-                switch(SOUND, "Play a sound", "When an agent finishes."),
+                switch(NOTIFY, "Notify when an agent finishes or needs you", "Shows a notification when you're not looking at the thread."),
+                switch(SOUND, "Play a sound", "When an agent finishes or needs you."),
             ],
         }
     }
@@ -168,5 +170,15 @@ mod tests {
         assert!(alert(&held(false), ON, &mut paused).is_none());
         assert!(alert(&Observed::TurnStarted { session_id: "s".into() }, ON, &mut paused).is_none());
         assert!(alert(&held(true), ON, &mut paused).is_some_and(|n| !n.banner && n.sound));
+    }
+
+    #[test]
+    fn every_approval_card_alerts() {
+        let asked = |watching| Observed::PermissionRequested { session_id: "s".into(), call_id: "c".into(), reason: None, watching };
+        let mut paused = HashSet::new();
+        let first = alert(&asked(false), ON, &mut paused).unwrap();
+        assert_eq!((first.title.as_str(), first.session_id.as_deref(), first.banner), ("Needs your approval", Some("s"), true));
+        assert!(alert(&asked(false), ON, &mut paused).is_some());
+        assert_eq!(decide(asked(true), ON), Some(("Needs your approval".into(), false, true)));
     }
 }

@@ -78,6 +78,12 @@ impl HostInner {
                 reason: reason.clone(),
                 watching: watching(),
             },
+            SessionEvent::PermissionRequested(request) => Observed::PermissionRequested {
+                session_id: id(),
+                call_id: request.tool_call.id.clone(),
+                reason: request.reason.clone(),
+                watching: watching(),
+            },
             SessionEvent::ToolCall(info) if finished(Some(info.status)) => Observed::ToolResult {
                 session_id: id(),
                 call_id: info.id.clone(),

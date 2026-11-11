@@ -184,11 +184,12 @@ another version is not started.
 | `terminal/open`, `attach`, `list`, `close`; `input`, `resize` | host → plugin | `provides terminal`: start a shell, replay one, list them, stop one; keys and size (notifications) |
 | `terminal/output`, `title`, `exited` | plugin → host | `provides terminal` (notifications): numbered output, the program in front, the end |
 
-**Observed events** (`session/created`, `turn/started`, `turn/ended`, `tool/held`, `tool/result`,
+**Observed events** (`session/created`, `turn/started`, `turn/ended`, `tool/held`,
+`permission/requested` (an approval card), `tool/result`,
 `thread/titled` (generated or renamed), `thread/deleted`) come from the host's own session events. Each observing plugin has a bounded queue
 (256) drained by its own task, which sends one event and waits for the answer (10 s at most) before the
 next, so events arrive in order and nothing else waits: a slow plugin only drops its own newest events,
-with a warning. `turn/ended` and `tool/held` say whether the user is `watching` the thread (the app tells
+with a warning. `turn/ended`, `tool/held` and `permission/requested` say whether the user is `watching` the thread (the app tells
 the host which session is on screen while Space is frontmost).
 
 **Saved threads** go to the `session-store` provider (bundled: `plugins/session-store`, which keeps
