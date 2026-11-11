@@ -61,4 +61,16 @@ selection, or without one a participant's local selection (a `TextView`'s double
 again with its painted ends; `in_paint_order` orders it among `TextView`s; `highlights` and
 `layout` for find.
 
+Editor gutter, in `src/input/base/element.rs`: `LINE_NUMBER_RIGHT_MARGIN` is 14px (was 6px), so
+line numbers don't run into the code (the Files view's code preview). A 1px line in the border
+color divides the numbers from the code, 6px left of the code; indent guides are drawn at 0.4 of
+the border color (was 0.85).
+
+Read-only inputs, in `src/input/base/state.rs` (`show_cursor`) and `element.rs`: no caret and no
+current-line highlight, so the Files view's code reads as a document; selecting still works.
+
+Line labels and backgrounds, in `state.rs` and `element.rs`: `set_line_labels` replaces the line
+numbers with given labels (the diff's old and new numbers; the gutter is sized to the longest),
+and `set_line_backgrounds` tints given lines across the text and the gutter (added and removed).
+
 To update gpui-base, copy the new version here and re-apply these changes.

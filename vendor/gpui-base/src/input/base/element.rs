@@ -50,7 +50,7 @@ fn diagnostic_highlight_style(
 
 const BOTTOM_MARGIN_ROWS: usize = 3;
 pub(super) const RIGHT_MARGIN: Pixels = px(10.);
-pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(6.);
+pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(14.);
 const FOLD_ICON_WIDTH: Pixels = px(14.);
 const FOLD_ICON_HITBOX_WIDTH: Pixels = px(18.);
 /// Space between the gutter decoration strip and the line numbers.
@@ -1406,7 +1406,11 @@ impl<M: InputModeKind> TextElement<M> {
         let total_lines = text.lines_len();
         // Reserve three digits for small documents, then follow the actual
         // line count up to seven digits.
-        let line_number_len = line_number_len(total_lines);
+        // Labels instead of numbers: as wide as the first (SPACE PATCH).
+        let line_number_len = match &state.line_labels {
+            Some(labels) => labels.first().map_or(1, |l| l.len().max(1)),
+            None => line_number_len(total_lines),
+        };
 
         let mut line_number_width = if state.mode.line_number() {
             let empty_line_number = window.text_system().shape_line(
@@ -3365,6 +3369,8 @@ impl<M: InputModeKind> Element for TextElement<M> {
 
         let (cursor_infos, cursor_scroll_offset, current_row, resize_reveal_owned) =
             self.layout_cursors(&last_layout, &mut bounds, scroll_size, window, cx);
+        // A read-only input marks no current line (SPACE PATCH).
+        let current_row = current_row.filter(|_| !self.state.read(cx).readonly);
         // Completion/code-action menus position at the active caret.
         last_layout.cursor_bounds = cursor_infos
             .iter()
@@ -3441,17 +3447,23 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 .iter()
                 .zip(last_layout.visible_buffer_lines.iter())
             {
-                let line_no: SharedString = format!(
-                    "{:>width$}",
-                    displayed_line_number(buffer_line + 1),
-                    width = line_number_len
-                )
-                .into();
+                let label = state.line_labels.as_ref().map(|l| l.get(buffer_line).cloned().unwrap_or_default());
+                let line_no: SharedString = label.unwrap_or_else(|| {
+                    format!("{:>width$}", displayed_line_number(buffer_line + 1), width = line_number_len).into()
+                });
 
                 let runs = if current_row == Some(buffer_line) {
                     &current_line_runs
                 } else {
                     &other_line_runs
+                };
+                // A label's own length (SPACE PATCH).
+                let label_runs;
+                let runs = if line_no.len() == line_number_len {
+                    runs
+                } else {
+                    label_runs = vec![TextRun { len: line_no.len(), ..runs[0].clone() }];
+                    &label_runs
                 };
 
                 let mut sub_lines: SmallVec<[ShapedLine; 1]> = SmallVec::new();
@@ -3588,6 +3600,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             editor_style.background
         };
 
+        let line_backgrounds = self.state.read(cx).line_backgrounds.clone();
         // Paint active line
         let mut offset_y = px(0.);
         if let Some(line_numbers) = prepaint.line_numbers.as_ref() {
@@ -3601,6 +3614,10 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 let is_active = prepaint.current_row == Some(buffer_line);
                 let p = point(input_bounds.origin.x, origin.y + offset_y);
                 let height = line_height * lines.len() as f32;
+                // A line's own background (SPACE PATCH).
+                if let Some((bg, _)) = line_backgrounds.get(&buffer_line) {
+                    window.paint_quad(fill(Bounds::new(p, size(bounds.size.width, height)), *bg));
+                }
                 // Paint the current line background
                 if is_active {
                     if let Some(bg_color) = active_line_color {
@@ -3661,7 +3678,8 @@ impl<M: InputModeKind> Element for TextElement<M> {
 
         // Paint indent guides
         if let Some(path) = prepaint.indent_guides_path.take() {
-            window.paint_path(path, editor_style.border.opacity(0.85));
+            // Quiet: they sit behind the code (Space patch; was 0.85).
+            window.paint_path(path, editor_style.border.opacity(0.4));
         }
 
         // Application decorations sit below the user's selection.
@@ -3802,6 +3820,15 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 editor_paddings,
             );
             window.paint_quad(fill(gutter_bounds, gutter_bg));
+            // A hairline between the numbers and the code, in the gap after the numbers
+            // (Space patch).
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(gutter_bounds.right() - px(6.), gutter_bounds.top()),
+                    size(px(1.), gutter_bounds.size.height),
+                ),
+                editor_style.border,
+            ));
 
             // Each item is the normal lines.
             for (lines, &buffer_line) in line_numbers
@@ -3812,6 +3839,13 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 let is_active = prepaint.current_row == Some(buffer_line);
 
                 let height = line_height * lines.len() as f32;
+                // A line's own gutter background (SPACE PATCH).
+                if let Some((_, bg)) = line_backgrounds.get(&buffer_line) {
+                    window.paint_quad(fill(
+                        Bounds::new(point(gutter_bounds.origin.x, p.y), size(gutter_bounds.size.width, height)),
+                        *bg,
+                    ));
+                }
                 // paint active line number background
                 if is_active {
                     if let Some(bg_color) = active_line_color {
@@ -5700,10 +5734,11 @@ mod tests {
 
         assert_eq!(
             layout.bounds,
-            Bounds::new(point(px(51.), px(18.)), size(px(262.), px(87.)))
+            // The gutter's right margin is 14px (Space patch; was 6px).
+            Bounds::new(point(px(43.), px(18.)), size(px(270.), px(87.)))
         );
-        assert_eq!(layout.scroll_size, size(px(972.), px(200.)));
-        assert_eq!(layout.scroll_viewport_size, size(px(262.), px(80.)));
+        assert_eq!(layout.scroll_size, size(px(980.), px(200.)));
+        assert_eq!(layout.scroll_viewport_size, size(px(270.), px(80.)));
 
         let layout_without_gutter =
             EditorScrollbarLayout::new(input_bounds, px(0.), size(px(500.), px(120.)), paddings);

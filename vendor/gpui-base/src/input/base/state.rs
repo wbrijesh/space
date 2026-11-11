@@ -509,6 +509,10 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) touch_selection: super::touch::TouchSelection,
     pub(crate) disabled: bool,
     pub(crate) readonly: bool,
+    /// The gutter's label for each buffer line, instead of its number (SPACE PATCH).
+    pub(crate) line_labels: Option<std::rc::Rc<Vec<SharedString>>>,
+    /// A full-width background for some buffer lines: (text, gutter) (SPACE PATCH).
+    pub(crate) line_backgrounds: std::rc::Rc<std::collections::HashMap<usize, (gpui::Hsla, gpui::Hsla)>>,
     pub(crate) text_align: TextAlign,
     pub(super) masked: bool,
     pub(super) clean_on_escape: bool,
@@ -1004,6 +1008,8 @@ impl<M: InputModeKind> InputBaseState<M> {
             touch_selection: Default::default(),
             disabled: false,
             readonly: false,
+            line_labels: None,
+            line_backgrounds: Default::default(),
             text_align: TextAlign::Left,
             masked: false,
             clean_on_escape: false,
@@ -1442,6 +1448,21 @@ impl<M: InputModeKind> InputBaseState<M> {
             M::clear_inline_completion(self, cx);
             self.search_session.replace_mode = false;
         }
+        cx.notify();
+    }
+
+    /// Label each buffer line in the gutter with `labels[line]` instead of its number (a diff's
+    /// old and new numbers, say); all labels should be ASCII and equally long. `None`: numbers
+    /// (SPACE PATCH).
+    pub fn set_line_labels(&mut self, labels: Option<Vec<SharedString>>, cx: &mut Context<Self>) {
+        self.line_labels = labels.map(std::rc::Rc::new);
+        cx.notify();
+    }
+
+    /// Fill buffer lines' full width: `line -> (text background, gutter background)`
+    /// (SPACE PATCH).
+    pub fn set_line_backgrounds(&mut self, backgrounds: std::collections::HashMap<usize, (gpui::Hsla, gpui::Hsla)>, cx: &mut Context<Self>) {
+        self.line_backgrounds = std::rc::Rc::new(backgrounds);
         cx.notify();
     }
 
@@ -3970,9 +3991,11 @@ impl<M: InputModeKind> InputBaseState<M> {
     }
 
     /// Returns the true to let InputElement to render cursor, when Input is focused and current BlinkCursor is visible.
+    /// A read-only input has no caret (SPACE PATCH).
     pub(crate) fn show_cursor(&self, window: &Window, cx: &App) -> bool {
         (self.focus_handle.is_focused(window) || M::is_context_menu_open(self, cx))
             && !self.disabled
+            && !self.readonly
             && self.blink_cursor.read(cx).visible()
             && window.is_window_active()
     }
