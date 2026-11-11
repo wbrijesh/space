@@ -160,7 +160,9 @@ SPACE_SCRIPT=/tmp/s SPACE_SHOT_DIR=/tmp ./target/debug/Space --scenario quote
 ```
 
 End scripts with `quit`, so the run returns when it's done. `shot NAME` captures this window to
-`$SPACE_SHOT_DIR/NAME.png` (or runs `$SPACE_SHOT_CMD NAME`).
+`$SPACE_SHOT_DIR/NAME.png` (or runs `$SPACE_SHOT_CMD NAME`). A hidden window (another workspace)
+draws no frames, so its focus and pixels go stale; `shot` resizes it by a pixel first to draw one.
+`open PATH` shows a file in the Files view without clicking its row.
 
 ## GPUI input, in short
 
@@ -171,6 +173,9 @@ What cost time to learn here:
   (by `Root`), so its capture handler sees every press before the app's: a left press clears the
   selection before any button handler runs. Keep what a button needs from the selection
   beforehand (see `quote.rs`).
+* **A binding without a context matches at the focused element**, so it beats a context binding
+  of an ancestor: `cmd-w` for `Files` loses to the global `cmd-w` when the tree or an input inside
+  has focus. Bind the nested contexts too (`FileTree`, `Files > Input`).
 * **`.occlude()` hides what's under an element**, ancestors included: a press on an occluding
   overlay doesn't reach the root's `capture_any_mouse_down`. Give the overlay its own handler.
 * **Two kinds of selection.** A drag makes a window selection (`TextSelection`); a double or triple

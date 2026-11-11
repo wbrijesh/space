@@ -18,12 +18,13 @@
 //! resize 1280 820     resize the window (logical px)
 //! size                print the window's size and scale factor
 //! context             print the focused element's key context stack
-//! composer            print the composer's text
+//! composer            print the composer's text and its editor's width (one row and two rows differ)
 //! find                print find's state (query, matches, current) and the transcript's scroll
 //! rename some name    rename the selected thread as the Rename sheet would (then print its title)
 //! title               print the selected thread's title
 //! editmenu            print the Edit menu's items: AppKit action and key equivalent
 //! terminals           print the selected thread's right pane: open, its view, tabs, shells starting, how far it's shown
+//! open src/main.rs    show a file (relative to the thread's folder) in the Files view, as a click on its row would
 //! shot name           capture this window to `$SPACE_SHOT_DIR/name.png` (or run `$SPACE_SHOT_CMD name`)
 //! shotnow name        same as `shot` without the 250 ms settle delay (animation frames)
 //! quit                quit the app
@@ -184,8 +185,15 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                     });
                 }
                 "shot" | "shotnow" => {
-                    // Let a frame render before capturing (`shotnow`: capture immediately).
+                    // Let a frame render before capturing (`shotnow`: capture immediately). A
+                    // hidden window (another workspace) draws no frames, but a resize draws one.
                     if cmd == "shot" {
+                        let shown = window.update(cx, |_, window, _| window.viewport_size()).ok();
+                        if let Some(s) = shown {
+                            let _ = window.update(cx, |_, window, _| window.resize(size(s.width + px(1.), s.height)));
+                            cx.background_executor().timer(Duration::from_millis(100)).await;
+                            let _ = window.update(cx, |_, window, _| window.resize(s));
+                        }
                         cx.background_executor().timer(Duration::from_millis(250)).await;
                     }
                     let name = args.first().copied().unwrap_or("shot").to_string();
@@ -227,7 +235,8 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                         // The window's root wraps the app's view.
                         let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
                         if let Some(app) = app {
-                            eprintln!("script: composer {:?}", app.read(cx).input.read(cx).value());
+                            let input = app.read(cx).input.read(cx);
+                            eprintln!("script: composer {:?} width {:.0}", input.value(), f32::from(input.input_bounds().size.width));
                         }
                     });
                 }
@@ -277,6 +286,20 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                             let clock = space_ui::clock::AnimationClock::global(cx);
                             let (shown, _) = app.terminal_shown.at(clock.now(), clock.pinned());
                             eprintln!("script: terminals {:?} shown {shown:.2}", pane.map(|p| (p.open, p.view, p.tabs.len(), p.opening)));
+                        }
+                    });
+                }
+                "open" => {
+                    let rel = line.strip_prefix("open").unwrap_or("").trim().to_string();
+                    let _ = window.update(cx, |root, window, cx| {
+                        let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
+                        if let Some(app) = app {
+                            app.update(cx, |app, cx| {
+                                let Some(key) = app.selected else { return };
+                                let Some(cwd) = app.thread(key).map(|t| t.cwd.clone()) else { return };
+                                let path = cwd.canonicalize().unwrap_or(cwd).join(&rel);
+                                app.show_file(key, &path, window, cx);
+                            });
                         }
                     });
                 }
