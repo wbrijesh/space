@@ -25,7 +25,7 @@ cask clears macOS's download mark so it opens normally.
 | **While the agent works** | ⏎ queues a message for when it's done · ⌘⏎ sends it into the running turn, after the current step |
 | **Transcript** | ⌘F find · ⌘G / ⇧⌘G next / previous · ⌘↓ scroll to the bottom · ⇧⌘T Trajectory |
 | **Terminal** | ⌘J (or ⌃\`) show / hide · ⌘T new tab · ⌘W close tab · ⌃Tab next tab · ⇧⌘⏎ maximize · ⌘K clear |
-| **App** | ⌘, Settings · ⌘Q quit (asks while a terminal runs something) |
+| **App** | ⌘, Settings · ⌘Q quit (always asks, and says if threads are working or terminals run something) |
 
 - **Permission modes** (the shield under the composer): Read Only, Workspace Write (default) or Full
   access. Outside Read Only, a guardrail model checks every tool call and asks you when it isn't sure;

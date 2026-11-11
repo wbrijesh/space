@@ -187,8 +187,6 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-shift-g", FindPrevious, None),
             KeyBinding::new("escape", CloseFind, Some("FindBar > Input")),
         ]);
-        // Without a window to ask in (the window's own handler asks about running terminals).
-        cx.on_action(|_: &Quit, cx| cx.quit());
         ignore_held_shortcuts(cx);
         crate::native_edit::init();
         #[allow(unused_mut)]
@@ -299,10 +297,18 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             window_min_size: Some(size(px(760.), px(520.))),
             ..Default::default()
         };
-        let (handle, _) = gpui::open_window(window_options, cx, |window, cx| {
+        let (handle, space) = gpui::open_window(window_options, cx, |window, cx| {
             cx.new(|cx| SpaceApp::new(host, events, options, clicks, window, cx))
         })
         .expect("failed to open window");
+        // ⌘Q with another window in front (the gallery) or none: ask in the main window.
+        let space = space.downgrade();
+        cx.on_action(move |_: &Quit, cx| {
+            let asked = handle.update(cx, |_, window, cx| space.update(cx, |this, cx| this.quit(window, cx)).is_ok());
+            if !matches!(asked, Ok(true)) {
+                cx.quit();
+            }
+        });
         #[cfg(feature = "dev")]
         devscript::spawn_from_env(handle, cx);
         let _ = handle;
@@ -347,6 +353,8 @@ pub struct SpaceApp {
     pub(crate) viewer_focus: FocusHandle,
     /// A pasted text open to read: its text and length in characters (focus: `viewer_focus`).
     pub(crate) paste_view: Option<(SharedString, u64)>,
+    /// The quit alert is up (a second ⌘Q doesn't open another).
+    pub(crate) asking_to_quit: bool,
     /// The Trajectory tab: which threads show it, the shown one's data, the search field.
     pub(crate) trajectories: crate::trajectory::Trajectories,
     /// The message row that shows "Copied" for a moment, and the one whose usage panel is open.
@@ -571,6 +579,7 @@ impl SpaceApp {
             viewer: None,
             viewer_focus: cx.focus_handle(),
             paste_view: None,
+            asking_to_quit: false,
             next_image_id: 0,
             copied: None,
             stream_reveal: Default::default(),

@@ -623,25 +623,64 @@ impl SpaceApp {
         self.terminals.panes.get(&key).is_some_and(|p| !p.tabs.is_empty())
     }
 
-    /// ⌘Q: ask first when something runs in a terminal.
+    /// ⌘Q and Space ▸ Quit Space: always ask first, saying what quitting stops. A second ⌘Q
+    /// while the alert is up does nothing. (The Dock, logging out and shutting down don't come
+    /// through here.)
     pub(crate) fn quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let busy = self.terminals.busy();
-        if busy.is_empty() {
-            cx.quit();
+        if self.asking_to_quit {
             return;
         }
-        let names: Vec<String> = busy.iter().map(|s| s.state.lock().unwrap().title.clone()).collect();
-        let message = if names.len() == 1 {
-            format!("{} is still running in a terminal. Quit anyway?", names[0])
-        } else {
-            format!("{} programs are still running in terminals ({}). Quit anyway?", names.len(), names.join(", "))
-        };
-        let answer = window.prompt(PromptLevel::Warning, &message, Some("Quitting stops them."), &["Quit", "Cancel"], cx);
-        cx.spawn(async move |_, cx| {
-            if answer.await == Ok(0) {
+        let working = self.threads.iter().filter(|t| t.state.running).count();
+        let programs: Vec<String> = self.terminals.busy().iter().map(|s| s.state.lock().unwrap().title.clone()).collect();
+        let detail = quit_detail(working, &programs);
+        let level = if detail.is_some() { PromptLevel::Warning } else { PromptLevel::Info };
+        let answer = window.prompt(level, "Quit Space?", detail.as_deref(), &["Quit", "Cancel"], cx);
+        self.asking_to_quit = true;
+        cx.spawn(async move |this, cx| {
+            let quit = answer.await == Ok(0);
+            let _ = this.update(cx, |this, _| this.asking_to_quit = false);
+            if quit {
                 cx.update(|cx| cx.quit());
             }
         })
         .detach();
+    }
+}
+
+/// The quit alert's detail line: what quitting stops, most important first, in one sentence
+/// (`None` when nothing is running).
+pub(crate) fn quit_detail(working_threads: usize, programs: &[String]) -> Option<String> {
+    let threads = match working_threads {
+        0 => None,
+        1 => Some("1 thread is still working".to_string()),
+        n => Some(format!("{n} threads are still working")),
+    };
+    let terminals = match programs {
+        [] => None,
+        [one] => Some(format!("{one} is still running in a terminal")),
+        many => Some(format!("{} programs are still running in terminals ({})", many.len(), many.join(", "))),
+    };
+    match (threads, terminals) {
+        (None, None) => None,
+        (Some(t), None) | (None, Some(t)) => Some(format!("{t}.")),
+        (Some(t), Some(p)) => Some(format!("{t}, and {p}.")),
+    }
+}
+
+#[cfg(test)]
+mod quit_tests {
+    use super::quit_detail;
+
+    #[test]
+    fn the_quit_alert_says_what_stops() {
+        let progs = |p: &[&str]| p.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(quit_detail(0, &[]), None);
+        assert_eq!(quit_detail(2, &[]).as_deref(), Some("2 threads are still working."));
+        assert_eq!(quit_detail(1, &[]).as_deref(), Some("1 thread is still working."));
+        assert_eq!(quit_detail(0, &progs(&["vim"])).as_deref(), Some("vim is still running in a terminal."));
+        assert_eq!(
+            quit_detail(1, &progs(&["vim", "cargo"])).as_deref(),
+            Some("1 thread is still working, and 2 programs are still running in terminals (vim, cargo).")
+        );
     }
 }
