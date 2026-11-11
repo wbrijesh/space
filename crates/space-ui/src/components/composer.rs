@@ -38,6 +38,8 @@ const BUTTON: f32 = size::ROUND_BUTTON;
 /// The textarea's line height: 1.25rem.
 const LINE: f32 = 20.;
 const SEND_GAP: f32 = space::SM;
+/// Between stop and send, while a message can be queued.
+const BUTTON_GAP: f32 = 6.;
 /// Expanded mode: wrapper inset so text (inset + the editor's 4px) starts at the "+" icon.
 const TEXT_INSET: f32 = space::XS;
 /// The editor's own horizontal padding at XSmall size (each side).
@@ -360,9 +362,11 @@ impl RenderOnce for Composer {
             && !preparing
             && blocker.is_none();
 
-        let expanded_state = window.use_keyed_state((id.clone(), "expanded"), cx, |_, _| false);
-        let expanded = is_expanded(&input, *expanded_state.read(cx), window, cx);
-        expanded_state.update(cx, |e, _| *e = expanded);
+        let queueable = running && has_content && !preparing && blocker.is_none();
+        let shape_state = window.use_keyed_state((id.clone(), "expanded"), cx, |_, _| Shape { expanded: false, trailing: trailing_width(false) });
+        let shape = Shape { expanded: is_expanded(&input, *shape_state.read(cx), trailing_width(queueable), window, cx), trailing: trailing_width(queueable) };
+        shape_state.update(cx, |s, _| *s = shape);
+        let expanded = shape.expanded;
 
         let thumbs = (!images.is_empty()).then(|| {
             let remove = h.on_remove_image.clone();
@@ -400,15 +404,15 @@ impl RenderOnce for Composer {
             }))
         });
 
-        let queueable = running && has_content && !preparing && blocker.is_none();
         let send: AnyElement = if queueable {
             // Working, and something typed: stop moves aside; the arrow queues it (grey: when the
             // turn is done; white with ⌘: after the current step).
             let (stop, send, steer) = (h.on_stop.clone(), h.on_send.clone(), h.on_send_after_step.clone());
             div()
+                .w(px(trailing_width(true)))
                 .flex()
                 .items_center()
-                .gap_1p5()
+                .gap(px(BUTTON_GAP))
                 .child(
                     div()
                         .id("stop")
@@ -704,10 +708,23 @@ pub fn mode_icon(icon: Option<&str>) -> Lucide {
     }
 }
 
+/// The one-row layout's buttons after the text: send or stop, or (a message can be queued)
+/// stop and send. The row and `is_expanded` both use it, so they agree.
+fn trailing_width(queueable: bool) -> f32 {
+    if queueable { 2. * BUTTON + BUTTON_GAP } else { BUTTON }
+}
+
+/// The layout of the last frame: two rows, and the one-row buttons' width it was laid out for.
+#[derive(Clone, Copy, Debug)]
+struct Shape {
+    expanded: bool,
+    trailing: f32,
+}
+
 /// Two-zone layout when the text has more than one visual line *in the single-row layout*.
 /// Measuring against the single-row column width in both modes keeps the switch stable (no
 /// flip-flop) and decides before layout, so the new text and the new shape land together.
-fn is_expanded(input: &Entity<TextareaState>, was_expanded: bool, window: &mut Window, cx: &App) -> bool {
+fn is_expanded(input: &Entity<TextareaState>, last: Shape, trailing: f32, window: &mut Window, cx: &App) -> bool {
     let state = input.read(cx);
     let value = state.value();
     if value.contains('\n') {
@@ -718,11 +735,8 @@ fn is_expanded(input: &Entity<TextareaState>, was_expanded: bool, window: &mut W
     }
     let editor_width = state.input_bounds().size.width;
     if editor_width <= px(0.) {
-        return was_expanded;
+        return last.expanded;
     }
-    let single_row_editor =
-        if was_expanded { editor_width + px(2. * TEXT_INSET) - px(2. * BUTTON + SEND_GAP) } else { editor_width };
-    let available = single_row_editor - px(2. * EDITOR_PAD);
     let run = TextRun {
         len: value.len(),
         font: font(text::UI_FONT),
@@ -731,7 +745,72 @@ fn is_expanded(input: &Entity<TextareaState>, was_expanded: bool, window: &mut W
         underline: None,
         strikethrough: None,
     };
-    window.text_system().shape_line(value, text::BODY, &[run], None).width > available
+    let text_width = window.text_system().shape_line(value, text::BODY, &[run], None).width;
+    needs_two_rows(f32::from(text_width), f32::from(editor_width), last, trailing)
+}
+
+/// The editor's width in the one-row layout with `trailing` buttons, from its measured width in
+/// the last frame's layout.
+fn one_row_editor(editor_width: f32, last: Shape, trailing: f32) -> f32 {
+    // The card's inner width: two rows give the text all of it but the insets; one row, all of
+    // it but "+", the gap and the buttons.
+    let inner = if last.expanded { editor_width + 2. * TEXT_INSET } else { editor_width + BUTTON + SEND_GAP + last.trailing };
+    inner - BUTTON - SEND_GAP - trailing
+}
+
+/// Two rows when the text doesn't fit on the one-row layout's line.
+fn needs_two_rows(text_width: f32, editor_width: f32, last: Shape, trailing: f32) -> bool {
+    text_width > one_row_editor(editor_width, last, trailing) - 2. * EDITOR_PAD
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::{BUTTON, BUTTON_GAP, EDITOR_PAD, SEND_GAP, Shape, TEXT_INSET, needs_two_rows, trailing_width};
+
+    /// The editor's width each layout gives a card with `inner` px inside.
+    fn editor_in(inner: f32, expanded: bool, trailing: f32) -> f32 {
+        if expanded { inner - 2. * TEXT_INSET } else { inner - BUTTON - SEND_GAP - trailing }
+    }
+
+    #[test]
+    fn the_answer_is_the_same_from_either_layout() {
+        let inner = 600.;
+        for queueable in [false, true] {
+            let trailing = trailing_width(queueable);
+            for tenth in 0..6000 {
+                let text = tenth as f32 / 10.;
+                let from = |expanded| {
+                    let last = Shape { expanded, trailing };
+                    needs_two_rows(text, editor_in(inner, expanded, trailing), last, trailing)
+                };
+                assert_eq!(from(false), from(true), "text {text}px, queueable {queueable}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_band_that_used_to_flip_is_stable() {
+        // Queueable: two buttons. The old estimate counted one, so text up to a button and the
+        // gap wider than the line read as fitting from two rows, and as not fitting from one.
+        let (inner, trailing) = (600., trailing_width(true));
+        let fits = editor_in(inner, false, trailing) - 2. * EDITOR_PAD;
+        for text in [fits + 1., fits + BUTTON / 2., fits + BUTTON + BUTTON_GAP - 1.] {
+            let one = needs_two_rows(text, editor_in(inner, false, trailing), Shape { expanded: false, trailing }, trailing);
+            let two = needs_two_rows(text, editor_in(inner, true, trailing), Shape { expanded: true, trailing }, trailing);
+            assert!(one && two, "text {text}px: one row says {one}, two rows say {two}");
+        }
+    }
+
+    #[test]
+    fn the_buttons_changing_since_the_last_frame_count() {
+        // The last frame had one button; now there are two (text typed while the agent works).
+        let inner = 600.;
+        let (before, now) = (trailing_width(false), trailing_width(true));
+        let last = Shape { expanded: false, trailing: before };
+        let fits_now = editor_in(inner, false, now) - 2. * EDITOR_PAD;
+        assert!(needs_two_rows(fits_now + 1., editor_in(inner, false, before), last, now));
+        assert!(!needs_two_rows(fits_now - 1., editor_in(inner, false, before), last, now));
+    }
 }
 
 fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
