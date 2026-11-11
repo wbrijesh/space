@@ -13,9 +13,10 @@ use gpui::component::{Icon, IconName};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::protocol::TurnUsage;
-use space_core::{PermissionDecision, PermissionRequest, PlanEntry, SessionState, ToolCallInfo, ToolStatus, TranscriptItem};
+use space_core::{PermissionDecision, PermissionRequest, PlanEntry, SessionState, TextRef, ToolCallInfo, ToolStatus, TranscriptItem};
 
 use super::images::{OpenPicsHandler, Pic, message_images};
+use super::pastes::{self, OpenTextHandler, paste_chip};
 use super::message_actions::{ActionHandlers, MessageActions, message_actions};
 use super::turns::{TurnFold, TurnToggleHandler, folds_away, foldable_turns, turn_summary_row};
 use super::loaders::Spinner;
@@ -64,22 +65,41 @@ const BUBBLE_PAD_X: Pixels = px(16.);
 /// A long message's fold: its transcript index, whether it's open, and the toggle.
 pub type UserFold = (usize, bool, ToggleHandler);
 
-pub fn user_message(
-    id: impl Into<SharedString>,
-    text_: &str,
-    attachments: &[PathBuf],
-    pics: Vec<Pic>,
-    on_open: Option<OpenPicsHandler>,
-    fold: Option<UserFold>,
-    marks: Option<BubbleMarks>,
-) -> Div {
-    let has_bubble = !text_.trim().is_empty() || !attachments.is_empty();
+/// What a user message carries besides its text: files, pictures and pasted texts, and what a
+/// click on a picture or a pasted text opens.
+#[derive(Default)]
+pub struct UserExtras<'a> {
+    pub attachments: &'a [PathBuf],
+    pub pics: Vec<Pic>,
+    pub on_open: Option<OpenPicsHandler>,
+    /// Pasted texts: saved ones open on click; a message not sent yet has only their sizes.
+    pub texts: &'a [TextRef],
+    pub unsaved_texts: Vec<u64>,
+    pub on_open_text: Option<OpenTextHandler>,
+}
+
+pub fn user_message(id: impl Into<SharedString>, text_: &str, extras: UserExtras<'_>, fold: Option<UserFold>, marks: Option<BubbleMarks>) -> Div {
+    let id = id.into();
+    let UserExtras { attachments, pics, on_open, texts, unsaved_texts, on_open_text } = extras;
+    let pastes: Vec<Stateful<Div>> = texts
+        .iter()
+        .enumerate()
+        .map(|(ix, t)| {
+            let open = on_open_text.clone().map(|open| {
+                let t = t.clone();
+                Rc::new(move |w: &mut Window, cx: &mut App| open(t.clone(), w, cx)) as pastes::Handler
+            });
+            paste_chip(format!("{id}-text-{ix}"), t.chars, open, None)
+        })
+        .chain(unsaved_texts.iter().enumerate().map(|(ix, chars)| paste_chip(format!("{id}-draft-text-{ix}"), *chars, None, None)))
+        .collect();
+    let has_bubble = !text_.trim().is_empty() || !attachments.is_empty() || !pastes.is_empty();
     div()
         .flex()
         .flex_col()
         .gap_1p5()
         .when(!pics.is_empty(), |d| d.child(message_images(id, pics, on_open)))
-        .when(has_bubble, |d| d.child(user_bubble(text_, attachments, fold, marks)))
+        .when(has_bubble, |d| d.child(user_bubble(text_, attachments, pastes, fold, marks)))
 }
 
 /// Share of the column a bubble may take (and never more than [`size::USER_BUBBLE_MAX_W`]).
@@ -151,7 +171,7 @@ fn bubble_text(body: String, marks: Option<BubbleMarks>) -> AnyElement {
     div().relative().child(styled).child(reveal).into_any_element()
 }
 
-pub fn user_bubble(text_: &str, attachments: &[PathBuf], fold: Option<UserFold>, marks: Option<BubbleMarks>) -> Div {
+pub fn user_bubble(text_: &str, attachments: &[PathBuf], pastes: Vec<Stateful<Div>>, fold: Option<UserFold>, marks: Option<BubbleMarks>) -> Div {
     let mut bubble = div()
         .min_w_0()
         .max_w(size::USER_BUBBLE_MAX_W)
@@ -164,8 +184,10 @@ pub fn user_bubble(text_: &str, attachments: &[PathBuf], fold: Option<UserFold>,
         .bg(color::surface_2())
         .text_size(text::BODY)
         .line_height(relative(text::LEADING));
-    if !attachments.is_empty() {
-        bubble = bubble.child(div().flex().flex_wrap().gap_1p5().children(attachments.iter().map(|p| attachment_chip(p))));
+    if !attachments.is_empty() || !pastes.is_empty() {
+        let files = attachments.iter().map(|p| attachment_chip(p).into_any_element());
+        let chips = pastes.into_iter().map(IntoElement::into_any_element).chain(files);
+        bubble = bubble.child(div().flex().flex_wrap().gap_1p5().children(chips));
     }
     if !text_.is_empty() {
         let body = text_.trim().to_string();
@@ -767,11 +789,14 @@ pub struct TranscriptView<'a> {
     pub expanded: &'a HashSet<usize>,
     pub thought_secs: &'a HashMap<usize, u64>,
     /// A message waiting for the session to start (its text, files and pictures).
-    pub queued: Option<(&'a str, &'a [PathBuf], Vec<Pic>)>,
+    /// A message waiting for the session: its text and what goes with it.
+    pub queued: Option<(&'a str, UserExtras<'a>)>,
     pub on_toggle: ToggleHandler,
     pub on_answer: AnswerHandler,
     /// A message's picture was clicked.
     pub on_open_image: Option<OpenPicsHandler>,
+    /// Opens a sent message's pasted text.
+    pub on_open_text: Option<OpenTextHandler>,
     /// For the rows under messages: now (Unix ms), the row showing "Copied", the row whose
     /// usage panel is open, and what their buttons do.
     pub now_ms: u64,
@@ -806,6 +831,7 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
         on_toggle,
         on_answer,
         on_open_image,
+        on_open_text,
         now_ms,
         copied,
         usage_open,
@@ -864,7 +890,7 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
             continue;
         }
         let el = match item {
-            TranscriptItem::User { text, attachments, images, at_ms } => {
+            TranscriptItem::User { text, attachments, images, texts, at_ms } => {
                 // An unfinished turn before it (no end): as it is, without a row.
                 if !turn.is_empty() {
                     out.push(div().flex().flex_col().children(std::mem::take(&mut turn)).into_any_element());
@@ -877,15 +903,15 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
                     let reveal = current.is_some().then(|| on_reveal.clone()).flatten().map(|h| (f.reveal.clone(), h));
                     Some(BubbleMarks { ranges, current, reveal })
                 });
-                let message = user_message(
-                    format!("pics-{key}-{ix}"),
-                    text,
+                let extras = UserExtras {
                     attachments,
-                    images.iter().map(Pic::file).collect(),
-                    on_open_image.clone(),
-                    fold,
-                    marks,
-                );
+                    pics: images.iter().map(Pic::file).collect(),
+                    on_open: on_open_image.clone(),
+                    texts,
+                    on_open_text: on_open_text.clone(),
+                    ..Default::default()
+                };
+                let message = user_message(format!("pics-{key}-{ix}"), text, extras, fold, marks);
                 out.push(
                     div()
                         .group(group.clone())
@@ -960,8 +986,8 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
     if !turn.is_empty() {
         out.push(div().flex().flex_col().children(turn).into_any_element());
     }
-    if let Some((text_, attachments, pics)) = queued {
-        out.push(div().mt(GAP).child(user_message(format!("pics-{key}-queued"), text_, attachments, pics, None, None, None)).into_any_element());
+    if let Some((text_, extras)) = queued {
+        out.push(div().mt(GAP).child(user_message(format!("pics-{key}-queued"), text_, extras, None, None)).into_any_element());
         out.push(div().mt(GAP).child(working_row("Starting agent…")).into_any_element());
     } else if state.running
         && state.pending_permission().is_none()
@@ -1146,6 +1172,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                     on_toggle: toggle.clone(),
                     on_answer: answer.clone(),
                     on_open_image: None,
+                    on_open_text: None,
                     now_ms: 0,
                     copied: None,
                     usage_open: None,
@@ -1164,7 +1191,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     };
     let work = |at: Option<u64>| {
         vec![
-            SessionEvent::UserMessage { text: "Run the tests and fix what fails".into(), attachments: vec![], images: vec![], at_ms: at },
+            SessionEvent::UserMessage { text: "Run the tests and fix what fails".into(), attachments: vec![], images: vec![], texts: vec![], at_ms: at },
             SessionEvent::TurnStarted,
             SessionEvent::AgentThought { text: "Run the suite first.".into() },
             SessionEvent::ToolCall(tool(ToolStatus::Completed, TEST_OUTPUT)),
@@ -1201,27 +1228,36 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     let (t10, t11): (ToggleHandler, ToggleHandler) = (Rc::new(|_, _, _| {}), Rc::new(|_, _, _| {}));
     vec![
         ComponentPreview::new(Area::Transcript, "Messages", "User bubble and markdown reply.").stacked().examples([
-            ex("user", Rc::new(|| user_bubble("Explain how plugin discovery works", &[], None, None))),
+            ex("user", Rc::new(|| user_bubble("Explain how plugin discovery works", &[], vec![], None, None))),
             ex(
                 "user with attachments",
-                Rc::new(|| user_bubble("Review these", &[PathBuf::from("Cargo.toml"), PathBuf::from("crates")], None, None)),
+                Rc::new(|| user_bubble("Review these", &[PathBuf::from("Cargo.toml"), PathBuf::from("crates")], vec![], None, None)),
             ),
             ex(
                 "user with images",
                 Rc::new(|| {
                     let pics = vec![super::images::sample(1600, 900), super::images::sample(1024, 1024)];
-                    user_message("preview-pics", "Why does the sidebar look like this?", &[], pics, None, None, None)
+                    user_message("preview-pics", "Why does the sidebar look like this?", UserExtras { pics, ..Default::default() }, None, None)
                 }),
             ),
-            ex("long, folded", Rc::new(move || user_bubble(LONG_MESSAGE, &[], Some((0, false, t10.clone())), None))),
-            ex("long, shown in full", Rc::new(move || user_bubble(LONG_MESSAGE, &[], Some((1, true, t11.clone())), None))),
+            ex(
+                "user with pasted text",
+                Rc::new(|| {
+                    let texts = [TextRef { path: PathBuf::from("/nonexistent/abc.txt"), mime: "text/plain".into(), chars: 5_230 }];
+                    let open: OpenTextHandler = Rc::new(|_, _, _| {});
+                    let extras = UserExtras { texts: &texts, on_open_text: Some(open), ..Default::default() };
+                    user_message("preview-paste", "What is failing here?", extras, None, None)
+                }),
+            ),
+            ex("long, folded", Rc::new(move || user_bubble(LONG_MESSAGE, &[], vec![], Some((0, false, t10.clone())), None))),
+            ex("long, shown in full", Rc::new(move || user_bubble(LONG_MESSAGE, &[], vec![], Some((1, true, t11.clone())), None))),
             ex(
                 "user, with find matches",
                 Rc::new(|| {
                     let text_ = "Explain how plugin discovery works, and which plugin wins";
                     let ranges = super::find::find_matches(text_, "plugin");
                     let current = ranges.get(1).cloned();
-                    user_bubble(text_, &[], None, Some(BubbleMarks { ranges, current, reveal: None }))
+                    user_bubble(text_, &[], vec![], None, Some(BubbleMarks { ranges, current, reveal: None }))
                 }),
             ),
             ex("assistant markdown", Rc::new(|| agent_message("preview-md", MARKDOWN))),

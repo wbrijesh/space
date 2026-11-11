@@ -10,6 +10,7 @@ pub mod loaders;
 pub mod menu;
 pub mod message_actions;
 pub mod model_picker;
+pub mod pastes;
 pub mod settings;
 pub mod shell;
 pub mod terminal;

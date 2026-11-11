@@ -222,6 +222,11 @@ pub fn compact_tokens(n: u64) -> String {
     }
 }
 
+/// A pasted text's size: 5230 → "5.2k chars".
+pub fn chars_label(n: u64) -> String {
+    format!("{} char{}", compact_tokens(n), if n == 1 { "" } else { "s" })
+}
+
 /// "45s", "2m 14s", "1h 5m": a short, human duration (whole seconds).
 pub fn short_duration(d: std::time::Duration) -> String {
     let s = d.as_secs();
@@ -324,6 +329,15 @@ mod tests {
     use space_core::SessionEvent;
 
     #[test]
+    fn pasted_text_sizes() {
+        assert_eq!(chars_label(4097), "4.1k chars");
+        assert_eq!(chars_label(5230), "5.2k chars");
+        assert_eq!(chars_label(123_456), "123k chars");
+        assert_eq!(chars_label(1_250_000), "1.2M chars");
+        assert_eq!(chars_label(1), "1 char");
+    }
+
+    #[test]
     fn sidebar_days_are_local_calendar_days() {
         // 2026-11-10 12:00 UTC.
         let now = 1_794_312_000_000;
@@ -406,7 +420,7 @@ mod tests {
     fn titles_and_previews() {
         let mut s = SessionState::new("s");
         assert_eq!(thread_preview(&s), Preview::Empty);
-        s.apply(&SessionEvent::UserMessage { text: "\n  Fix the tests\nplease".into(), attachments: vec![], images: vec![], at_ms: None });
+        s.apply(&SessionEvent::UserMessage { text: "\n  Fix the tests\nplease".into(), attachments: vec![], images: vec![], texts: vec![], at_ms: None });
         s.apply(&SessionEvent::TurnStarted);
         assert_eq!(thread_title(&s).as_deref(), Some("Fix the tests"));
         assert_eq!(thread_preview(&s), Preview::Working(None));

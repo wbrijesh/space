@@ -128,6 +128,15 @@ data: string, mimeType: string,
 uri: string, };
 
 /**
+ * A long paste in a [`SteerSession`]: its text and the saved file it's in.
+ */
+export type SteerText = { text: string, mimeType: string, 
+/**
+ * `file://` URI of the saved text.
+ */
+uri: string, };
+
+/**
  * `_space/session/steer` (client → agent request): a message for a running turn, to be
  * delivered after the current step (the reply being written and its tool calls), before the
  * model is asked again. The agent answers at once; when it hands the message to the model it
@@ -140,6 +149,10 @@ export type SteerSession = { sessionId: string,
  * The client's id for the message (echoed in [`Steered`]).
  */
 id: string, text: string, images: Array<SteerImage>, 
+/**
+ * Long pastes, given to the model as text (like ACP embedded resources).
+ */
+texts: Array<SteerText>, 
 /**
  * `file://` URIs of attached files.
  */

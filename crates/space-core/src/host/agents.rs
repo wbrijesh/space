@@ -14,7 +14,7 @@ use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_
 use space_protocol::service::HistoryItem;
 use space_protocol::trace::{ContextFact, TraceBatch, TraceEvent};
 use space_protocol::{
-    Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SpaceStatus, SteerImage, SteerSession,
+    Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SpaceStatus, SteerImage, SteerSession, SteerText,
     Steered, UnsteerSession,
 };
 use tokio::sync::oneshot;
@@ -25,7 +25,7 @@ use super::{Host, HostEvent, HostInner, PluginStatus, Refused, check_protocol, e
 use crate::{convert, now_ms};
 use crate::discovery::DiscoveredPlugin;
 use crate::process::{self, PluginProcess};
-use crate::session::{ImageRef, PermissionDecision, PermissionOption, PermissionRequest, SessionEvent, SessionId, ToolCallPatch};
+use crate::session::{ImageRef, TextRef, PermissionDecision, PermissionOption, PermissionRequest, SessionEvent, SessionId, ToolCallPatch};
 
 type Conn = acp::v1::ConnectionTo<Agent>;
 
@@ -69,6 +69,7 @@ struct PendingSteer {
     text: String,
     attachments: Vec<PathBuf>,
     images: Vec<ImageRef>,
+    texts: Vec<TextRef>,
 }
 
 struct PendingPermission {
@@ -92,13 +93,14 @@ impl Shared {
             let prompt = TraceEvent::Prompt {
                 at: now_ms(),
                 text: p.text.clone(),
-                files: p.attachments.iter().map(path).collect(),
+                files: p.attachments.iter().chain(p.texts.iter().map(|t| &t.path)).map(path).collect(),
                 images: p.images.iter().map(|i| path(&i.path)).collect(),
             };
             host.trace(id, vec![prompt]);
         }
         host.record(id, HistoryItem::User { text: p.text.clone() });
-        host.emit_session(id, SessionEvent::UserMessage { text: p.text, attachments: p.attachments, images: p.images, at_ms: Some(now_ms()) });
+        let message = SessionEvent::UserMessage { text: p.text, attachments: p.attachments, images: p.images, texts: p.texts, at_ms: Some(now_ms()) };
+        host.emit_session(id, message);
         host.emit(HostEvent::Steered { session_id: steered.session_id, steer_id: steered.id });
     }
 
@@ -327,9 +329,10 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
     let agent_name = init.agent_info.as_ref().map(|i| i.title.clone().unwrap_or_else(|| i.name.clone()));
     let can_load = init.agent_capabilities.load_session;
     let images = init.agent_capabilities.prompt_capabilities.image;
+    let embedded = init.agent_capabilities.prompt_capabilities.embedded_context;
     let steer = init.meta.as_ref().and_then(|m| m.get(STEER_META_KEY)).and_then(|v| v.as_bool()).unwrap_or(false);
 
-    let inner = Arc::new(AgentInner { plugin_id: plugin_id.clone(), conn, process, shared, agent_name, can_load, images, steer });
+    let inner = Arc::new(AgentInner { plugin_id: plugin_id.clone(), conn, process, shared, agent_name, can_load, images, embedded, steer });
     host.agents.lock().unwrap().insert(plugin_id, Arc::downgrade(&inner));
     Ok(AgentHandle { inner })
 }
@@ -350,6 +353,21 @@ impl AgentInner {
 }
 
 /// `_meta` with the session's data folder, if any.
+/// A long paste as a prompt block: its text inline (an embedded resource), or, for an agent that
+/// doesn't take embedded context, a link to its file.
+fn text_block(t: &TextRef, embedded: bool) -> Result<schema::ContentBlock> {
+    let uri = format!("file://{}", t.path.display());
+    if !embedded {
+        let name = t.path.file_name().map_or_else(|| "pasted.txt".into(), |n| n.to_string_lossy().into_owned());
+        let size = std::fs::metadata(&t.path).map(|m| m.len() as i64).ok();
+        let link = schema::ResourceLink::new(name, uri).title("Pasted text".to_string()).mime_type(t.mime.clone()).size(size);
+        return Ok(schema::ContentBlock::ResourceLink(link));
+    }
+    let text = std::fs::read_to_string(&t.path).map_err(|e| anyhow!("reading {}: {e}", t.path.display()))?;
+    let contents = schema::TextResourceContents::new(text, uri).mime_type(t.mime.clone());
+    Ok(schema::ContentBlock::Resource(schema::EmbeddedResource::new(schema::EmbeddedResourceResource::TextResourceContents(contents))))
+}
+
 fn data_dir_meta(data_dir: Option<&std::path::Path>) -> Option<schema::Meta> {
     let dir = data_dir?;
     let mut meta = schema::Meta::new();
@@ -382,6 +400,8 @@ pub(super) struct AgentInner {
     can_load: bool,
     /// The agent takes images in prompts (ACP `promptCapabilities.image`).
     images: bool,
+    /// The agent takes text inline in prompts (ACP `promptCapabilities.embeddedContext`).
+    embedded: bool,
     /// The agent takes messages between the steps of a running turn (`_space/session/steer`).
     steer: bool,
 }
@@ -448,6 +468,11 @@ impl AgentHandle {
     /// Whether the agent takes images in prompts (ACP `promptCapabilities.image`).
     pub fn accepts_images(&self) -> bool {
         self.inner.images
+    }
+
+    /// Whether the agent takes text inline in prompts (ACP `promptCapabilities.embeddedContext`).
+    pub fn accepts_embedded_text(&self) -> bool {
+        self.inner.embedded
     }
 
     /// Whether the agent takes messages for a running turn ([`Session::steer`]).
@@ -561,14 +586,16 @@ impl Session {
     /// Send a text prompt and wait for the turn to end. Streams progress as
     /// [`HostEvent::Session`] events. Returns the ACP stop reason (`end_turn`, `cancelled`, ...).
     pub async fn prompt(&self, text: impl Into<String>) -> Result<String> {
-        self.prompt_with(text, Vec::new(), Vec::new()).await
+        self.prompt_with(text, Vec::new(), Vec::new(), Vec::new()).await
     }
 
     /// Like [`Session::prompt`], with files attached as ACP `resource_link` content blocks
     /// (`file://` URIs; the agent decides whether and how to read them) and images as ACP
     /// image blocks (the saved file's bytes, and its `file://` URI). Images need an agent that
-    /// takes them ([`AgentHandle::accepts_images`]).
-    pub async fn prompt_with(&self, text: impl Into<String>, attachments: Vec<PathBuf>, images: Vec<ImageRef>) -> Result<String> {
+    /// takes them ([`AgentHandle::accepts_images`]). `texts` (long pastes) go inline as ACP
+    /// embedded resources, or as `resource_link`s to their files for an agent that doesn't take
+    /// embedded context.
+    pub async fn prompt_with(&self, text: impl Into<String>, attachments: Vec<PathBuf>, images: Vec<ImageRef>, texts: Vec<TextRef>) -> Result<String> {
         let text = text.into();
         if !images.is_empty() && !self.inner.agent.accepts_images() {
             bail!("this agent can't read images");
@@ -583,6 +610,7 @@ impl Session {
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
+        let text_blocks = texts.iter().map(|t| text_block(t, self.inner.agent.accepts_embedded_text())).collect::<Result<Vec<_>>>()?;
         if self.inner.running.swap(true, Ordering::SeqCst) {
             bail!("a prompt is already running in this session");
         }
@@ -593,12 +621,13 @@ impl Session {
             let prompt = TraceEvent::Prompt {
                 at: now_ms(),
                 text: text.clone(),
-                files: attachments.iter().map(path).collect(),
+                files: attachments.iter().chain(texts.iter().map(|t| &t.path)).map(path).collect(),
                 images: images.iter().map(|i| path(&i.path)).collect(),
             };
             host.trace(&id, vec![prompt]);
         }
-        host.emit_session(&id, SessionEvent::UserMessage { text: text.clone(), attachments: attachments.clone(), images, at_ms: Some(now_ms()) });
+        let message = SessionEvent::UserMessage { text: text.clone(), attachments: attachments.clone(), images, texts, at_ms: Some(now_ms()) };
+        host.emit_session(&id, message);
         host.emit_session(&id, SessionEvent::TurnStarted);
         host.record(&id, HistoryItem::User { text: text.clone() });
 
@@ -617,8 +646,9 @@ impl Session {
                     task_host.trace(&task_id, vec![TraceEvent::Context { at: now_ms(), sections: facts }]);
                 }
                 let sections: Vec<_> = sections.into_iter().map(|(_, s)| s).collect();
-                // Images first, then the text that refers to them.
+                // Images and pasted texts first, then the text that refers to them.
                 let mut blocks = image_blocks;
+                blocks.extend(text_blocks);
                 blocks.push(schema::ContentBlock::Text(schema::TextContent::new(text)));
                 for path in &attachments {
                     let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
@@ -669,7 +699,7 @@ impl Session {
     /// `_space/session/steer`: a message for the running turn, delivered after its current step
     /// (needs [`AgentHandle::can_steer`]). Returns once the agent has it; when the agent hands it
     /// to the model it joins the transcript and [`HostEvent::Steered`] says so.
-    pub async fn steer(&self, id: String, text: String, attachments: Vec<PathBuf>, images: Vec<ImageRef>) -> Result<()> {
+    pub async fn steer(&self, id: String, text: String, attachments: Vec<PathBuf>, images: Vec<ImageRef>, texts: Vec<TextRef>) -> Result<()> {
         if !self.inner.agent.can_steer() {
             bail!("this agent can't take messages during a turn");
         }
@@ -683,15 +713,23 @@ impl Session {
                 Ok(SteerImage { data: BASE64.encode(bytes), mime_type: image.mime.clone(), uri: format!("file://{}", image.path.display()) })
             })
             .collect::<Result<Vec<_>>>()?;
+        let steer_texts = texts
+            .iter()
+            .map(|t| {
+                let text = std::fs::read_to_string(&t.path).map_err(|e| anyhow!("reading {}: {e}", t.path.display()))?;
+                Ok(SteerText { text, mime_type: t.mime.clone(), uri: format!("file://{}", t.path.display()) })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let request = SteerSession {
             session_id: self.inner.id.clone(),
             id: id.clone(),
             text: text.clone(),
             images: blocks,
+            texts: steer_texts,
             attachments: attachments.iter().map(|p| format!("file://{}", p.display())).collect(),
         };
         let shared = self.inner.agent.inner.shared.clone();
-        shared.steers.lock().unwrap().entry(self.inner.id.clone()).or_default().push(PendingSteer { id: id.clone(), text, attachments, images });
+        shared.steers.lock().unwrap().entry(self.inner.id.clone()).or_default().push(PendingSteer { id: id.clone(), text, attachments, images, texts });
         let agent = self.inner.agent.clone();
         let result = shared
             .host

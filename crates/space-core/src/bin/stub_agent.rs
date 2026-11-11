@@ -193,7 +193,11 @@ async fn main() -> acp::Result<()> {
                         .agent_capabilities(
                             AgentCapabilities::new()
                                 .load_session(true)
-                                .prompt_capabilities(PromptCapabilities::new().image(std::env::var_os(NO_IMAGES_ENV).is_none())),
+                                .prompt_capabilities(
+                                    PromptCapabilities::new()
+                                        .image(std::env::var_os(NO_IMAGES_ENV).is_none())
+                                        .embedded_context(std::env::var_os(NO_IMAGES_ENV).is_none()),
+                                ),
                         )
                         .agent_info(Implementation::new("space-stub-agent", env!("CARGO_PKG_VERSION")))
                         .meta(meta),
@@ -374,6 +378,22 @@ async fn run_turn(
             _ => None,
         })
         .collect();
+    // Pasted texts: inline (embedded resources) or as links to their files.
+    let texts: Vec<String> = req
+        .prompt
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Resource(r) => match &r.resource {
+                EmbeddedResourceResource::TextResourceContents(t) => Some(format!("{} chars {}", t.text.chars().count(), t.uri)),
+                _ => None,
+            },
+            ContentBlock::ResourceLink(l) if l.mime_type.as_deref() == Some("text/plain") => Some(format!("link {}", l.uri)),
+            _ => None,
+        })
+        .collect();
+    if !texts.is_empty() {
+        send(SessionUpdate::AgentMessageChunk(chunk(&format!("Saw pasted text ({}). ", texts.join(", ")))))?;
+    }
     if !images.is_empty() {
         let s = if images.len() == 1 { "" } else { "s" };
         send(SessionUpdate::AgentMessageChunk(chunk(&format!("Saw {} image{s} ({}). ", images.len(), images.join(", ")))))?;

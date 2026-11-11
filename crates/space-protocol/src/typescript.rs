@@ -51,6 +51,7 @@ fn generate() -> String {
         item::<Complete>(&cfg),
         item::<CompleteResult>(&cfg),
         item::<SteerImage>(&cfg),
+        item::<SteerText>(&cfg),
         item::<SteerSession>(&cfg),
         item::<SteerResult>(&cfg),
         item::<UnsteerSession>(&cfg),

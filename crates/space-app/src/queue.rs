@@ -17,6 +17,7 @@ use space_core::SessionId;
 use crate::app::SpaceApp;
 use crate::attach::DraftImage;
 use crate::images::Prepared;
+use crate::paste::Paste;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum When {
@@ -32,6 +33,7 @@ pub(crate) struct Pending {
     pub(crate) text: String,
     pub(crate) attachments: Vec<PathBuf>,
     pub(crate) images: Vec<Prepared>,
+    pub(crate) pastes: Vec<Paste>,
     pub(crate) when: When,
 }
 
@@ -47,13 +49,23 @@ pub(crate) enum PendingAction {
 
 impl SpaceApp {
     /// Queue a message for a running turn.
-    pub(crate) fn queue_message(&mut self, key: u64, when: When, text: String, attachments: Vec<PathBuf>, images: Vec<Prepared>, cx: &mut Context<Self>) {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn queue_message(
+        &mut self,
+        key: u64,
+        when: When,
+        text: String,
+        attachments: Vec<PathBuf>,
+        images: Vec<Prepared>,
+        pastes: Vec<Paste>,
+        cx: &mut Context<Self>,
+    ) {
         self.next_pending += 1;
         let id = format!("queued-{}", self.next_pending);
         let can_steer = self.thread(key).and_then(|t| t.session.as_ref()).is_some_and(|s| s.agent().can_steer());
         let when = if when == When::Step && can_steer { When::Step } else { When::Done };
         let Some(thread) = self.thread_mut(key) else { return };
-        thread.pending.push(Pending { id: id.clone(), text, attachments, images, when });
+        thread.pending.push(Pending { id: id.clone(), text, attachments, images, pastes, when });
         if when == When::Step {
             self.steer(key, &id, cx);
         }
@@ -67,11 +79,11 @@ impl SpaceApp {
         let (Some(session), Some(p)) = (thread.session.clone(), thread.pending.iter().find(|p| p.id == id).cloned()) else { return };
         let dir = crate::attach::thread_attachments_dir(Some(thread));
         cx.spawn(async move |this, cx| {
-            let images = p.images.clone();
-            let saved = cx.background_spawn(async move { images.iter().map(|i| crate::images::save(i, &dir)).collect::<std::io::Result<Vec<_>>>() }).await;
+            let (images, pastes) = (p.images.clone(), p.pastes.clone());
+            let saved = cx.background_spawn(async move { crate::paste::save_all(&images, &pastes, &dir) }).await;
             let result = match saved {
-                Ok(images) => session.steer(p.id.clone(), p.text.clone(), p.attachments.clone(), images).await,
-                Err(e) => Err(anyhow::anyhow!("couldn't save an image: {e}")),
+                Ok((images, texts)) => session.steer(p.id.clone(), p.text.clone(), p.attachments.clone(), images, texts).await,
+                Err(e) => Err(anyhow::anyhow!("couldn't save an attachment: {e}")),
             };
             if let Err(e) = result {
                 tracing::info!("steer {}: {e:#}; sending it when the turn is done", p.id);
@@ -141,7 +153,7 @@ impl SpaceApp {
             return;
         }
         let p = thread.pending.remove(0);
-        self.prompt(key, p.text.trim().to_string(), p.attachments, p.images, cx);
+        self.prompt(key, p.text.trim().to_string(), p.attachments, p.images, p.pastes, cx);
         if self.selected == Some(key) {
             self.transcript_scroll.jump_to_bottom();
         }
@@ -199,8 +211,8 @@ impl SpaceApp {
         .detach();
     }
 
-    /// Put messages back into the composer (after what's typed there), with their files and
-    /// images.
+    /// Put messages back into the composer (after what's typed there), with their files,
+    /// images and pastes.
     pub(crate) fn restore_to_composer(&mut self, key: u64, messages: Vec<Pending>, window: &mut Window, cx: &mut Context<Self>) {
         if messages.is_empty() {
             return;
@@ -220,6 +232,7 @@ impl SpaceApp {
         let mut ids = ids.into_iter();
         for p in messages {
             thread.attachments.extend(p.attachments);
+            thread.pastes.extend(p.pastes);
             for image in p.images {
                 thread.images.push(DraftImage::ready(ids.next().unwrap_or_default(), image));
             }

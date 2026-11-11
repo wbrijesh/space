@@ -326,7 +326,7 @@ mod tests {
     use super::{Match, find_in, keep_current};
 
     fn user(text: &str) -> TranscriptItem {
-        TranscriptItem::User { text: text.into(), attachments: vec![], images: vec![], at_ms: None }
+        TranscriptItem::User { text: text.into(), attachments: vec![], images: vec![], texts: vec![], at_ms: None }
     }
 
     #[test]

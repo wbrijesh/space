@@ -28,8 +28,13 @@ export function parseSteerParams(raw: unknown): SteerSession {
 		const mimeType = str(r.mimeType);
 		return data && mimeType ? [{ data, mimeType, uri: str(r.uri) ?? "" }] : [];
 	});
+	const texts = (Array.isArray(p.texts) ? p.texts : []).flatMap((t) => {
+		const r = (t && typeof t === "object" ? t : {}) as Record<string, unknown>;
+		const uri = str(r.uri);
+		return typeof r.text === "string" && uri ? [{ text: r.text, mimeType: str(r.mimeType) ?? "text/plain", uri }] : [];
+	});
 	const attachments = (Array.isArray(p.attachments) ? p.attachments : []).filter((a): a is string => typeof a === "string");
-	return { sessionId, id, text: p.text, images, attachments };
+	return { sessionId, id, text: p.text, images, texts, attachments };
 }
 
 export function parseSessionRef(raw: unknown): UnsteerSession {
@@ -39,9 +44,12 @@ export function parseSessionRef(raw: unknown): UnsteerSession {
 	return { sessionId };
 }
 
-/** A steered message as ACP prompt blocks (as a prompt would come): images, the text, files. */
+/** A steered message as ACP prompt blocks (as a prompt would come): images, pasted texts, the text, files. */
 export function steerBlocks(steer: SteerSession): ContentBlock[] {
 	const blocks: ContentBlock[] = (steer.images ?? []).map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType, uri: i.uri || undefined }));
+	for (const t of steer.texts ?? []) {
+		blocks.push({ type: "resource", resource: { text: t.text, mimeType: t.mimeType, uri: t.uri } });
+	}
 	blocks.push({ type: "text", text: steer.text });
 	for (const uri of steer.attachments ?? []) {
 		const name = decodeURIComponent(uri.split("/").pop() ?? uri);

@@ -2,7 +2,8 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { latestModels, modelFamily } from "./status.js";
+import { latestModels, modelFamily, parseSteerParams, steerBlocks } from "./status.js";
+import { promptInput } from "./translate.js";
 
 const ids = [
 	"claude-fable-5",
@@ -42,4 +43,16 @@ test("an older current model stays listed after its family's newest", () => {
 		"claude-sonnet-5-5",
 		"claude-haiku-5-5",
 	]);
+});
+
+test("a pasted text reaches the model as text, in a prompt and steered", () => {
+	const uri = "file:///t/attachments/abc.txt";
+	const prompt = promptInput([
+		{ type: "resource", resource: { text: "long paste", mimeType: "text/plain", uri } },
+		{ type: "text", text: "summarize it" },
+	]);
+	assert.equal(prompt.text, `[Resource ${uri}]\nlong paste\n\nsummarize it`);
+	const steer = parseSteerParams({ sessionId: "s", id: "q1", text: "and this", texts: [{ text: "more", mimeType: "text/plain", uri }, { uri }] });
+	assert.deepEqual(steer.texts, [{ text: "more", mimeType: "text/plain", uri }]);
+	assert.equal(promptInput(steerBlocks(steer)).text, `[Resource ${uri}]\nmore\n\nand this`);
 });

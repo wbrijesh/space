@@ -5,7 +5,7 @@
 //!   meta.json      the summary the sidebar lists (with the format version)
 //!   events.jsonl   the thread's events, appended one per line
 //!   agent/         the agent's own files for the session (to load it again)
-//!   attachments/   images sent in the thread, named by the sha256 of their bytes
+//!   attachments/   images and long pastes sent in the thread, named by the sha256 of their bytes
 //! ```
 //!
 //! Events are kept as they are; Space decides what they mean. A line cut short (Space quit

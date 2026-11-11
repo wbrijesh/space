@@ -26,7 +26,7 @@ use space_ui::components::shell::{
 use space_ui::components::thread_row::{RowIndicator, ThreadRow, section_header};
 use space_ui::components::title_bar::{MainTitleBar, SidebarTitleBar, TitleBarNav};
 use space_ui::components::find::find_bar;
-use space_ui::components::transcript::{FindMarks, TranscriptView, transcript_items};
+use space_ui::components::transcript::{FindMarks, TranscriptView, UserExtras, transcript_items};
 use space_ui::format::{self, Preview};
 use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
@@ -231,6 +231,9 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .child(main)
         .child(nav.overlay(shown))
         .child(space_ui::components::tip::layer(window, cx))
+        .children(app.paste_view.as_ref().map(|(body, chars)| {
+            space_ui::components::pastes::text_view(body.clone(), *chars, &app.viewer_focus, handler(cx, |this, w, cx| this.close_paste_view(w, cx)))
+        }))
         .children(app.viewer.as_ref().map(|(pics, ix)| {
             viewer(pics, *ix, &app.viewer_focus, ViewerHandlers {
                 on_close: handler(cx, |this, w, cx| this.close_viewer(w, cx)),
@@ -480,7 +483,15 @@ fn body(app: &SpaceApp, streaming: Option<(usize, usize)>, window: &mut Window, 
         key: thread.key,
         expanded: &thread.expanded,
         thought_secs: &thread.thought_secs,
-        queued: thread.queued.as_ref().map(|q| (q.text.as_str(), q.attachments.as_slice(), q.images.iter().map(queued_pic).collect())),
+        queued: thread.queued.as_ref().map(|q| {
+            let extras = UserExtras {
+                attachments: q.attachments.as_slice(),
+                pics: q.images.iter().map(queued_pic).collect(),
+                unsaved_texts: q.pastes.iter().map(|p| p.chars).collect(),
+                ..Default::default()
+            };
+            (q.text.as_str(), extras)
+        }),
         on_toggle: Rc::new(move |ix, _, cx| {
             let _ = this.update(cx, |this, cx| this.toggle_expanded(ix, cx));
         }),
@@ -490,6 +501,12 @@ fn body(app: &SpaceApp, streaming: Option<(usize, usize)>, window: &mut Window, 
         on_open_image: Some(Rc::new(move |pics, ix, w, cx| {
             let _ = this3.update(cx, |this, cx| this.open_viewer(pics, ix, w, cx));
         })),
+        on_open_text: {
+            let this = cx.entity().downgrade();
+            Some(Rc::new(move |text, w, cx| {
+                let _ = this.update(cx, |this, cx| this.open_sent_paste(text, w, cx));
+            }))
+        },
         now_ms: crate::app::now_ms(),
         copied: app.copied.as_deref(),
         usage_open: app.usage_open.as_deref(),
@@ -977,6 +994,18 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
                 let _ = this.update(cx, |this, cx| this.remove_image(ix, cx));
             })
         },
+        on_open_paste: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |ix, w: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| this.open_draft_paste(ix, w, cx));
+            })
+        },
+        on_remove_paste: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |ix, _: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| this.remove_paste(ix, cx));
+            })
+        },
         on_drop: {
             let this = cx.entity().downgrade();
             Rc::new(move |paths, _: &mut Window, cx: &mut App| {
@@ -1014,6 +1043,7 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
     let untouched = thread.is_empty()
         && thread.attachments.is_empty()
         && thread.images.is_empty()
+        && thread.pastes.is_empty()
         && app.input.read(cx).value().trim().is_empty();
     let now = crate::app::now_ms();
     let resumable = if untouched {
@@ -1043,7 +1073,7 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         .map(|p| space_ui::components::composer::QueuedView {
             text: p.text.clone().into(),
             after_step: p.when == crate::queue::When::Step,
-            extras: p.attachments.len() + p.images.len(),
+            extras: p.attachments.len() + p.images.len() + p.pastes.len(),
         })
         .collect();
     Composer::new("composer", &app.input)
@@ -1053,6 +1083,7 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         .after_step(app.cmd_held && can_steer && thread.state.running)
         .attachments(thread.attachments.clone())
         .images(thread.images.iter().map(|i| i.pic().map(|p| p.src)).collect())
+        .pastes(thread.pastes.iter().map(|p| p.chars).collect())
         .controls(ComposerControls {
             cwd: thread.cwd.clone(),
             dirs: app.recent_dirs(),

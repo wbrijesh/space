@@ -345,6 +345,8 @@ pub struct SpaceApp {
     /// The image viewer: a message's pictures and the one shown.
     pub(crate) viewer: Option<(Vec<space_ui::components::images::Pic>, usize)>,
     pub(crate) viewer_focus: FocusHandle,
+    /// A pasted text open to read: its text and length in characters (focus: `viewer_focus`).
+    pub(crate) paste_view: Option<(SharedString, u64)>,
     /// The Trajectory tab: which threads show it, the shown one's data, the search field.
     pub(crate) trajectories: crate::trajectory::Trajectories,
     /// The message row that shows "Copied" for a moment, and the one whose usage panel is open.
@@ -568,6 +570,7 @@ impl SpaceApp {
             focus: cx.focus_handle(),
             viewer: None,
             viewer_focus: cx.focus_handle(),
+            paste_view: None,
             next_image_id: 0,
             copied: None,
             stream_reveal: Default::default(),
@@ -789,7 +792,7 @@ impl SpaceApp {
             // A new thread left untouched (nothing typed, attached or open in a terminal) goes:
             // it isn't listed, so nothing would lead back to it.
             if let Some(prev) = left
-                && self.thread(prev).is_some_and(|t| t.is_empty() && t.draft.trim().is_empty() && t.attachments.is_empty() && t.images.is_empty())
+                && self.thread(prev).is_some_and(|t| t.is_empty() && t.draft.trim().is_empty() && t.attachments.is_empty() && t.images.is_empty() && t.pastes.is_empty())
                 && !self.has_terminals(prev)
             {
                 self.drop_thread(prev, cx);

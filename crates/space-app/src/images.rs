@@ -9,7 +9,7 @@ use std::ffi::c_void;
 use std::fs;
 use std::io::Write as _;
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use objc2_core_foundation::{CFBoolean, CFData, CFDictionary, CFMutableData, CFNumber, CFRetained, CFString, CFType, CGPoint, CGRect, CGSize};
@@ -113,17 +113,24 @@ fn prepare_within(data: &[u8], name: Option<String>, max_pixels: u64) -> Result<
 /// Write the image into `dir` as [`Prepared::file_name`] unless it is already there (same name,
 /// same bytes): a temp file in `dir`, synced, then renamed; owner-only.
 pub fn save(p: &Prepared, dir: &Path) -> std::io::Result<ImageRef> {
-    let path = dir.join(p.file_name());
+    let path = write_once(dir, &p.file_name(), &p.bytes)?;
+    Ok(ImageRef { path, mime: p.mime.to_string(), width: p.width, height: p.height, name: p.name.clone() })
+}
+
+/// Write `bytes` as `dir/name` unless that file is there already (attachments are named by the
+/// sha256 of their bytes): a temp file in `dir`, synced, then renamed; owner-only.
+pub fn write_once(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    let path = dir.join(name);
     if !path.exists() {
         fs::create_dir_all(dir)?;
-        let tmp = dir.join(format!(".{}.tmp-{}", p.file_name(), std::process::id()));
+        let tmp = dir.join(format!(".{name}.tmp-{}", std::process::id()));
         let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
-        file.write_all(&p.bytes)?;
+        file.write_all(bytes)?;
         file.sync_all()?;
         fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
         fs::rename(&tmp, &path)?;
     }
-    Ok(ImageRef { path, mime: p.mime.to_string(), width: p.width, height: p.height, name: p.name.clone() })
+    Ok(path)
 }
 
 fn too_large() -> String {

@@ -1,6 +1,6 @@
 //! Attaching to a draft: images (from the picker, a drop or a paste) are prepared in the
-//! background into draft images; other files are attached as paths. And the image viewer a
-//! sent picture opens in.
+//! background into draft images; other files are attached as paths; long pasted text becomes a
+//! pasted-text attachment. And the viewers a sent picture or pasted text opens in.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -63,20 +63,28 @@ impl SpaceApp {
         cx.notify();
     }
 
-    /// A paste into the composer. Images and copied files are taken (`true`); text is left
-    /// to the input.
+    /// A paste into the composer. Images, copied files and long text are taken (`true`);
+    /// other text is left to the input.
     pub(crate) fn paste(&mut self, item: &ClipboardItem, cx: &mut Context<Self>) -> bool {
         let mut pictures = Vec::new();
         let mut paths = Vec::new();
+        let mut text: Option<&str> = None;
         for entry in item.entries() {
             match entry {
                 ClipboardEntry::Image(image) => pictures.push(Source::Bytes(image.bytes.clone())),
                 ClipboardEntry::ExternalPaths(p) => paths.extend(p.paths().iter().cloned()),
-                ClipboardEntry::String(_) => {}
+                ClipboardEntry::String(s) => text = text.or(Some(s.text())),
             }
         }
         if pictures.is_empty() && paths.is_empty() {
-            return false;
+            let Some(text) = text.filter(|t| crate::paste::is_long(t)) else { return false };
+            if let Some(key) = self.selected
+                && let Some(t) = self.thread_mut(key)
+            {
+                t.pastes.push(crate::paste::Paste::new(text.to_string()));
+            }
+            cx.notify();
+            return true;
         }
         if let Some(key) = self.selected {
             self.add_images(key, pictures, cx);
@@ -146,6 +154,43 @@ impl SpaceApp {
             t.images.remove(ix);
         }
         cx.notify();
+    }
+
+    pub(crate) fn remove_paste(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if let Some(key) = self.selected
+            && let Some(t) = self.thread_mut(key)
+            && ix < t.pastes.len()
+        {
+            t.pastes.remove(ix);
+        }
+        cx.notify();
+    }
+
+    /// Open the draft's pasted text `ix` to read.
+    pub(crate) fn open_draft_paste(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(p) = self.selected.and_then(|key| self.thread(key)).and_then(|t| t.pastes.get(ix)) else { return };
+        self.paste_view = Some((p.text.clone(), p.chars));
+        window.focus(&self.viewer_focus, cx);
+        cx.notify();
+    }
+
+    /// Open a sent message's pasted text (read from its file).
+    pub(crate) fn open_sent_paste(&mut self, text: space_core::TextRef, window: &mut Window, cx: &mut Context<Self>) {
+        match std::fs::read_to_string(&text.path) {
+            Ok(body) => {
+                self.paste_view = Some((body.into(), text.chars));
+                window.focus(&self.viewer_focus, cx);
+            }
+            Err(e) => self.banner = Some(format!("Couldn't open this pasted text: {e}")),
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn close_paste_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.paste_view.take().is_some() {
+            self.focus_composer(window, cx);
+            cx.notify();
+        }
     }
 
     pub(crate) fn open_viewer(&mut self, pics: Vec<Pic>, ix: usize, window: &mut Window, cx: &mut Context<Self>) {

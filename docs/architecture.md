@@ -123,7 +123,7 @@ The harness is the ACP **client**; agent plugins are ACP **agents**.
 | client → agent | `initialize` | Protocol version and capabilities; `_meta["space/steer"]: true` from agents that take steering |
 | client → agent | `session/new` | `cwd` = the thread's folder; `_meta["space/dataDir"]` = a folder for the session's own files, when a session store is installed |
 | client → agent | `session/load` | Continue a saved thread's session (agents with `loadSession`), same `_meta`; what the agent replays meanwhile isn't shown (the thread already is) |
-| client → agent | `session/prompt` | Image blocks (base64 bytes plus the saved file's `file://` uri; only to agents with `promptCapabilities.image`), then text and `resource_link` blocks; `_meta["space/context"]` carries hidden context sections |
+| client → agent | `session/prompt` | Image blocks (base64 bytes plus the saved file's `file://` uri; only to agents with `promptCapabilities.image`), long pastes as text `resource` blocks (`text/plain`, the saved file's `file://` uri; a `resource_link` to that file for agents without `promptCapabilities.embeddedContext`), then text and `resource_link` blocks; `_meta["space/context"]` carries hidden context sections |
 | client → agent | `session/cancel` (notification) | Abort the running turn |
 | agent → client | `session/update` (notification) | message/thought chunks, `tool_call`, `tool_call_update`, `plan` |
 | agent → client | `session/request_permission` | The agent's own approval card |
@@ -137,7 +137,7 @@ Space extensions:
 | agent → client | `_space/tools/preExecute` | `{ sessionId, toolCallId, tool, kind, args, cwd? }` → `{ decision: allow \| deny, reason? }`, after the host's pipeline (may take as long as the call is held) |
 | agent → client | `_space/sandbox/confine` | `{ sessionId, argv, cwd }` → `{ argv }` to spawn instead (unchanged without a `sandbox` provider) |
 | client → agent | `_space/complete` | `{ sessionId, prompt, provider?, model? }` → `{ text }`: one short, tool-free completion by the session's model (or the one named), outside the conversation. The host forwards plugins' `agent/complete` here |
-| client → agent | `_space/session/steer` | `{ sessionId, id, text, images?, attachments? }`: a message for the running turn, delivered after the current step |
+| client → agent | `_space/session/steer` | `{ sessionId, id, text, images?, texts?, attachments? }`: a message for the running turn, delivered after the current step |
 | client → agent | `_space/session/unsteer` | `{ sessionId }` → `{ ids }`: take back the undelivered ones (the turn was stopped) |
 | agent → client | `_space/steered` (notification) | `{ sessionId, id }`: that message reached the model; the transcript shows it there |
 | agent → client | `_space/trace` (notification) | `{ sessionId, events: TraceEvent[] }`: what happened around each model request (headers on change, requests with their new messages, first token, chunk times, responses with usage, retries, tool start/end); see Traces below |
@@ -193,7 +193,7 @@ the host which session is on screen while Space is frontmost).
 
 **Saved threads** go to the `session-store` provider (bundled: `plugins/session-store`, which keeps
 `~/.space/threads/<thread>/` with `meta.json`, an append-only `events.jsonl`, `agent/`, the session's
-own files, and `attachments/`, the images sent in the thread; `store/data-dir` names both folders).
+own files, and `attachments/`, the images and long pastes sent in the thread (`<sha256>.txt`); `store/data-dir` names both folders).
 Images are normalized before they're sent (oriented, 8-bit sRGB, at most 1568 px on the long side,
 metadata stripped; JPEG, or PNG when they have transparency), written there as `<sha256>.<ext>` before
 the message that refers to them, and the message event keeps only their path, type and size. `plugin/initialize` tells every plugin Space's folder (`spaceDir`; absent in tests and

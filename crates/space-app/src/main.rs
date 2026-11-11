@@ -41,6 +41,7 @@ mod single;
 mod terminal;
 mod terminal_view;
 mod text_prompt;
+mod paste;
 mod pin;
 mod rename;
 mod threads;

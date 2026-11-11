@@ -19,6 +19,7 @@ use space_core::protocol::trace::TrajectoryStats;
 use space_core::protocol::{ConfigureSession, SpaceStatus};
 
 use super::images::draft_thumb;
+use super::pastes::{Handler as ChipHandler, paste_chip};
 use super::loaders::ContextRing;
 use super::model_picker::{PaneHandler, PickerPane, model_picker};
 use super::trajectory::duration_label;
@@ -79,7 +80,8 @@ pub type ConfigureHandler = Rc<dyn Fn(ConfigureSession, &mut Window, &mut App)>;
 pub type BoolHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
 pub type StringHandler = Rc<dyn Fn(String, &mut Window, &mut App)>;
 pub type PathsHandler = Rc<dyn Fn(Vec<PathBuf>, &mut Window, &mut App)>;
-/// Gets a paste first: `true` took it (images, copied files), `false` lets the text go in.
+/// Gets a paste first: `true` took it (images, copied files, long text), `false` lets the text
+/// go in.
 pub type PasteHandler = Rc<dyn Fn(&ClipboardItem, &mut Window, &mut App) -> bool>;
 
 /// Callbacks; every one defaults to a no-op.
@@ -98,6 +100,9 @@ pub struct ComposerHandlers {
     /// One of the blocker's links was clicked (its action string).
     pub on_blocker_action: StringHandler,
     pub on_remove_image: IndexHandler,
+    /// A pasted text's chip was clicked (open it) or its × (remove it).
+    pub on_open_paste: IndexHandler,
+    pub on_remove_paste: IndexHandler,
     /// Files dropped on the card.
     pub on_drop: PathsHandler,
     pub on_paste: PasteHandler,
@@ -149,6 +154,8 @@ impl Default for ComposerHandlers {
             on_mode: Rc::new(|_, _, _| {}),
             on_blocker_action: Rc::new(|_, _, _| {}),
             on_remove_image: Rc::new(|_, _, _| {}),
+            on_open_paste: Rc::new(|_, _, _| {}),
+            on_remove_paste: Rc::new(|_, _, _| {}),
             on_drop: Rc::new(|_, _, _| {}),
             on_paste: Rc::new(|_, _, _| false),
             on_context: Rc::new(|_, _, _| {}),
@@ -253,6 +260,8 @@ pub struct Composer {
     attachments: Vec<PathBuf>,
     /// Draft images' thumbnails (`None`: still being prepared; sending waits for it).
     images: Vec<Option<ImageSource>>,
+    /// Long pastes, by their length in characters.
+    pastes: Vec<u64>,
     controls: Option<ComposerControls>,
     handlers: ComposerHandlers,
     /// Messages waiting for the agent.
@@ -271,6 +280,7 @@ impl Composer {
             queued: false,
             attachments: Vec::new(),
             images: Vec::new(),
+            pastes: Vec::new(),
             controls: None,
             handlers: ComposerHandlers::default(),
             queued_messages: Vec::new(),
@@ -308,6 +318,11 @@ impl Composer {
         self
     }
 
+    pub fn pastes(mut self, pastes: Vec<u64>) -> Self {
+        self.pastes = pastes;
+        self
+    }
+
     pub fn controls(mut self, controls: ComposerControls) -> Self {
         self.controls = Some(controls);
         self
@@ -321,13 +336,13 @@ impl Composer {
 
 impl RenderOnce for Composer {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let Self { id, input, running, queued, attachments, images, controls, handlers: h, queued_messages, after_step } = self;
+        let Self { id, input, running, queued, attachments, images, pastes, controls, handlers: h, queued_messages, after_step } = self;
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
         let has_text = !input.read(cx).value().trim().is_empty();
         let blocker = controls.as_ref().and_then(|c| c.blocker.clone());
         let preparing = images.iter().any(Option::is_none);
-        let has_content = has_text || !attachments.is_empty() || !images.is_empty();
-        let can_send = (has_text || !attachments.is_empty() || !images.is_empty())
+        let has_content = has_text || !attachments.is_empty() || !images.is_empty() || !pastes.is_empty();
+        let can_send = has_content
             && !running
             && !queued
             && !preparing
@@ -346,9 +361,16 @@ impl RenderOnce for Composer {
                 .px_1()
                 .children(images.into_iter().enumerate().map(|(ix, src)| draft_thumb(ix, src, remove.clone())))
         });
-        let chips = (!attachments.is_empty()).then(|| {
+        let chips = (!attachments.is_empty() || !pastes.is_empty()).then(|| {
             let remove = h.on_remove_attachment.clone();
-            div().flex().flex_wrap().gap_1p5().px_1().children(attachments.iter().enumerate().map(|(ix, p)| {
+            let (open_paste, remove_paste) = (h.on_open_paste.clone(), h.on_remove_paste.clone());
+            let pasted = pastes.iter().enumerate().map(move |(ix, chars)| {
+                let (open, remove) = (open_paste.clone(), remove_paste.clone());
+                let open: ChipHandler = Rc::new(move |w, cx| open(ix, w, cx));
+                let remove: ChipHandler = Rc::new(move |w, cx| remove(ix, w, cx));
+                paste_chip(format!("draft-paste-{ix}"), *chars, Some(open), Some(remove)).into_any_element()
+            });
+            div().flex().flex_wrap().gap_1p5().px_1().children(pasted).children(attachments.iter().enumerate().map(|(ix, p)| {
                 let remove = remove.clone();
                 attachment_chip(p).pr_0p5().child(
                     div()
@@ -1129,6 +1151,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             example("attachments", "Review these", |c| {
                 c.attachments(vec![PathBuf::from("Cargo.toml"), PathBuf::from("README.md")])
             }),
+            example("pasted text", "What is failing here?", |c| c.pastes(vec![5_230])),
             example("agent starting (locked)", "", |c| c.queued(true).controls(fixtures::controls(0, true))),
             example("read only", "Why does the composer flicker when it grows?", |c| {
                 c.controls(fixtures::with_mode(fixtures::controls(18_200, false), "read-only", true))

@@ -189,6 +189,17 @@ pub struct SteerImage {
     pub uri: String,
 }
 
+/// A long paste in a [`SteerSession`]: its text and the saved file it's in.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+#[serde(rename_all = "camelCase")]
+pub struct SteerText {
+    pub text: String,
+    pub mime_type: String,
+    /// `file://` URI of the saved text.
+    pub uri: String,
+}
+
 /// `_space/session/steer` (client → agent request): a message for a running turn, to be
 /// delivered after the current step (the reply being written and its tool calls), before the
 /// model is asked again. The agent answers at once; when it hands the message to the model it
@@ -206,6 +217,9 @@ pub struct SteerSession {
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<SteerImage>,
+    /// Long pastes, given to the model as text (like ACP embedded resources).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts: Vec<SteerText>,
     /// `file://` URIs of attached files.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<String>,
