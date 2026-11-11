@@ -33,7 +33,8 @@ cask clears macOS's download mark so it opens normally.
 - **Closing** a thread keeps it: a new, empty thread in the same folder offers it under **Resume**.
   Closed threads are deleted after 30 days (Settings ▸ Threads).
 - **Titles** come from the agent's model after your first message. A name you give (⌘R) stays.
-- **Pinned** threads stay at the top of the sidebar, in their usual order, and keep their pin while
+- **The sidebar** groups threads under Pinned, Today, Yesterday, then one header per earlier day
+  (by when each was created; writing in one doesn't move it). Pinned threads keep their pin while
   closed.
 - **Folders.** Each thread works in one folder, picked under the composer before its first message.
   Opened from Spotlight or the Dock, Space starts where you worked last.

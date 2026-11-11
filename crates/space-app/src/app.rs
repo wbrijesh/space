@@ -606,6 +606,7 @@ impl SpaceApp {
             cmd_held: false,
         };
         this.watch_agent_idle(cx);
+        this.watch_midnight(cx);
         #[cfg(feature = "dev")]
         crate::reload::start(cx);
         this.seed_threads(options.seed, options.select, window, cx);

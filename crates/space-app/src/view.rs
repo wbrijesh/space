@@ -23,7 +23,7 @@ use space_ui::components::trajectory::{TrajectoryHandlers, TrajectoryView, ViewT
 use space_ui::components::shell::{
     banner, confirm_card, empty_heading, problem_card, sidebar_column,
 };
-use space_ui::components::thread_row::{RowIndicator, ThreadRow};
+use space_ui::components::thread_row::{RowIndicator, ThreadRow, section_header};
 use space_ui::components::title_bar::{MainTitleBar, SidebarTitleBar, TitleBarNav};
 use space_ui::components::find::find_bar;
 use space_ui::components::transcript::{FindMarks, TranscriptView, transcript_items};
@@ -251,14 +251,17 @@ fn queued_pic(p: &crate::images::Prepared) -> Pic {
 
 fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceApp>) -> impl IntoElement {
     let shortcuts = app.row_shortcuts();
-    // Pinned threads first (`listed_threads`); a new thread isn't listed until its first
-    // message is sent (the new-thread button shows it's the current one).
+    // Pinned threads first, then by day (`listed_sections`); a new thread isn't listed until
+    // its first message is sent (the new-thread button shows it's the current one). A section's
+    // header is drawn in its first row's element, so the list keeps one element per row (⌘
+    // numbers find rows by position).
     let rows = app
-        .listed_threads()
+        .listed_sections()
         .into_iter()
-        .filter_map(|key| app.thread(key))
+        .enumerate()
+        .filter_map(|(ix, (key, header))| app.thread(key).map(|t| (ix, t, header)))
         .zip(shortcuts)
-        .map(|(t, shortcut)| {
+        .map(|((ix, t, header), shortcut)| {
             let key = t.key;
             // On the Settings page no thread is shown, so none is highlighted.
             let selected = app.selected == Some(key) && !app.show_settings;
@@ -271,7 +274,7 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
                 t.unread > 0,
                 failed,
             );
-            ThreadRow::new(("thread", key as usize), t.title())
+            let row = ThreadRow::new(("thread", key as usize), t.title())
                 .selected(selected)
                 .indicator(indicator)
                 .terminal(!selected && app.terminals.active(key))
@@ -279,8 +282,11 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
                 .on_click(cx.listener(move |this, _, w, cx| this.select_thread(key, w, cx)))
                 .on_pin(t.pinned_ms.is_some(), !t.is_empty(), cx.listener(move |this, _, _, cx| this.toggle_pin(key, cx)))
                 .on_rename(cx.listener(move |this, _, w, cx| this.rename_thread(key, w, cx)))
-                .on_close(cx.listener(move |this, _, w, cx| this.confirm_close_thread(key, w, cx)))
-                .into_any_element()
+                .on_close(cx.listener(move |this, _, w, cx| this.confirm_close_thread(key, w, cx)));
+            match header {
+                Some(label) => div().child(section_header(label, ix == 0)).child(row).into_any_element(),
+                None => row.into_any_element(),
+            }
         })
         .collect();
 

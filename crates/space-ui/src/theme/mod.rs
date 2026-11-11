@@ -199,6 +199,10 @@ pub mod size {
     pub const ROW_H: Pixels = px(30.);
     /// Sidebar thread rows.
     pub const THREAD_ROW_H: Pixels = px(32.);
+    /// A section header in the sidebar's thread list (Pinned, Today…), and the space above one
+    /// that follows another section (none below: its rows start right under it).
+    pub const SIDEBAR_SECTION_H: Pixels = px(24.);
+    pub const SIDEBAR_SECTION_GAP: Pixels = px(10.);
     /// Round composer buttons (+, send).
     pub const ROUND_BUTTON: f32 = 32.;
     /// Activity spinners.

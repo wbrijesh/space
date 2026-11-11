@@ -277,6 +277,34 @@ pub fn exact_time(at_ms: u64) -> String {
     }
 }
 
+/// The local calendar day of `at_ms` (days since 1970-01-01), with the zone `offset_secs`
+/// ahead of UTC.
+pub fn local_day(at_ms: u64, offset_secs: i32) -> i64 {
+    (at_ms as i64 / 1000 + offset_secs as i64).div_euclid(86_400)
+}
+
+/// A sidebar section for threads created at `created_ms`: "Today", "Yesterday", else the date,
+/// "3 Nov", with the year when it isn't this year's ("3 Nov 2025"). Days are local, the zone
+/// `offset_secs` ahead of UTC; a time after `now_ms` (a clock that moved back) counts as today.
+pub fn day_label(created_ms: u64, now_ms: u64, offset_secs: i32) -> String {
+    use chrono::{DateTime, Datelike as _};
+    let (day, today) = (local_day(created_ms, offset_secs), local_day(now_ms, offset_secs));
+    match today - day {
+        ..=0 => "Today".into(),
+        1 => "Yesterday".into(),
+        _ => {
+            let date = |d: i64| DateTime::from_timestamp(d * 86_400, 0).map(|t| t.date_naive());
+            let (Some(date), Some(now)) = (date(day), date(today)) else { return String::new() };
+            if date.year() == now.year() { date.format("%-d %b").to_string() } else { date.format("%-d %b %Y").to_string() }
+        }
+    }
+}
+
+/// How far this Mac's time zone is ahead of UTC right now, in seconds.
+pub fn local_offset_secs() -> i32 {
+    chrono::Local::now().offset().local_minus_utc()
+}
+
 /// 9413 → "9,413".
 pub fn thousands(n: u64) -> String {
     let digits = n.to_string();
@@ -294,6 +322,26 @@ pub fn thousands(n: u64) -> String {
 mod tests {
     use super::*;
     use space_core::SessionEvent;
+
+    #[test]
+    fn sidebar_days_are_local_calendar_days() {
+        // 2026-11-10 12:00 UTC.
+        let now = 1_794_312_000_000;
+        let hour = 3_600_000;
+        assert_eq!(day_label(now, now, 0), "Today");
+        assert_eq!(day_label(now - 12 * hour, now, 0), "Today"); // 00:00 the same day
+        assert_eq!(day_label(now - 12 * hour - 1, now, 0), "Yesterday"); // 23:59:59.999 the day before
+        assert_eq!(day_label(now - 36 * hour, now, 0), "Yesterday");
+        assert_eq!(day_label(now - 7 * 24 * hour, now, 0), "3 Nov");
+        assert_eq!(day_label(now - 372 * 24 * hour, now, 0), "3 Nov 2025");
+        // A clock that moved back: still today.
+        assert_eq!(day_label(now + hour, now, 0), "Today");
+        // The zone decides the day. At 12:00 UTC, 11:00 UTC was earlier today in UTC+14 (01:00
+        // and 02:00 on the 11th), but in UTC-12 it was 23:00 on the 9th and now is 00:00 on the 10th.
+        let eleven = now - hour;
+        assert_eq!(day_label(eleven, now, 14 * 3600), "Today");
+        assert_eq!(day_label(eleven, now, -12 * 3600), "Yesterday");
+    }
 
     #[test]
     fn time_ago_steps_up_at_each_unit() {

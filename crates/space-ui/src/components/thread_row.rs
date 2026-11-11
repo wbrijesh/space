@@ -190,6 +190,23 @@ impl RenderOnce for ThreadRow {
     }
 }
 
+/// A quiet header over a section of the thread list ("Pinned", "Today", "3 Nov"), aligned
+/// with the row titles; `first`: no space above it. Not clickable.
+pub fn section_header(label: impl Into<SharedString>, first: bool) -> Div {
+    div()
+        .when(!first, |d| d.pt(size::SIDEBAR_SECTION_GAP))
+        .child(
+            div()
+                .h(size::SIDEBAR_SECTION_H)
+                .px_2p5()
+                .flex()
+                .items_center()
+                .text_size(text::XS)
+                .text_color(color::text_3())
+                .child(label.into()),
+        )
+}
+
 /// A row's right-click menu: Pin (or Unpin) Thread, Rename Thread… and Close Thread, with the
 /// shortcuts of their actions.
 fn row_menu(on_pin: Option<(bool, bool, ClickHandler)>, on_rename: Option<ClickHandler>, on_close: Option<ClickHandler>) -> Vec<ContextItem> {
@@ -256,6 +273,25 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 row("⌘ held", |r| r.shortcut(Some(("3".into(), true)))),
                 row("⌘ held, selected and working", |r| r.selected(true).indicator(RowIndicator::Working).shortcut(Some(("12".into(), true)))),
                 row("⌘ held, not what's typed", |r| r.shortcut(Some(("4".into(), false)))),
+                Example::new("sections", |_, _| {
+                    let row = |title: &'static str| ThreadRow::new(SharedString::from(format!("sections-{title}")), title).into_any_element();
+                    let section = |label: &'static str, first: bool, titles: &[&'static str]| {
+                        let mut rows = titles.iter().map(|t| row(t));
+                        let head = rows.next().map(|r| div().child(section_header(label, first)).child(r).into_any_element());
+                        head.into_iter().chain(rows).collect::<Vec<_>>()
+                    };
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .children(section("Pinned", true, &["Release checklist", "Guardrail notes"]))
+                        .children(section("Today", false, &["Fix the failing smoke test in space-core", "Bump the gpui-kit version"]))
+                        .children(section("Yesterday", false, &["Explain how plugin discovery works"]))
+                        .children(section("3 Nov", false, &["Add a context ring to the composer"]))
+                        .children(section("28 Oct 2025", false, &["Sketch the permissions plugin"]))
+                        .into_any_element()
+                })
+                .width(size::SIDEBAR_W - px(20.)),
                 Example::new("right-click menu", |window, cx| {
                     let noop: ClickHandler = std::rc::Rc::new(|_, _, _| {});
                     div()
