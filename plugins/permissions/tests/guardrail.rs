@@ -113,7 +113,8 @@ fn root(mock: &Mock, retry_secs: f64) -> tempfile::TempDir {
     };
     write(
         "stub",
-        format!("id='stub'\nname='Stub'\nversion='1'\nprovides=['agent']\n[run]\ncommand='{}'\n", stub_agent().display()),
+        // A command that writes, so the decision model reviews it (rules settle plain reads).
+        format!("id='stub'\nname='Stub'\nversion='1'\nprovides=['agent']\n[run]\ncommand='{}'\n[run.env]\nSPACE_STUB_COMMAND='touch stub.txt'\n", stub_agent().display()),
     );
     write(
         "permissions",

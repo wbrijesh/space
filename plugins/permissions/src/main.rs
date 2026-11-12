@@ -10,6 +10,9 @@
 mod health;
 mod luna;
 mod modes;
+mod rules;
+#[cfg(test)]
+mod eval;
 mod sandbox;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -131,16 +134,26 @@ impl Inner {
     /// while it can't be used.
     async fn review(&self, call: &HookCall) -> HookDecision {
         let mode = mode_name(&call.mode);
+        let tool = format!("decision mode={} tool={} call={}", call.mode, call.call.tool, call.call.id);
+        // Plainly fine calls need no model (and go on while it can't be used).
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+        let temp = [std::path::PathBuf::from(&self.tmpdir), "/tmp".into(), "/private/tmp".into()];
+        let facts = match rules::check(&call.call, &rules::Context { project_root: &call.project_root, home: &home, temp: &temp }) {
+            rules::Ruling::Allow(why) => {
+                eprintln!("{tool} verdict=allow by=rules ({why})");
+                return HookDecision::allow();
+            }
+            rules::Ruling::Model(facts) => facts.describe(),
+        };
         if let Some(problem) = self.health.lock().unwrap().problem(mode) {
             return HookDecision::unavailable(problem);
         }
         let (key, generation) = (self.key.lock().unwrap().clone(), self.generation.load(Ordering::SeqCst));
         let Some(key) = key else { return HookDecision::unavailable(format!("{mode} needs an OpenAI API key.")) };
-        let tool = format!("decision mode={} tool={} call={}", call.mode, call.call.tool, call.call.id);
-        match self.luna.review(&key, call).await {
+        match self.luna.review(&key, call, facts.as_deref()).await {
             Ok(review) => {
                 self.succeed(generation);
-                eprintln!("{tool} {}", review.log);
+                eprintln!("{tool} by=model {}", review.log);
                 review.decision
             }
             Err(ReviewError::TooLarge(what)) => {

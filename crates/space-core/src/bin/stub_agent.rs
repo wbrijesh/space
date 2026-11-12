@@ -1,7 +1,8 @@
 //! `space-stub-agent`: a tiny scripted ACP agent for tests and offline development.
 //!
 //! Every prompt streams: a `_space/status` update, a thought chunk, a tool call with a
-//! status update, then message chunks, and ends the turn with `end_turn`.
+//! status update, then message chunks, and ends the turn with `end_turn`. The tool runs
+//! `echo stub`, or `$SPACE_STUB_COMMAND`.
 //! Prompt keywords change the script:
 //! * `permission` — ask `session/request_permission` before running the tool.
 //! * `slow` — stream 50 chunks 100 ms apart (use with cancel).
@@ -411,15 +412,17 @@ async fn run_turn(
         std::process::exit(3);
     }
 
+    // The built-in turn's one command (`SPACE_STUB_COMMAND`, so a test can pick one that needs a review).
+    let command = std::env::var("SPACE_STUB_COMMAND").unwrap_or_else(|_| "echo stub".into());
     let tool_id = "tool-1";
     trace.respond("toolUse", "", "Thinking about the request.", Some(FIRST_USAGE));
-    trace.tool_start(tool_id, "bash", serde_json::json!({"command": "echo stub"}));
+    trace.tool_start(tool_id, "bash", serde_json::json!({"command": command}));
     trace.send(&cx)?;
     send(SessionUpdate::ToolCall(
-        ToolCall::new(tool_id, "bash: echo stub")
+        ToolCall::new(tool_id, format!("bash: {command}"))
             .kind(ToolKind::Execute)
             .status(ToolCallStatus::Pending)
-            .raw_input(serde_json::json!({"command": "echo stub"})),
+            .raw_input(serde_json::json!({"command": command})),
     ))?;
 
     // The host's tool pipeline decides first, then the command is confined.
@@ -429,7 +432,7 @@ async fn run_turn(
             tool_call_id: tool_id.into(),
             tool: "bash".into(),
             kind: "execute".into(),
-            args: serde_json::json!({"command": "echo stub"}),
+            args: serde_json::json!({"command": command}),
             cwd: None,
         })
         .block_task()
@@ -442,7 +445,7 @@ async fn run_turn(
     let confined = match &blocked {
         Some(_) => None,
         None => {
-            let argv = vec!["/bin/sh".to_string(), "-c".to_string(), "echo stub".to_string()];
+            let argv = vec!["/bin/sh".to_string(), "-c".to_string(), command.clone()];
             let confine = Confine { session_id: sid.0.to_string(), argv, cwd: "/".into() };
             Some(cx.send_request(confine).block_task().await.map(|r| r.argv.join(" ")))
         }
@@ -475,7 +478,7 @@ async fn run_turn(
         let resp = cx
             .send_request(RequestPermissionRequest::new(
                 sid.clone(),
-                ToolCallUpdate::new(tool_id, ToolCallUpdateFields::new().title("bash: echo stub")),
+                ToolCallUpdate::new(tool_id, ToolCallUpdateFields::new().title(format!("bash: {command}"))),
                 options,
             ))
             .block_task()
@@ -519,7 +522,7 @@ async fn run_turn(
         }
     }
     trace.request(vec![
-        serde_json::json!({"role": "assistant", "content": [{"type": "tool_use", "id": tool_id, "name": "bash", "input": {"command": "echo stub"}}]}),
+        serde_json::json!({"role": "assistant", "content": [{"type": "tool_use", "id": tool_id, "name": "bash", "input": {"command": command}}]}),
         serde_json::json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_id, "content": {"toolResultRef": tool_id}}]}),
     ]);
     trace.send(&cx)?;

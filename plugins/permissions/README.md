@@ -6,10 +6,27 @@ It's `required`: Space doesn't run tools without it.
 | Mode | How it's enforced |
 |---|---|
 | **Read Only** | Commands run under `sandbox-exec` with a profile that denies every file write except `$TMPDIR`, `/dev/null` and the terminal devices; the edit and write tools are denied. No model involved. |
-| **Workspace Write** (default) | No sandbox. Every tool call, reads included, is reviewed by the decision model: changes inside the project folder are fine, outside it or sending secrets out is not. |
-| **Full access** | No sandbox. Every call is reviewed: anything goes except irreversible deletion of existing work, history rewrites, production changes you didn't ask for, and exfiltration. Needs confirming once per thread. |
+| **Workspace Write** (default) | No sandbox. Plainly safe calls are allowed by rules; every other call is reviewed by the decision model: changes inside the project folder are fine, outside it or sending secrets out is not. |
+| **Full access** | No sandbox. The same rules, then the model: anything goes except irreversible deletion of existing work, history rewrites, production changes you didn't ask for, and exfiltration. Needs confirming once per thread. |
 
 Each mode adds one hidden line to the prompt saying which mode it is.
+
+## Rules (`src/rules.rs`)
+
+Before the model, rules allow what is plainly safe, instantly and also while the model can't be
+used. They never deny: anything they can't vouch for goes to the model, with what they found.
+
+- **Reading anywhere**: the file tools, or shell lines whose every command only reads (`cat`,
+  `grep`, `ls`, `sed` without `-i` or its `w`/`e` commands, `find` without `-exec`/`-delete`,
+  read-only `git`, `xargs` of those…, `$(…)` checked the same way). Output may go to `/dev/null` or a
+  file in a temporary folder.
+- **Edits and writes inside the project** with the file tools (symlinks followed).
+- **Never by rules**: other commands, other redirects, `eval`, `bash -c`, heredocs, functions,
+  anything that doesn't parse, and anything touching credentials or secrets (`~/.ssh`, `~/.aws`,
+  `.npmrc`, `.env`, keys, `printenv`, `security`, `gh auth token`…).
+
+What they found ("Commands run: cd, cat, curl. Reaches the network: curl.") goes to the model with
+the call.
 
 ## The decision model
 
@@ -20,7 +37,8 @@ reason).
 
 - **Sent:** the mode's policy, the user's messages, earlier tool calls (arguments only), the pending call.
 - **Never sent:** file contents (an edit or write becomes its path and size) and tool outputs.
-- **Verdicts:** allow/deny need confidence ≥ 0.8; under that, or a refusal, the user is asked.
+- **Verdicts:** allow needs confidence ≥ 0.6 when it names no risk, else ≥ 0.8; deny ≥ 0.8; under
+  that, or a refusal, the user is asked.
 - **Size:** history is capped (40 items, ~60 KB, newest first); a request the API finds too long is
   sent again with less history; a pending call with an argument over 16 KB is denied ("too large to
   review": retrying can't help).
@@ -52,6 +70,14 @@ and no credit aren't saved; when OpenAI can't be reached the user may save anywa
 
 - `SPACE_LUNA_BASE_URL`: another server instead of `https://api.openai.com/v1`.
 - `SPACE_GUARD_RETRY_SECS`: the probe interval (default 300).
+
+## The evaluation set (`tests/eval`)
+
+Real calls (anonymised; labelled allow, or ask for the ones that use credentials), dangerous ones
+aimed at the rules' gaps, and the labelled set. `cargo test` checks that rules never allow one
+labelled deny or ask, and how many false alarms they settle (19 of the 21 real ones). With a key,
+`OPENAI_API_KEY=… cargo test -p space-permissions live_evaluation -- --ignored --nocapture` runs
+everything through the model as well (`SPACE_EVAL_RULES=0`: without the rules, to compare).
 
 ## Tests
 
