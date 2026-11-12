@@ -823,6 +823,9 @@ impl SelectableTextState {
     fn set_snapshot(&mut self, snapshot: Option<TextSelectionSnapshot>, cx: &mut Context<Self>) {
         if self.set_snapshot_quietly(snapshot) {
             cx.emit(TextSelectionEvent::SelectionChanged(snapshot));
+            // Space patch: whatever painted this participant (plain `SelectableText` included)
+            // draws again, so a drag shows as it goes.
+            cx.notify();
         }
     }
 

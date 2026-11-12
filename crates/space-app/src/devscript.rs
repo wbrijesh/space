@@ -11,6 +11,9 @@
 //! click 120 300 [2]   move + left mouse down + up (2: a double click, 3: a triple click)
 //! rclick 120 300      the same with the right button (context menus)
 //! drag 100 300 400 300  press at the first point, move to the second (frame by frame), release
+//! press 100 300 [2] [shift]  left mouse down, the nth click, with shift (held: `moveto` drags, `release` lets go)
+//! moveto 400 300      move with the left button held, in 8 steps from where the last press or move was
+//! release 400 300     left mouse up
 //! selection           print the window's selected text and where it ends, and the quote state
 //! scroll 400 300 -120 trackpad scroll at (400, 300) moving the view 120 px (negative: up)
 //! key cmd-n           dispatch a keystroke
@@ -50,6 +53,8 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
     };
     cx.spawn(async move |cx| {
         let lines: Vec<String> = script.lines().map(str::to_string).collect();
+        // Where the held mouse is (`press`, `moveto`).
+        let mut held = point(px(0.), px(0.));
         for raw in &lines {
             let line = raw.split('#').next().unwrap_or("").trim();
             if line.is_empty() {
@@ -117,6 +122,31 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                     events.push(PlatformInput::MouseUp(MouseUpEvent { button: left, position: to, modifiers: none, click_count: 1 }));
                     for e in events {
                         let _ = window.update(cx, |_, window, cx| input(e)(window, cx));
+                        cx.background_executor().timer(Duration::from_millis(20)).await;
+                    }
+                }
+                "press" | "moveto" | "release" => {
+                    let to = point(px(num(0)), px(num(1)));
+                    let left = MouseButton::Left;
+                    let none = Modifiers::default();
+                    let shift = Modifiers { shift: args.contains(&"shift"), ..Default::default() };
+                    let count = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(1);
+                    let events = match cmd {
+                        "press" => vec![
+                            PlatformInput::MouseMove(MouseMoveEvent { position: to, pressed_button: None, modifiers: shift }),
+                            PlatformInput::MouseDown(MouseDownEvent { button: left, position: to, modifiers: shift, click_count: count, first_mouse: false }),
+                        ],
+                        "moveto" => (1..=8)
+                            .map(|i| {
+                                let position = held + (to - held) * (i as f32 / 8.);
+                                PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: Some(left), modifiers: none })
+                            })
+                            .collect(),
+                        _ => vec![PlatformInput::MouseUp(MouseUpEvent { button: left, position: to, modifiers: none, click_count: count })],
+                    };
+                    held = to;
+                    for e in events {
+                        let _ = window.update(cx, |_, window, cx| window.dispatch_event(e, cx));
                         cx.background_executor().timer(Duration::from_millis(20)).await;
                     }
                 }

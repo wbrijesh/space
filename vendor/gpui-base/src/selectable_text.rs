@@ -381,6 +381,42 @@ mod tests {
         });
     }
 
+    struct CountingView(Rc<Cell<usize>>);
+
+    impl Render for CountingView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.0.set(self.0.get() + 1);
+            div().size_full().child(TextSelectionLayer).child(
+                div().w(px(240.)).h(px(32.)).child(SelectableText::new("local", "alpha beta").in_paint_order()),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn a_drag_redraws_the_window_as_it_goes(cx: &mut TestAppContext) {
+        let renders = Rc::new(Cell::new(0));
+        let (view, cx) = cx.add_window_view({
+            let renders = renders.clone();
+            move |_, _| CountingView(renders)
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        // Control: a notified view is drawn again without an explicit draw.
+        let before = renders.get();
+        cx.update(|_, cx| view.update(cx, |_, cx| cx.notify()));
+        cx.run_until_parked();
+        assert!(renders.get() > before, "the test window draws dirty frames on its own");
+
+        cx.simulate_mouse_down(point(px(1.), px(12.)), MouseButton::Left, Modifiers::default());
+        let pressed = renders.get();
+        cx.simulate_mouse_move(point(px(120.), px(12.)), Some(MouseButton::Left), Modifiers::default());
+        assert!(renders.get() > pressed, "moving the drag drew a frame");
+        let moved = renders.get();
+        cx.simulate_mouse_move(point(px(220.), px(12.)), Some(MouseButton::Left), Modifiers::default());
+        assert!(renders.get() > moved, "and the next move too");
+    }
+
     struct CopyCallbackTestView {
         handle: TextSelectionHandle,
     }

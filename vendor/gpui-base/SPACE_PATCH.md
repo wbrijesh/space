@@ -73,4 +73,9 @@ Line labels and backgrounds, in `state.rs` and `element.rs`: `set_line_labels` r
 numbers with given labels (the diff's old and new numbers; the gutter is sized to the longest),
 and `set_line_backgrounds` tints given lines across the text and the gutter (added and removed).
 
+Selection redraw, in `src/text_selection.rs` (`set_snapshot`): a participant whose selection
+changes notifies, so whatever painted it draws again. A plain `SelectableText` (the user's
+message bubbles) had no listener, so a drag showed nothing until mouse-up. Test:
+`a_drag_redraws_the_window_as_it_goes`.
+
 To update gpui-base, copy the new version here and re-apply these changes.
