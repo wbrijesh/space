@@ -35,7 +35,7 @@ pub(crate) fn new_thread_id() -> String {
 /// Add `event` to the events waiting to be saved, merging streamed chunks.
 pub(crate) fn record(unsaved: &mut Vec<SessionEvent>, event: &SessionEvent) {
     match (unsaved.last_mut(), event) {
-        (_, SessionEvent::Created { .. } | SessionEvent::ToolCallHeld { .. }) => {}
+        (_, SessionEvent::Created { .. } | SessionEvent::ToolCallHeld { .. } | SessionEvent::Retry(_)) => {}
         (Some(SessionEvent::AgentText { text: buf }), SessionEvent::AgentText { text })
         | (Some(SessionEvent::AgentThought { text: buf }), SessionEvent::AgentThought { text }) => buf.push_str(text),
         (Some(SessionEvent::Status(last)), SessionEvent::Status(status)) => last.merge(status),
@@ -464,6 +464,11 @@ mod tests {
             SessionEvent::AgentThought { text: "b".into() },
             // A hold isn't saved; the agent's report of the call is.
             SessionEvent::ToolCallHeld { id: "t".into(), title: "ls".into(), reason: Some("down".into()) },
+            SessionEvent::Retry(Some(space_core::protocol::RetryState {
+                kind: space_core::protocol::RetryKind::Offline,
+                attempt: 1,
+                reason: "ECONNRESET".into(),
+            })),
             SessionEvent::ToolCall(space_core::ToolCallInfo {
                 id: "t".into(),
                 title: "ls".into(),

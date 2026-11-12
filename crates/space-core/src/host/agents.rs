@@ -15,7 +15,7 @@ use space_protocol::service::HistoryItem;
 use space_protocol::trace::{ContextFact, TraceBatch, TraceEvent};
 use space_protocol::{
     Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SpaceStatus, SteerImage, SteerSession, SteerText,
-    Steered, UnsteerSession,
+    Retry, Steered, UnsteerSession,
 };
 use tokio::sync::oneshot;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -220,6 +220,17 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
                 async move |status: SpaceStatus, _cx| {
                     let session_id = status.session_id.clone();
                     shared.host.emit_session(&session_id, SessionEvent::Status(status));
+                    Ok(())
+                }
+            },
+            acp::on_receive_notification!(),
+        )
+        .on_receive_notification(
+            {
+                let shared = shared.clone();
+                async move |retry: Retry, _cx| {
+                    let event = if retry.discard == Some(true) { SessionEvent::AttemptDiscarded } else { SessionEvent::Retry(retry.state) };
+                    shared.host.emit_session(&retry.session_id, event);
                     Ok(())
                 }
             },

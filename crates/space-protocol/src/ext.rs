@@ -23,6 +23,8 @@ pub const STEER_METHOD: &str = "_space/session/steer";
 pub const UNSTEER_METHOD: &str = "_space/session/unsteer";
 /// Method name of the [`Steered`] notification (agent → client).
 pub const STEERED_METHOD: &str = "_space/steered";
+/// Method name of the [`Retry`] notification (agent → client).
+pub const RETRY_METHOD: &str = "_space/retry";
 /// `_meta` key of the ACP `initialize` response: `true` when the agent takes
 /// [`SteerSession`] (messages delivered between the steps of a running turn).
 pub const STEER_META_KEY: &str = "space/steer";
@@ -258,6 +260,45 @@ pub struct UnsteerResult {
 pub struct Steered {
     pub session_id: String,
     pub id: String,
+}
+
+/// `_space/retry` (agent → client notification): a model request waits out a bad network
+/// (`state`; absent: nothing waits any more), or a request that failed after part of its reply
+/// streamed is sent again, so that part leaves the transcript (`discard`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcNotification)]
+#[notification(method = "_space/retry")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+#[serde(rename_all = "camelCase")]
+pub struct Retry {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<RetryState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discard: Option<bool>,
+}
+
+/// Why a model request waits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct RetryState {
+    pub kind: RetryKind,
+    /// Retries so far in this run of failures (1 for the first).
+    pub attempt: u32,
+    /// The last error.
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub enum RetryKind {
+    /// Claude can't be reached: it resumes once it can.
+    Offline,
+    /// A connection error while the network is up: it retries after a backoff.
+    Retrying,
+    /// Claude is overloaded or limiting requests.
+    Busy,
 }
 
 /// `_space/tools/preExecute` (agent → client request): may the agent run this tool call now?

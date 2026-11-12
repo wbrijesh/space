@@ -454,3 +454,29 @@ async fn a_steered_message_joins_the_running_turn_at_its_next_step() {
     assert!(!seen.iter().any(|e| matches!(e, HostEvent::Steered { steer_id, .. } if steer_id == "s2")));
     agent.stop();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reply_sent_again_after_a_dropped_connection_shows_once() {
+    let root = stub_root();
+    let (host, mut events) = host(root.path());
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.new_session(PathBuf::from(root.path())).await.unwrap();
+    let mut state = SessionState::new(session.id());
+    let mut seen = Vec::new();
+
+    assert_eq!(session.prompt("reconnect").await.unwrap(), "end_turn");
+    until(&mut events, &mut state, &mut seen, turn_ended).await;
+    let session_events: Vec<_> = seen
+        .iter()
+        .filter_map(|e| match e {
+            HostEvent::Session { event, .. } => Some(event),
+            _ => None,
+        })
+        .collect();
+    assert!(session_events.iter().any(|e| matches!(e, SessionEvent::AttemptDiscarded)));
+    assert!(session_events.iter().any(|e| matches!(e, SessionEvent::Retry(Some(r)) if r.attempt == 1)));
+    // The broken-off text is gone, the reply sent again is there, and nothing waits.
+    let replies: Vec<_> = state.items.iter().filter_map(|i| if let TranscriptItem::Agent(t) = i { Some(t.as_str()) } else { None }).collect();
+    assert_eq!(replies, ["Hello from the stub agent."]);
+    assert_eq!(state.retry, None);
+}

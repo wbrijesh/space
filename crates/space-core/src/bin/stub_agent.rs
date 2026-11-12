@@ -7,6 +7,8 @@
 //! * `slow` — stream 50 chunks 100 ms apart (use with cancel).
 //! * `crash` — exit with code 3 mid-turn.
 //! * `recall` — answer how many earlier prompts of the session it remembers.
+//! * `reconnect` — the reply breaks off after "Broken off " and is sent again, as a real agent's
+//!   request is after a dropped connection (`_space/retry`: discard, then reconnecting).
 //!
 //! Images in a prompt are answered first: "Saw 2 images (image/png 132 bytes <uri>, …). ".
 //! `SPACE_STUB_NO_IMAGES=1` makes it say it takes no images. A finished turn reports fixed usage
@@ -49,7 +51,7 @@ use std::time::Duration;
 use space_core::stub_script::{SCRIPT_ENV, Step, StubScript};
 use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY, STEER_META_KEY, USAGE_META_KEY};
 use space_protocol::{
-    Complete, CompleteResult, Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, SpaceStatus, SteerResult, SteerSession, Steered,
+    Complete, CompleteResult, Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, Retry, RetryKind, RetryState, SpaceStatus, SteerResult, SteerSession, Steered,
     UnsteerResult, UnsteerSession, Verdict,
 };
 use space_protocol::acp::{self, Agent, ByteStreams, Client, Responder, UntypedMessage};
@@ -523,6 +525,14 @@ async fn run_turn(
     trace.send(&cx)?;
     // A step ended (the tool): steered messages go in now.
     deliver_steers(&state, &cx, &sid)?;
+    if text.contains("reconnect") {
+        send(SessionUpdate::AgentMessageChunk(chunk("Broken off ")))?;
+        let retry = |state, discard| Retry { session_id: sid.0.to_string(), state, discard };
+        cx.send_notification(retry(None, Some(true)))?;
+        let waiting = RetryState { kind: RetryKind::Retrying, attempt: 1, reason: "API Error: Connection dropped (ECONNRESET).".into() };
+        cx.send_notification(retry(Some(waiting), None))?;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     let words: Vec<String> = if text.contains("recall") {
         vec![format!("I remember {earlier} earlier prompt(s).")]
     } else if text.contains("slow") {
@@ -681,6 +691,9 @@ async fn run_script(
                 reply.push_str(&deliver_steers(&state, &cx, &sid)?);
                 tokio::time::sleep(Duration::from_millis(50)).await;
             },
+            Step::Retry { state: retry, discard } => {
+                cx.send_notification(Retry { session_id: sid.0.to_string(), state: retry, discard: discard.then_some(true) })?;
+            }
             Step::Fail { message } => {
                 trace.respond("error", "", "", None);
                 trace.set_error(&message);

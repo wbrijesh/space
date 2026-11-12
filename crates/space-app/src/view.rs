@@ -286,8 +286,9 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
             // On the Settings page no thread is shown, so none is highlighted.
             let selected = app.selected == Some(key) && !app.show_settings;
             let failed = matches!(format::thread_preview(&t.state), Preview::Error(_)) || t.error.is_some();
+            // Paused: a tool call waits for the guardrail, or the model request for the network.
             let indicator = RowIndicator::resolve_paused(
-                t.state.held().is_some(),
+                t.state.held().is_some() || (t.state.running && t.state.retry.is_some()),
                 selected,
                 t.state.running || (t.queued.is_some() && t.error.is_none()),
                 t.state.pending_permission().is_some(),
@@ -624,6 +625,12 @@ fn body(app: &SpaceApp, streaming: Option<(usize, usize)>, window: &mut Window, 
             user: &f.user,
             current: f.current_match().map(|m| (m.ix, m.range.clone())),
             reveal: f.reveal.clone(),
+        }),
+        on_continue: (!thread.state.running).then(|| {
+            let this = cx.entity().downgrade();
+            Rc::new(move |_: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| this.continue_turn(cx));
+            }) as space_ui::components::transcript::ContinueHandler
         }),
         on_reveal: {
             let scroll = app.transcript_scroll.clone();

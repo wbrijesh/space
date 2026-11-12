@@ -512,7 +512,24 @@ impl SpaceApp {
         thread.draft.clear();
         self.input.update(cx, |s, cx| s.clean(window, cx));
         let message = Outgoing { text, quote, attachments, images, pastes };
+        self.dispatch(key, when, running, message, cx);
+    }
 
+    /// Continue after a failed turn (its error card's button): "Continue" goes out as a message,
+    /// leaving the composer as it is.
+    pub(crate) fn continue_turn(&mut self, cx: &mut Context<Self>) {
+        let Some(key) = self.selected else { return };
+        self.touch_agent();
+        let Some(thread) = self.thread(key) else { return };
+        if thread.state.running || thread.queued.is_some() || thread.loading || thread.unloaded || self.blocker(thread).is_some() {
+            return;
+        }
+        let message = Outgoing { text: "Continue".into(), quote: None, attachments: Vec::new(), images: Vec::new(), pastes: Vec::new() };
+        self.dispatch(key, crate::queue::When::Done, false, message, cx);
+    }
+
+    /// Send `message` in thread `key`: now, queued while the agent works, or once a session is up.
+    fn dispatch(&mut self, key: u64, when: crate::queue::When, running: bool, message: Outgoing, cx: &mut Context<Self>) {
         // The agent is working: the message waits (for the turn, or for the current step).
         if running {
             self.queue_message(key, when, message, cx);

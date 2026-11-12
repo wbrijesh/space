@@ -130,6 +130,29 @@ fn working_thread() -> ScenarioThread {
     )
 }
 
+/// A turn whose model request waits for the network: the reply that broke off has left.
+fn offline_thread() -> ScenarioThread {
+    use space_core::protocol::{RetryKind, RetryState};
+    thread(
+        "Summarize what changed in the session reducer",
+        vec![
+            thought("Read the reducer first."),
+            tool("t1", "read: crates/space-core/src/session.rs", "read", "completed", Some("350 lines")),
+            say("The reducer now keeps"),
+            Step::Retry { state: None, discard: true },
+            Step::Retry {
+                state: Some(RetryState {
+                    kind: RetryKind::Offline,
+                    attempt: 2,
+                    reason: "API Error: Connection dropped (ECONNRESET). A VPN, firewall, or security software can cause this.".into(),
+                }),
+                discard: false,
+            },
+            Step::Hold,
+        ],
+    )
+}
+
 fn thinking_thread() -> ScenarioThread {
     thread(
         "Why does the composer flicker when it grows?",
@@ -206,6 +229,13 @@ pub fn all() -> Vec<Scenario> {
             name: "thread-working",
             description: "A turn streaming a reply (held mid-sentence).",
             threads: vec![working_thread()],
+            select: None,
+            ..Default::default()
+        },
+        Scenario {
+            name: "offline",
+            description: "A turn waiting for the network after its reply broke off (\"Waiting for the network…\").",
+            threads: vec![offline_thread()],
             select: None,
             ..Default::default()
         },

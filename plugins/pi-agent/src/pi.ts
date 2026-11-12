@@ -16,6 +16,8 @@ import claudeCli from "@pi-plugins/claude-cli";
 import type { AgentConfig } from "./env.js";
 import { log } from "./env.js";
 import { HostBridge, type HostLink } from "./host.js";
+import { probe } from "./network.js";
+import { Resilience, type RetryState, sleep, wrapProviders } from "./resilient.js";
 import { TraceRecorder, type TraceSink } from "./trace.js";
 
 export interface PiSession {
@@ -42,6 +44,12 @@ export interface PiSessionOptions {
 	registerProviders?: (runtime: ModelRuntime) => void;
 	/** Where trace batches go (none: they're dropped). */
 	traceSink?: TraceSink;
+	/** Tests: an extension registering the provider instead of claude-cli (wrapped the same way),
+	 * and whether Claude can be reached. */
+	providerExtension?: typeof claudeCli;
+	probe?: () => Promise<boolean>;
+	/** A model request waits for the network or retries (`null`: nothing waits); see resilient.ts. */
+	onRetry?: (state: RetryState | null) => void;
 }
 
 export async function createPiSession(cwd: string, config: AgentConfig, options: PiSessionOptions): Promise<PiSession> {
@@ -55,8 +63,22 @@ export async function createPiSession(cwd: string, config: AgentConfig, options:
 			modelsPath: null,
 		});
 		options.registerProviders?.(modelRuntime);
+		// pi retries what resilient.ts hands back as retryable, at once: the waits are there.
 		const settingsManager = SettingsManager.inMemory({
-			retry: { enabled: true, maxRetries: 2 },
+			retry: { enabled: true, maxRetries: 10_000, baseDelayMs: 250, maxAgentDelayMs: 250 },
+		});
+		const resilience = new Resilience({
+			probe: options.probe ?? probe,
+			sleep,
+			now: Date.now,
+			every: (ms, fn) => {
+				const timer = setInterval(fn, ms);
+				return () => clearInterval(timer);
+			},
+			random: Math.random,
+			onRetry: (state) => options.onRetry?.(state),
+			setPiRetry: (enabled) => settingsManager.setRetryEnabled(enabled),
+			log,
 		});
 		const services = await createAgentSessionServices({
 			cwd,
@@ -71,7 +93,8 @@ export async function createPiSession(cwd: string, config: AgentConfig, options:
 				noPromptTemplates: true,
 				noThemes: true,
 				extensionFactories: [
-					{ name: "claude-cli", factory: claudeCli },
+					// Its requests wait out a bad network (see resilient.ts).
+					{ name: "claude-cli", factory: (pi) => (options.providerExtension ?? claudeCli)(wrapProviders(pi, (fn) => resilience.wrap(fn))) },
 					// The host's tool pipeline and hidden context sections (see host.ts).
 					{ name: "space-host", factory: bridge.extension(), hidden: true },
 					// What each request sent and got back, for Space's Trajectory view (see trace.ts).

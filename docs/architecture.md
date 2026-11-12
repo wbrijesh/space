@@ -140,6 +140,7 @@ Space extensions:
 | client → agent | `_space/session/steer` | `{ sessionId, id, text, images?, texts?, attachments? }`: a message for the running turn, delivered after the current step |
 | client → agent | `_space/session/unsteer` | `{ sessionId }` → `{ ids }`: take back the undelivered ones (the turn was stopped) |
 | agent → client | `_space/steered` (notification) | `{ sessionId, id }`: that message reached the model; the transcript shows it there |
+| agent → client | `_space/retry` (notification) | `{ sessionId, state?: { kind: offline \| retrying \| busy, attempt, reason }, discard? }`: the model request waits out a bad network (the working row says so; no `state`: it doesn't any more), or one that broke off after part of its reply streamed is sent again (`discard`: that part leaves the transcript, also when the thread loads again) |
 | agent → client | `_space/trace` (notification) | `{ sessionId, events: TraceEvent[] }`: what happened around each model request (headers on change, requests with their new messages, first token, chunk times, responses with usage, retries, tool start/end); see Traces below |
 
 `SpaceStatus` (every field but `sessionId` optional; the client merges partial updates):

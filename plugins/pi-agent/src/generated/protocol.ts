@@ -10,6 +10,7 @@ export const COMPLETE_METHOD = "_space/complete";
 export const STEER_METHOD = "_space/session/steer";
 export const UNSTEER_METHOD = "_space/session/unsteer";
 export const STEERED_METHOD = "_space/steered";
+export const RETRY_METHOD = "_space/retry";
 export const STEER_META_KEY = "space/steer";
 export const CONTEXT_META_KEY = "space/context";
 export const DATA_DIR_META_KEY = "space/dataDir";
@@ -174,6 +175,28 @@ export type UnsteerResult = { ids: Array<string>, };
  * model; it belongs in the transcript here.
  */
 export type Steered = { sessionId: string, id: string, };
+
+/**
+ * `_space/retry` (agent → client notification): a model request waits out a bad network
+ * (`state`; absent: nothing waits any more), or a request that failed after part of its reply
+ * streamed is sent again, so that part leaves the transcript (`discard`).
+ */
+export type Retry = { sessionId: string, state?: RetryState, discard?: boolean, };
+
+/**
+ * Why a model request waits.
+ */
+export type RetryState = { kind: RetryKind, 
+/**
+ * Retries so far in this run of failures (1 for the first).
+ */
+attempt: number, 
+/**
+ * The last error.
+ */
+reason: string, };
+
+export type RetryKind = "offline" | "retrying" | "busy";
 
 /**
  * Hidden text a plugin adds to a prompt (the agent puts it in its system prompt, never in

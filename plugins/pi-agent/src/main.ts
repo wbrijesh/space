@@ -17,6 +17,8 @@ import {
 	type PreExecuteResult,
 	PROTOCOL_VERSION,
 	PROTOCOL_VERSION_META_KEY,
+	RETRY_METHOD,
+	type Retry,
 	STATUS_METHOD,
 	STEER_META_KEY,
 	STEER_METHOD,
@@ -28,6 +30,7 @@ import {
 } from "./generated/protocol.js";
 import { contextFromMeta, type HostLink } from "./host.js";
 import { createPiSession, type PiSession } from "./pi.js";
+import type { RetryState } from "./resilient.js";
 import {
 	completeOnce,
 	configureSession,
@@ -97,7 +100,12 @@ async function openSession(
 	if (load && !dataDir) throw acp.RequestError.invalidParams(undefined, "No saved session to load (no data folder)");
 	let pi: PiSession;
 	try {
-		pi = await createPiSession(cwd, config, { sessionId, host, dataDir, load, traceSink });
+		// Waiting out a bad network shows in the transcript (`_space/retry`).
+		const onRetry = (state: RetryState | null) => {
+			const params: Retry = state ? { sessionId, state } : { sessionId };
+			client.notify(RETRY_METHOD, params).catch((error: unknown) => log("failed to send _space/retry:", error));
+		};
+		pi = await createPiSession(cwd, config, { sessionId, host, dataDir, load, traceSink, onRetry });
 	} catch (error) {
 		log(`session/${load ? "load" : "new"} failed:`, error);
 		throw turnError(`Failed to start pi session: ${error instanceof Error ? error.message : String(error)}`);
@@ -218,10 +226,17 @@ const app = acp
 						content: textToolContent(toolResultText(event.result)),
 					});
 					break;
-				case "auto_retry_start":
-					log(`retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms: ${event.errorMessage}`);
+				case "auto_retry_start": {
+					// The request failed after part of its reply streamed; pi sends it again, so
+					// that part leaves the transcript, in order with the turn's updates.
+					log(`retry ${event.attempt}: ${event.errorMessage}`);
 					state.pi.trace.retry(event.attempt, event.maxAttempts, event.delayMs, event.errorMessage);
+					const discard: Retry = { sessionId, discard: true };
+					outbox = outbox
+						.then(() => client.notify(RETRY_METHOD, discard))
+						.catch((error: unknown) => log("failed to send _space/retry:", error));
 					break;
+				}
 			}
 		});
 

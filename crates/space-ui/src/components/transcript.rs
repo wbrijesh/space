@@ -12,7 +12,7 @@ use gpui::component::text::{TextView, TextViewMotion, TextViewState};
 use gpui::component::{Icon, IconName};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use space_core::protocol::TurnUsage;
+use space_core::protocol::{RetryKind, RetryState, TurnUsage};
 use space_core::{PermissionDecision, PermissionRequest, PlanEntry, SessionState, TextRef, ToolCallInfo, ToolStatus, TranscriptItem};
 
 use super::images::{OpenPicsHandler, Pic, message_images};
@@ -747,6 +747,11 @@ pub fn plan_card(entries: &[PlanEntry]) -> Div {
 }
 
 pub fn error_card(message: &str) -> Div {
+    error_card_with(message, None)
+}
+
+/// [`error_card`], with a Continue button when `on_continue` is given (the turn's last error).
+pub fn error_card_with(message: &str, on_continue: Option<ContinueHandler>) -> Div {
     div()
         .flex()
         .items_start()
@@ -766,6 +771,26 @@ pub fn error_card(message: &str) -> Div {
                 .text_color(color::text())
                 .child(format::clean_error(message)),
         )
+        .when_some(on_continue, |d, f| {
+            d.child(pill_button("error-continue", "Continue", false).tip("Send \u{201c}Continue\u{201d} to pick up where it stopped").on_click(move |_, w, cx| f(w, cx)))
+        })
+}
+
+/// Sends "Continue" after a failed turn.
+pub type ContinueHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// The working row's label while the model request waits out a bad network.
+pub fn retry_label(retry: &RetryState) -> String {
+    match retry.kind {
+        RetryKind::Offline => "Waiting for the network…".into(),
+        RetryKind::Retrying => format!("Connection lost · reconnecting (attempt {})…", retry.attempt),
+        RetryKind::Busy => format!("Claude is busy · retrying (attempt {})…", retry.attempt),
+    }
+}
+
+/// The working row while a request waits: its label, and the last error on hover.
+pub fn retry_row(retry: &RetryState) -> Stateful<Div> {
+    working_row(&retry_label(retry)).id("retry-row").tip(format::clean_error(&retry.reason))
 }
 
 /// Centered hairline divider with a note (stopped turn, new session, …).
@@ -838,6 +863,8 @@ pub struct TranscriptView<'a> {
     pub find: Option<FindMarks<'a>>,
     /// Scrolls the transcript (to show a match).
     pub on_reveal: Option<RevealHandler>,
+    /// Continue after a failed turn (on its last error card), when no turn runs.
+    pub on_continue: Option<ContinueHandler>,
 }
 
 /// The transcript's elements, spaced, with a trailing working row while a turn runs. Each
@@ -865,7 +892,10 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
         replies,
         find,
         on_reveal,
+        on_continue,
     } = view;
+    // Only the last error, at the end of the transcript, offers to continue.
+    let continue_at = on_continue.as_ref().and(state.items.iter().rposition(|i| !matches!(i, TranscriptItem::TurnEnd { .. }))).filter(|&ix| matches!(state.items[ix], TranscriptItem::Error(_)));
     let items = &state.items;
     let folds = foldable_turns(items);
     // The folded turn being laid out (its work is hidden until its end).
@@ -1001,7 +1031,7 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
             TranscriptItem::Tool(call) => tool_row(ix, call, expanded.contains(&ix), on_toggle.clone()),
             TranscriptItem::Permission { request, resolved } => permission_card(request, resolved.as_ref(), on_answer.clone()),
             TranscriptItem::Plan(entries) => plan_card(entries),
-            TranscriptItem::Error(msg) => error_card(msg),
+            TranscriptItem::Error(msg) => error_card_with(msg, if continue_at == Some(ix) { on_continue.clone() } else { None }),
         };
         turn.push(div().mt(gap).child(el).into_any_element());
         (prev, after_row) = (Some(item), false);
@@ -1015,8 +1045,8 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
         out.push(div().mt(GAP).child(working_row("Starting agent…")).into_any_element());
     } else if state.running
         && state.pending_permission().is_none()
-        // A live thought shows the spinner in its own "Thinking…" row.
-        && !matches!(items.last(), Some(TranscriptItem::Thought(_)))
+        // A live thought shows the spinner in its own "Thinking…" row (unless the request waits).
+        && (state.retry.is_some() || !matches!(items.last(), Some(TranscriptItem::Thought(_))))
     {
         // Spaced as a thought in its place would be.
         let gap = match prev {
@@ -1025,7 +1055,11 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
             Some(p) if compact(p) => GAP_TIGHT,
             _ => GAP,
         };
-        out.push(div().mt(gap).child(working_row("Working…")).into_any_element());
+        let row = match &state.retry {
+            Some(retry) => retry_row(retry).into_any_element(),
+            None => working_row("Working…").into_any_element(),
+        };
+        out.push(div().mt(gap).child(row).into_any_element());
     }
     out
 }
@@ -1174,6 +1208,9 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     let toggle: ToggleHandler = Rc::new(|_, _, _| {});
     let answer: AnswerHandler = Rc::new(|_, _, _, _| {});
     let t = toggle.clone();
+    fn retry_state(kind: RetryKind) -> RetryState {
+        RetryState { kind, attempt: 2, reason: "API Error: Connection dropped (ECONNRESET).".into() }
+    }
     let ex = |name: &'static str, f: Rc<dyn Fn() -> Div>| Example::new(name, move |_, _| f().into_any_element()).width(w);
 
     // A turn laid out by transcript_items from session events; `open`: the user opened it.
@@ -1207,6 +1244,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                     replies: &HashMap::new(),
                     find: None,
                     on_reveal: None,
+                    on_continue: Some(Rc::new(|_, _| {})),
                 };
                 div().flex().flex_col().children(transcript_items(view, window, cx)).into_any_element()
             })
@@ -1338,6 +1376,10 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             ex("error", Rc::new(|| error_card("session/prompt failed: The model request failed: overloaded"))),
             ex("stopped divider", Rc::new(|| turn_divider("cancelled"))),
             ex("working", Rc::new(|| working_row("Working…"))),
+            ex("waiting for the network", Rc::new(|| div().child(retry_row(&retry_state(RetryKind::Offline))))),
+            ex("reconnecting", Rc::new(|| div().child(retry_row(&retry_state(RetryKind::Retrying))))),
+            ex("Claude busy", Rc::new(|| div().child(retry_row(&retry_state(RetryKind::Busy))))),
+            ex("error, with Continue", Rc::new(|| error_card_with("Couldn't reach Claude for 30 minutes (ECONNRESET).", Some(Rc::new(|_, _| {}))))),
         ]),
         ComponentPreview::new(Area::Transcript, "Transcript", "A whole turn laid out by transcript_items.")
             .stacked()

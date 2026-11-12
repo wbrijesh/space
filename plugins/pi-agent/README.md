@@ -90,6 +90,29 @@ breaks a turn. `bun test` covers the helpers and the recorder fed hook events by
 Not visible from here: what the Claude CLI adds to the request (a billing header and identity line)
 and the beta headers. A request's start includes starting the CLI when no spare process is waiting.
 
+### A bad network (`src/resilient.ts`, `src/network.ts`)
+
+Model requests wait out a dropped or flaky connection instead of failing the turn. The claude-cli
+provider's stream function is wrapped where it's registered (pi and the plugin are unchanged):
+
+- **Kinds of failure.** Sign-in, usage limit, invalid request and the like are shown at once.
+  Connection errors (`ECONNRESET`, `fetch failed`, DNS, timeouts, a stream that ended early),
+  Claude busy (429, 529, overloaded) and unknown errors are retried.
+- **Offline or not** is decided by a TLS handshake with `api.anthropic.com` (the proxy, with
+  `HTTPS_PROXY`), made only after a failure. Offline, the next request waits until it gets
+  through (every 2 to 5 s); after a flap, until three in a row do. Online, it backs off 1 to 15 s
+  (busy: 5 to 60 s).
+- **Before content** (nothing streamed yet), a failed request is retried inside the wrapper. **After
+  content**, pi's own retry drops the partial reply and asks again; `_space/retry {discard}` takes it
+  out of the transcript.
+- **A silent stream** is cut after 45 s if Claude can't be reached, and after 150 s regardless.
+- **Giving up**: after 30 minutes of failing, or 6 unknown errors in a row. Stop ends any wait.
+- While a request waits, `_space/retry {state}` tells Space: "Waiting for the network…",
+  "Connection lost · reconnecting (attempt n)…" or "Claude is busy · retrying (attempt n)…".
+
+pi's retry runs with a large budget and a 250 ms delay; the wrapper switches it on or off for each
+error it hands back (`setRetryEnabled`), so pi retries exactly what the wrapper decided to.
+
 ### Isolation from your pi setup
 
 - `PI_CODING_AGENT_DIR` is set to a private directory, `~/.space/pi-agent` by default. pi writes nothing to

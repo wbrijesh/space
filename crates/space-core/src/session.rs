@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use space_protocol::{SpaceStatus, TurnUsage};
+use space_protocol::{RetryState, SpaceStatus, TurnUsage};
 
 /// Opaque ACP session id.
 pub type SessionId = String;
@@ -211,6 +211,11 @@ pub enum SessionEvent {
         usage: Option<TurnUsage>,
     },
     Error { message: String },
+    /// A model request waits out a bad network (`None`: nothing waits). Live only: not saved.
+    Retry(Option<RetryState>),
+    /// A model request failed after part of its reply streamed and is sent again: that part
+    /// (the text and thoughts since the last other item) leaves the transcript.
+    AttemptDiscarded,
 }
 
 /// One entry in the rendered transcript.
@@ -251,6 +256,8 @@ pub struct SessionState {
     pub items: Vec<TranscriptItem>,
     /// A prompt is in flight.
     pub running: bool,
+    /// The running turn's model request waits out a bad network.
+    pub retry: Option<RetryState>,
 }
 
 impl SessionState {
@@ -260,6 +267,13 @@ impl SessionState {
     }
 
     pub fn apply(&mut self, event: &SessionEvent) {
+        // The request got through (or the turn is over): nothing waits.
+        if matches!(
+            event,
+            SessionEvent::AgentText { .. } | SessionEvent::AgentThought { .. } | SessionEvent::ToolCall(_) | SessionEvent::TurnEnded { .. } | SessionEvent::Error { .. }
+        ) {
+            self.retry = None;
+        }
         match event {
             SessionEvent::Created { plugin_id, cwd } => {
                 self.plugin_id.clone_from(plugin_id);
@@ -378,6 +392,12 @@ impl SessionState {
                 self.items.push(TranscriptItem::TurnEnd { reason: stop_reason.clone(), at_ms: *at_ms, usage: usage.clone() });
             }
             SessionEvent::Error { message } => self.items.push(TranscriptItem::Error(message.clone())),
+            SessionEvent::Retry(state) => self.retry.clone_from(state),
+            SessionEvent::AttemptDiscarded => {
+                while matches!(self.items.last(), Some(TranscriptItem::Agent(_) | TranscriptItem::Thought(_))) {
+                    self.items.pop();
+                }
+            }
         }
     }
 
@@ -487,6 +507,43 @@ mod tests {
         }
         assert_eq!(s.items[4], TranscriptItem::Agent("Done".into()));
         assert_eq!(s.items[5], TranscriptItem::divider("end_turn"));
+    }
+
+    #[test]
+    fn a_dropped_attempt_leaves_and_waiting_ends_with_new_content() {
+        use space_protocol::{RetryKind, RetryState};
+        let mut s = SessionState::new("s1");
+        let tool = ToolCallInfo {
+            id: "t".into(),
+            title: "ls".into(),
+            kind: "execute".into(),
+            status: ToolStatus::Completed,
+            output: String::new(),
+            locations: Vec::new(),
+            blocked: None,
+            held: None,
+        };
+        let waiting = RetryState { kind: RetryKind::Offline, attempt: 1, reason: "ECONNRESET".into() };
+        for e in [
+            SessionEvent::TurnStarted,
+            SessionEvent::AgentText { text: "Looking. ".into() },
+            SessionEvent::ToolCall(tool),
+            SessionEvent::AgentThought { text: "half a".into() },
+            SessionEvent::AgentText { text: "Broken off".into() },
+            SessionEvent::AttemptDiscarded,
+            SessionEvent::Retry(Some(waiting.clone())),
+        ] {
+            s.apply(&e);
+        }
+        // Only the broken attempt left: the reply before the tool stays.
+        assert!(matches!(&s.items[..], [TranscriptItem::Agent(a), TranscriptItem::Tool(_)] if a == "Looking. "));
+        assert_eq!(s.retry, Some(waiting.clone()));
+        s.apply(&SessionEvent::AgentText { text: "Whole".into() });
+        assert_eq!(s.retry, None);
+        // The turn ending clears it too.
+        s.apply(&SessionEvent::Retry(Some(waiting)));
+        s.apply(&SessionEvent::turn_ended("cancelled"));
+        assert_eq!(s.retry, None);
     }
 
     #[test]

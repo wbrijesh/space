@@ -69,6 +69,14 @@ pub enum Step {
     Hold,
     /// Fail the turn with a JSON-RPC error carrying `message`.
     Fail { message: String },
+    /// Send `_space/retry`: the model request waits (`state`; none: it doesn't any more), or the
+    /// text streamed since the last other item is dropped (`discard`).
+    Retry {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state: Option<space_protocol::RetryState>,
+        #[serde(default)]
+        discard: bool,
+    },
 }
 
 fn default_kind() -> String {

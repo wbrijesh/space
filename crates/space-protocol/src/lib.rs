@@ -30,7 +30,7 @@ pub use agent_client_protocol as acp;
 pub use agent_client_protocol::v1::schema as acp_schema;
 
 pub use ext::{
-    Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, ContextSection, ModelInfo, PreExecute, PreExecuteResult, SpaceStatus,
+    Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, ContextSection, ModelInfo, PreExecute, PreExecuteResult, Retry, RetryKind, RetryState, SpaceStatus,
     SteerImage, SteerResult, SteerSession, SteerText, Steered, TurnUsage, UnsteerResult, UnsteerSession, Verdict,
 };
 pub use manifest::{
