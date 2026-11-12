@@ -55,7 +55,9 @@ cask clears macOS's download mark so it opens normally.
   **Full file** shows the whole file with the changes in place. Open files reload when they change. Arrows move in the tree; right-click for Open in, Reveal in Finder and Copy Path.
 - **Terminals** belong to a thread and start in its folder; they keep running while hidden.
 - **Trajectory** shows every model request and tool call of a thread
-  ([plugins/trajectory](plugins/trajectory/README.md)).
+  ([plugins/trajectory](plugins/trajectory/README.md)). **Continue in Pi** (left of its search)
+  copies a command that continues the thread in the Pi CLI: it copies the thread's session file
+  to your temp folder and forks that copy (`pi --fork`), so the thread in Space is never touched.
 - The agent sleeps after 30 minutes with nothing to do and wakes when you type.
 - Threads, settings and traces are kept in `~/.space`.
 

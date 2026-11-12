@@ -130,6 +130,21 @@ pub struct SpaceStatus {
     /// Context window of the current model, in tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    /// How to continue this session outside Space (the Trajectory page copies it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continue_in: Option<ContinueIn>,
+}
+
+/// A command that continues a session in another tool, from a copy of it (the session's own
+/// files are never touched).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct ContinueIn {
+    /// The tool, for the button: "Pi" ("Continue in Pi").
+    pub app: String,
+    /// The shell command, ready to paste into a terminal.
+    pub command: String,
 }
 
 impl SpaceStatus {
@@ -150,6 +165,7 @@ impl SpaceStatus {
         take(&mut self.thinking_levels, &other.thinking_levels);
         take(&mut self.context_tokens, &other.context_tokens);
         take(&mut self.context_window, &other.context_window);
+        take(&mut self.continue_in, &other.continue_in);
     }
 
     /// The [`ModelInfo`] of the current model, if the agent listed it.

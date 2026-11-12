@@ -184,6 +184,8 @@ pub struct TrajectoryHandlers {
     pub on_load_earlier: Handler,
     pub on_copy: IdHandler,
     pub on_open_image: OpenPicsHandler,
+    /// "Continue in Pi": copy this command.
+    pub on_continue: IdHandler,
 }
 
 impl Default for TrajectoryHandlers {
@@ -191,6 +193,7 @@ impl Default for TrajectoryHandlers {
         let noop: Handler = Rc::new(|_, _| {});
         Self {
             on_select: Rc::new(|_, _, _| {}),
+            on_continue: Rc::new(|_, _, _| {}),
             on_close_inspector: noop.clone(),
             on_toggle_fold: Rc::new(|_, _, _| {}),
             on_fold_all: Rc::new(|_, _, _| {}),
@@ -218,6 +221,8 @@ pub struct TrajectoryView {
     scroll: LedgerScroll,
     now_ms: u64,
     handlers: TrajectoryHandlers,
+    /// Continue the session in another tool: its name, the command, and whether it was just copied.
+    continue_in: Option<(SharedString, SharedString, bool)>,
 }
 
 impl TrajectoryView {
@@ -234,6 +239,7 @@ impl TrajectoryView {
             scroll: scroll.clone(),
             now_ms: 0,
             handlers: TrajectoryHandlers::default(),
+            continue_in: None,
         }
     }
 
@@ -273,6 +279,12 @@ impl TrajectoryView {
         self
     }
 
+    /// The "Continue in <app>" button left of the search (`copied`: it was just clicked).
+    pub fn continue_in(mut self, app: impl Into<SharedString>, command: impl Into<SharedString>, copied: bool) -> Self {
+        self.continue_in = Some((app.into(), command.into(), copied));
+        self
+    }
+
     pub fn handlers(mut self, handlers: TrajectoryHandlers) -> Self {
         self.handlers = handlers;
         self
@@ -281,7 +293,7 @@ impl TrajectoryView {
 
 impl RenderOnce for TrajectoryView {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let Self { page, selected, detail, folds, search, matches, mode, range, scroll, now_ms, handlers: h } = self;
+        let Self { page, selected, detail, folds, search, matches, mode, range, scroll, now_ms, handlers: h, continue_in } = self;
         let keep = |r: &TrajectoryRow| {
             matches.as_ref().is_none_or(|m| m.contains(&r.id)) && range.is_none_or(|rg| timeline::active_in(r, rg, now_ms))
         };
@@ -327,6 +339,27 @@ impl RenderOnce for TrajectoryView {
                 )
             })
             .child(div().flex_1())
+            .children(continue_in.map(|(app, command, copied)| {
+                let (copy, text) = (h.on_continue.clone(), command.clone());
+                let label: SharedString = if copied { "Copied".into() } else { format!("Continue in {app}").into() };
+                div()
+                    .id("tj-continue")
+                    .mr_1()
+                    .h(px(22.))
+                    .px_1p5()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .rounded(radius::MD)
+                    .text_size(text::XS)
+                    .text_color(color::text_2())
+                    .cursor_pointer()
+                    .hover(|s| s.bg(color::hover()).text_color(color::text()))
+                    .child(Icon::new(if copied { Lucide::Check } else { Lucide::SquareTerminal }).size(size::ICON_SM))
+                    .child(label)
+                    .tip(format!("Copy a command that continues this thread in {app}, from a copy of it:\n{command}"))
+                    .on_click(move |_, w, cx| copy(text.clone(), w, cx))
+            }))
             .children(search.map(|input| div().w(px(240.)).child(Input::new(&input).small().prefix(Icon::new(Lucide::Search).size(size::ICON_SM).text_color(color::text_3())))));
 
         let overview = timeline::timeline(

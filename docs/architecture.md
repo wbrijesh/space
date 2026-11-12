@@ -148,8 +148,12 @@ Space extensions:
 ```jsonc
 { "sessionId": "…", "provider": "claude-cli", "model": "claude-opus-5-5", "thinkingLevel": "medium",
   "availableModels": [{ "provider": "claude-cli", "id": "claude-opus-5-5", "name": "Claude Opus 5.5" }],
-  "thinkingLevels": ["low", "medium", "high", "xhigh", "max"], "contextTokens": 18234, "contextWindow": 1000000 }
+  "thinkingLevels": ["low", "medium", "high", "xhigh", "max"], "contextTokens": 18234, "contextWindow": 1000000,
+  "continueIn": { "app": "Pi", "command": "cp … \"$TMPDIR/space-4eee6f75.jsonl\" && cd … && pi --fork …" } }
 ```
+
+`continueIn` (optional) is how to carry the session on outside Space; the Trajectory page offers
+it as "Continue in <app>" and copies the command.
 
 ## Service protocol
 

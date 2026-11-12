@@ -49,7 +49,25 @@ contextTokens?: number,
 /**
  * Context window of the current model, in tokens.
  */
-contextWindow?: number, };
+contextWindow?: number, 
+/**
+ * How to continue this session outside Space (the Trajectory page copies it).
+ */
+continueIn?: ContinueIn, };
+
+/**
+ * A command that continues a session in another tool, from a copy of it (the session's own
+ * files are never touched).
+ */
+export type ContinueIn = { 
+/**
+ * The tool, for the button: "Pi" ("Continue in Pi").
+ */
+app: string, 
+/**
+ * The shell command, ready to paste into a terminal.
+ */
+command: string, };
 
 /**
  * `_space/session/configure` (client → agent request): change a session's model and/or

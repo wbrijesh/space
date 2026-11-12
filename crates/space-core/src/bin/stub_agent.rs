@@ -159,6 +159,8 @@ impl State {
             thinking_levels: Some(LEVELS.iter().map(|l| l.to_string()).collect()),
             context_tokens: Some(s.context_tokens),
             context_window: Some(200_000),
+            // A harmless stand-in for "Continue in Pi".
+            continue_in: Some(space_protocol::ContinueIn { app: "Stub".into(), command: format!("echo continue {session_id}") }),
         }
     }
 }

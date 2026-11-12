@@ -43,6 +43,7 @@ fn generate() -> String {
     for decl in [
         item::<ModelInfo>(&cfg),
         item::<SpaceStatus>(&cfg),
+        item::<ContinueIn>(&cfg),
         item::<ConfigureSession>(&cfg),
         item::<PreExecute>(&cfg),
         item::<PreExecuteResult>(&cfg),

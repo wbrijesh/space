@@ -756,6 +756,8 @@ pub(crate) fn streaming_reply(app: &SpaceApp, thread: &Thread, window: &mut Wind
 /// The Trajectory tab's view of the selected thread (`None` until its state exists).
 fn trajectory_view(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
     let state = app.trajectories.state.as_ref()?;
+    // Offered whenever the agent says how (also while it works: the copy is taken when it runs).
+    let continue_in = app.current().and_then(|t| t.state.status.continue_in.clone());
     let this = cx.entity().downgrade();
     let h = TrajectoryHandlers {
         on_select: {
@@ -791,6 +793,12 @@ fn trajectory_view(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> Option<AnyElem
         },
         on_load_earlier: handler(cx, |this, _, cx| this.load_earlier_trajectory(cx)),
         on_copy: Rc::new(|text, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()))),
+        on_continue: {
+            let this = this.clone();
+            Rc::new(move |command, _, cx| {
+                let _ = this.update(cx, |this, cx| this.copy_message(CONTINUE_IN.into(), command.to_string(), cx));
+            })
+        },
         on_open_image: {
             let this = this.clone();
             Rc::new(move |pics, ix, w, cx| {
@@ -812,6 +820,10 @@ fn trajectory_view(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> Option<AnyElem
                     .mode(state.mode)
                     .range(state.range)
                     .now(crate::app::now_ms())
+                    .map(|v| match continue_in {
+                        Some(c) => v.continue_in(c.app, c.command, app.copied.as_deref() == Some(CONTINUE_IN)),
+                        None => v,
+                    })
                     .handlers(h),
             )
             .into_any_element(),
@@ -1240,6 +1252,9 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         .into_any_element()
 }
 
+
+/// `copied` just after "Continue in Pi" was clicked.
+const CONTINUE_IN: &str = "trajectory:continue-in";
 
 /// `usage_open` while the context ring's panel is open (rows use their ids).
 const CONTEXT_PANEL: &str = "composer:context";

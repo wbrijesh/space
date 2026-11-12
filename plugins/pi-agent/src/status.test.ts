@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { latestModels, modelFamily, parseSteerParams, steerBlocks } from "./status.js";
+import { continueInPi, latestModels, modelFamily, parseSteerParams, steerBlocks } from "./status.js";
 import { promptInput } from "./translate.js";
 
 const ids = [
@@ -55,4 +55,15 @@ test("a pasted text reaches the model as text, in a prompt and steered", () => {
 	const steer = parseSteerParams({ sessionId: "s", id: "q1", text: "and this", texts: [{ text: "more", mimeType: "text/plain", uri }, { uri }] });
 	assert.deepEqual(steer.texts, [{ text: "more", mimeType: "text/plain", uri }]);
 	assert.equal(promptInput(steerBlocks(steer)).text, `[Resource ${uri}]\nmore\n\nand this`);
+});
+
+test("continuing in Pi forks a copy of the session file, from the session's folder", () => {
+	const file = "/Users/me/.space/threads/t1/agent/2026-11-12T05-31-44-289Z_4eee6f75-614a-4616-9763-9202248b6258.jsonl";
+	const c = continueInPi(file, "/Users/me/My Projects/app's");
+	assert.equal(c?.app, "Pi");
+	assert.equal(
+		c?.command,
+		`cp ${file} "$TMPDIR/space-4eee6f75.jsonl" && cd '/Users/me/My Projects/app'\\''s' && pi --fork "$TMPDIR/space-4eee6f75.jsonl"`,
+	);
+	assert.equal(continueInPi(undefined, "/x"), undefined);
 });

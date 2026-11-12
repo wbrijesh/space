@@ -3,7 +3,8 @@
 import type { ContentBlock } from "@agentclientprotocol/sdk";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS, type ThinkingLevelName } from "./env.js";
-import type { Complete, ConfigureSession, ModelInfo, SpaceStatus, SteerSession, UnsteerSession } from "./generated/protocol.js";
+import type { Complete, ConfigureSession, ContinueIn, ModelInfo, SpaceStatus, SteerSession, UnsteerSession } from "./generated/protocol.js";
+import { shellQuote } from "./host.js";
 
 function str(v: unknown): string | undefined {
 	return typeof v === "string" && v.length > 0 ? v : undefined;
@@ -130,6 +131,7 @@ export function sessionStatus(sessionId: string, session: AgentSession): SpaceSt
 		thinkingLevel: session.thinkingLevel,
 		availableModels: availableModels(session),
 		thinkingLevels: session.supportsThinking() ? session.getAvailableThinkingLevels() : [],
+		continueIn: continueInPi(session.sessionFile, session.sessionManager.getCwd()),
 	};
 	const usage = session.getContextUsage();
 	if (usage) {
@@ -139,6 +141,19 @@ export function sessionStatus(sessionId: string, session: AgentSession): SpaceSt
 		status.contextWindow = model.contextWindow;
 	}
 	return status;
+}
+
+/**
+ * The Pi CLI command that continues a session kept in `file`: copy it to the user's own temp
+ * folder, then fork the copy from the session's folder. The file itself is never touched, and
+ * the copy is made when the command runs, so it has everything up to then. `undefined` for a
+ * session kept in memory.
+ */
+export function continueInPi(file: string | undefined, cwd: string): ContinueIn | undefined {
+	if (!file) return undefined;
+	const id = (file.split("/").pop() ?? "").replace(/\.jsonl$/, "").split("_").pop() ?? "";
+	const copy = `"$TMPDIR/space-${id.slice(0, 8).replace(/[^A-Za-z0-9-]/g, "") || "session"}.jsonl"`;
+	return { app: "Pi", command: `cp ${shellQuote(file)} ${copy} && cd ${shellQuote(cwd)} && pi --fork ${copy}` };
 }
 
 /** Apply a configure request to `session`. Throws a readable Error on invalid input. */

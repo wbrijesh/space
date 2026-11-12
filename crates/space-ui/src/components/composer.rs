@@ -1233,6 +1233,7 @@ pub mod fixtures {
             thinking_levels: Some(["low", "medium", "high", "xhigh", "max"].map(String::from).to_vec()),
             context_tokens: Some(tokens),
             context_window: Some(1_000_000),
+            continue_in: None,
         }
     }
 
