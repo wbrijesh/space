@@ -190,7 +190,14 @@ impl Thread {
                 }
             }
         }
-        if matches!(event, SessionEvent::TurnEnded { .. }) {
+        // The branch shown under the composer follows a `git switch` the agent ran.
+        let tool_done = |s: Option<space_core::ToolStatus>| matches!(s, Some(space_core::ToolStatus::Completed | space_core::ToolStatus::Failed));
+        if match event {
+            SessionEvent::TurnEnded { .. } => true,
+            SessionEvent::ToolCallUpdate(p) => tool_done(p.status),
+            SessionEvent::ToolCall(c) => tool_done(Some(c.status)),
+            _ => false,
+        } {
             self.branch = format::git_branch(&self.cwd);
         }
     }

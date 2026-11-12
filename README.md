@@ -37,7 +37,9 @@ cask clears macOS's download mark so it opens normally.
   (by when each was created; writing in one doesn't move it). Pinned threads keep their pin while
   closed.
 - **Folders.** Each thread works in one folder, picked under the composer before its first message
-  and shown there after (hover for the full path).
+  and shown there after (hover for the full path). In a git repo the menu's branch row opens its
+  branches: type to filter, or a new name to create one; picking switches the folder (git refuses
+  if uncommitted changes would be lost, and says why).
   Opened from Spotlight or the Dock, Space starts where you worked last.
 - **Open in** (title bar, right): opens the thread's folder in the app you used last; the chevron
   lists the editors, Finder and terminals installed, and Copy Path.

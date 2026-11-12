@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui::component::input::{Textarea, TextareaState};
+use gpui::component::input::{Input, InputState, Textarea, TextareaState};
 use gpui::assets::IconName as Lucide;
 use gpui::component::{Icon, IconName, Sizable as _};
 use gpui::prelude::FluentBuilder as _;
@@ -123,6 +123,10 @@ pub struct ComposerHandlers {
     pub on_queued: QueuedHandler,
     /// A closed thread was picked to resume (its id).
     pub on_resume: StringHandler,
+    /// A branch was picked on the folder menu's branch page (switch to it).
+    pub on_branch: StringHandler,
+    /// "Create branch" on the branch page (the typed name).
+    pub on_new_branch: StringHandler,
 }
 
 /// A message waiting for the agent, as its row above the composer shows it.
@@ -170,6 +174,8 @@ impl Default for ComposerHandlers {
             on_send_after_step: Rc::new(|_, _| {}),
             on_queued: Rc::new(|_, _, _, _| {}),
             on_resume: Rc::new(|_, _, _| {}),
+            on_branch: Rc::new(|_, _, _| {}),
+            on_new_branch: Rc::new(|_, _, _| {}),
         }
     }
 }
@@ -182,6 +188,8 @@ pub struct ComposerControls {
     pub dirs: Vec<PathBuf>,
     /// The thread has no messages yet (the folder can still change).
     pub thread_empty: bool,
+    /// The folder's git branch and the branch page; `None` outside git.
+    pub branch: Option<BranchChoice>,
     pub status: SpaceStatus,
     /// Model and effort can't change now (turn running or no session).
     pub locked: bool,
@@ -212,7 +220,7 @@ pub struct ClosedThread {
 /// The control row's menus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComposerMenu {
-    Folder,
+    Folder(FolderPage),
     Mode,
     /// Closed threads to resume.
     Resume,
@@ -225,12 +233,51 @@ impl ComposerMenu {
     pub fn back(self) -> Option<ComposerMenu> {
         match self {
             ComposerMenu::Model(p) => p.back().map(ComposerMenu::Model),
+            ComposerMenu::Folder(FolderPage::Branches) => Some(ComposerMenu::Folder(FolderPage::Root)),
             _ => None,
         }
     }
 }
 
 pub type MenuHandler = Rc<dyn Fn(Option<ComposerMenu>, &mut Window, &mut App)>;
+
+/// The folder menu's pages: the folders (with the branch row), or the folder's branches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderPage {
+    Root,
+    Branches,
+}
+
+/// The folder's git branch, and what its page shows.
+#[derive(Clone, Default)]
+pub struct BranchChoice {
+    /// What's checked out: the branch, or the short commit when detached.
+    pub head: SharedString,
+    pub detached: bool,
+    /// Files with uncommitted changes.
+    pub changed: usize,
+    /// The page's rows, filtered by the field (`None`: still loading).
+    pub rows: Option<Vec<BranchRow>>,
+    /// Matching branches left out past the shown ones.
+    pub more: usize,
+    /// The typed name matches no branch: offer to create it.
+    pub create: Option<SharedString>,
+    /// Filters the branches; also the new branch's name.
+    pub input: Option<Entity<InputState>>,
+    /// A switch or create running, to this branch.
+    pub busy: Option<SharedString>,
+    /// Why the last switch or create failed (git's message).
+    pub error: Option<SharedString>,
+    /// Why switching can't happen now (rows are disabled).
+    pub blocked: Option<SharedString>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BranchRow {
+    pub name: SharedString,
+    /// Its last commit: "2 days ago".
+    pub when: SharedString,
+}
 
 /// The thread's permission mode and the modes it can switch to (the `permission-modes` catalog).
 #[derive(Clone, Default)]
@@ -776,22 +823,50 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
         let on_menu = h.on_menu.clone();
         Rc::new(move |w, cx| on_menu(None, w, cx))
     };
-    // The folder is picked before the first message; after that it's the thread's, shown
-    // read-only (no chevron, no menu), with the full path on hover.
-    let folder_label = || div().max_w(px(220.)).truncate().child(format::dir_name(&c.cwd));
-    let folder = if c.thread_empty {
-        let is_open = menu_open == Some(ComposerMenu::Folder);
-        trigger("project-menu", is_open, true)
-            .on_click(toggle_menu(ComposerMenu::Folder))
+    // The folder (and its branch) is picked before the first message; after that it's the
+    // thread's, shown read-only (no chevron, no menu), with the full path on hover.
+    let folder_label = || {
+        div()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .min_w_0()
             .child(Icon::new(IconName::Folder).size(size::ICON))
+            .child(div().max_w(px(160.)).truncate().child(format::dir_name(&c.cwd)))
+            .children(c.branch.as_ref().map(|b| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .ml_1()
+                    .min_w_0()
+                    .child(Icon::new(Lucide::GitBranch).size(size::ICON_SM).text_color(color::text_3()))
+                    .child(div().max_w(px(140.)).truncate().child(b.head.clone()))
+            }))
+    };
+    let folder = if c.thread_empty {
+        let page = match menu_open {
+            Some(ComposerMenu::Folder(page)) => Some(page),
+            _ => None,
+        };
+        let on_menu = h.on_menu.clone();
+        trigger("project-menu", page.is_some(), true)
+            .on_click(move |_, w, cx| on_menu(page.is_none().then_some(ComposerMenu::Folder(FolderPage::Root)), w, cx))
             .child(folder_label())
             .child(chevron())
-            .when(is_open, |d| {
-                let menu = folder_menu(&c.dirs, &c.cwd, h.on_pick_dir.clone(), h.on_choose_folder.clone(), close_menu.clone());
+            .when_some(page, |d, page| {
+                let menu = match (page, &c.branch) {
+                    (FolderPage::Branches, Some(branch)) => branch_page(&c.cwd, branch, h),
+                    _ => folder_menu(&c.dirs, &c.cwd, c.branch.as_ref(), h.on_pick_dir.clone(), h.on_choose_folder.clone(), h.on_menu.clone(), close_menu.clone()),
+                };
                 let close = close_menu.clone();
                 d.child(popover(false, menu, move |w, cx| close(w, cx)))
             })
     } else {
+        let where_ = match &c.branch {
+            Some(b) => format!("{} · {}", format::abbreviate_home(&c.cwd), b.head),
+            None => format::abbreviate_home(&c.cwd),
+        };
         div()
             .id("project-folder")
             .flex_none()
@@ -799,12 +874,10 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
             .px_2()
             .flex()
             .items_center()
-            .gap_1p5()
             .text_size(text::SM)
             .text_color(color::text_2())
-            .child(Icon::new(IconName::Folder).size(size::ICON))
             .child(folder_label())
-            .tip(format::abbreviate_home(&c.cwd))
+            .tip(where_)
     };
 
     let mut right = div().flex().items_center().gap_0p5();
@@ -1011,12 +1084,15 @@ pub fn mode_menu(entries: &[CatalogEntry], current: &str, on_mode: StringHandler
     }))
 }
 
-/// Folder picker for a new thread: recent folders and "Choose folder…".
+/// Folder picker for a new thread: recent folders, "Choose folder…", and the folder's branch
+/// (which opens the branch page).
 pub fn folder_menu(
     dirs: &[PathBuf],
     cwd: &PathBuf,
+    branch: Option<&BranchChoice>,
     on_pick: PathHandler,
     on_choose: Handler,
+    on_menu: MenuHandler,
     close: Handler,
 ) -> Div {
     let folder = |i: IconName| Some(Icon::new(i).size(size::ICON).into_any_element());
@@ -1033,10 +1109,106 @@ pub fn folder_menu(
                 },
             )
         }))
-        .child(separator())
         .child(choice("choose-folder", folder(IconName::FolderOpen), "Choose folder…", false).on_click(move |_, w, cx| {
             choose_close(w, cx);
             on_choose(w, cx)
+        }))
+        .children(branch.map(|b| {
+            div().flex().flex_col().child(separator()).child(
+                row("folder-branch")
+                    .child(Icon::new(Lucide::GitBranch).size(size::ICON).text_color(color::text_2()))
+                    .child(div().flex_1().min_w_0().truncate().child(b.head.clone()))
+                    .child(Icon::new(IconName::ChevronRight).size(size::ICON).text_color(color::text_3()))
+                    .on_click(move |_, w, cx| on_menu(Some(ComposerMenu::Folder(FolderPage::Branches)), w, cx)),
+            )
+        }))
+}
+
+/// The folder menu's branch page: back to the folders, a field that filters (or names a new
+/// branch), the branches (most recent first), and "Create branch" for a new name.
+pub fn branch_page(cwd: &std::path::Path, b: &BranchChoice, h: &ComposerHandlers) -> Div {
+    let on_menu = h.on_menu.clone();
+    let enabled = b.blocked.is_none() && b.busy.is_none();
+    let note = |t: SharedString, c: Hsla| div().px_2p5().py_1().text_size(text::SM).line_height(relative(text::LEADING)).text_color(c).child(t);
+    let head_row = b.detached.then(|| {
+        choice("branch-head", Some(Icon::new(Lucide::GitBranch).size(size::ICON).into_any_element()), format!("{} (detached)", b.head), true)
+    });
+    let rows = b.rows.as_ref().map(|rows| {
+        rows.iter()
+            .enumerate()
+            .map(|(ix, r)| {
+                let current = !b.detached && r.name == b.head;
+                let busy = b.busy.as_ref() == Some(&r.name);
+                let right = if busy {
+                    super::loaders::Spinner::new(size::SPINNER_SM).into_any_element()
+                } else if current && b.changed > 0 {
+                    div().text_size(text::SM).text_color(color::text_3()).child(format!("{} changed", b.changed)).into_any_element()
+                } else {
+                    div().text_size(text::SM).text_color(color::text_3()).child(r.when.clone()).into_any_element()
+                };
+                let (name, pick, close) = (r.name.to_string(), h.on_branch.clone(), on_menu.clone());
+                row(("branch", ix))
+                    .child(Icon::new(Lucide::GitBranch).size(size::ICON).text_color(color::text_2()))
+                    .child(div().flex_1().min_w_0().truncate().child(r.name.clone()))
+                    .child(div().flex_none().child(right))
+                    .child(div().w(size::ICON).flex_none().when(current, |d| d.child(Icon::new(IconName::Check).size(size::ICON))))
+                    .when(!enabled && !current, |d| d.opacity(0.5).cursor_default())
+                    .on_click(move |_, w, cx| {
+                        if current {
+                            close(None, w, cx);
+                        } else if enabled {
+                            pick(name.clone(), w, cx);
+                        }
+                    })
+            })
+            .collect::<Vec<_>>()
+    });
+    surface()
+        .w(px(320.))
+        .child(
+            row("branch-back")
+                .h(px(28.))
+                .gap_1()
+                .px_1p5()
+                .text_size(text::SM)
+                .text_color(color::text_3())
+                .child(Icon::new(IconName::ChevronLeft).size(size::ICON))
+                .child(div().truncate().child(format!("Branch · {}", format::dir_name(cwd))))
+                .on_click(move |_, w, cx| on_menu(Some(ComposerMenu::Folder(FolderPage::Root)), w, cx)),
+        )
+        .children(b.input.as_ref().map(|input| {
+            div().px_1().py_1().child(
+                div().h(px(26.)).px_1().flex().items_center().rounded(radius::MD).bg(color::bg()).border_1().border_color(color::border()).child(
+                    Input::new(input)
+                        .small()
+                        .appearance(false)
+                        .prefix(Icon::new(IconName::Search).size(size::ICON_SM).text_color(color::text_3())),
+                ),
+            )
+        }))
+        .children(b.blocked.clone().map(|t| note(t, color::text_3())))
+        .children(b.error.clone().map(|t| note(t, color::red())))
+        .children(head_row)
+        .map(|d| match rows {
+            None => d.child(note("Loading branches…".into(), color::text_3())),
+            Some(rows) => d.children(rows),
+        })
+        .when(b.more > 0, |d| d.child(note(format!("{} more · type to filter", b.more).into(), color::text_3())))
+        .children(b.create.clone().map(|name| {
+            let (create, n) = (h.on_new_branch.clone(), name.to_string());
+            // A divider only under branches that matched.
+            let matched = b.rows.as_ref().is_some_and(|r| !r.is_empty());
+            div().flex().flex_col().when(matched, |d| d.child(separator())).child(
+                row("branch-create")
+                    .child(Icon::new(IconName::Plus).size(size::ICON).text_color(color::text_2()))
+                    .child(div().flex_1().min_w_0().truncate().child(format!("Create branch \u{201c}{name}\u{201d}")))
+                    .when(!enabled, |d| d.opacity(0.5).cursor_default())
+                    .on_click(move |_, w, cx| {
+                        if enabled {
+                            create(n.clone(), w, cx);
+                        }
+                    }),
+            )
         }))
 }
 
@@ -1079,6 +1251,23 @@ pub mod fixtures {
             context_open: false,
             menu: None,
             resumable: Vec::new(),
+            branch: Some(branch()),
+        }
+    }
+
+    /// A repo on `main` with three changed files and a few branches.
+    pub fn branch() -> BranchChoice {
+        let row = |name: &str, when: &str| BranchRow { name: name.to_string().into(), when: when.to_string().into() };
+        BranchChoice {
+            head: "main".into(),
+            changed: 3,
+            rows: Some(vec![
+                row("main", "2 hours ago"),
+                row("dev", "2 days ago"),
+                row("feat/files", "5 days ago"),
+                row("fix/composer-flicker", "1 week ago"),
+            ]),
+            ..Default::default()
         }
     }
 
@@ -1255,7 +1444,39 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             }),
             menu("folder", || {
                 let c = fixtures::controls(0, false);
-                folder_menu(&c.dirs, &c.cwd, Rc::new(|_, _, _| {}), Rc::new(|_, _| {}), Rc::new(|_, _| {}))
+                folder_menu(&c.dirs, &c.cwd, c.branch.as_ref(), Rc::new(|_, _, _| {}), Rc::new(|_, _| {}), Rc::new(|_, _, _| {}), Rc::new(|_, _| {}))
+            }),
+            menu("branches", || {
+                let c = fixtures::controls(0, false);
+                branch_page(&c.cwd, &fixtures::branch(), &ComposerHandlers::default())
+            }),
+            menu("branches: loading", || {
+                let c = fixtures::controls(0, false);
+                branch_page(&c.cwd, &BranchChoice { rows: None, ..fixtures::branch() }, &ComposerHandlers::default())
+            }),
+            menu("branches: switching, git refused", || {
+                let c = fixtures::controls(0, false);
+                let b = BranchChoice {
+                    busy: Some("dev".into()),
+                    error: Some("Your local changes to the following files would be overwritten by checkout:\n\tsrc/main.rs".into()),
+                    ..fixtures::branch()
+                };
+                branch_page(&c.cwd, &b, &ComposerHandlers::default())
+            }),
+            menu("branches: blocked, a new name typed", || {
+                let c = fixtures::controls(0, false);
+                let b = BranchChoice {
+                    rows: Some(Vec::new()),
+                    create: Some("fix/selection-redraw".into()),
+                    blocked: Some("Another thread is working in this folder.".into()),
+                    ..fixtures::branch()
+                };
+                branch_page(&c.cwd, &b, &ComposerHandlers::default())
+            }),
+            menu("branches: detached, many", || {
+                let c = fixtures::controls(0, false);
+                let b = BranchChoice { head: "a1b2c3d".into(), detached: true, more: 23, changed: 0, ..fixtures::branch() };
+                branch_page(&c.cwd, &b, &ComposerHandlers::default())
             }),
             menu("resume", || {
                 let t = |id: &str, title: &str, closed: &str| ClosedThread { id: id.into(), title: title.to_string().into(), closed: closed.to_string().into() };

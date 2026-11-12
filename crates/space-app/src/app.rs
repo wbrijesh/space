@@ -386,6 +386,8 @@ pub struct SpaceApp {
     pub(crate) file_trees: HashMap<u64, crate::files::Tree>,
     pub(crate) file_tabs: HashMap<u64, crate::files_view::FileTabs>,
     pub(crate) files: crate::files_view::FilesView,
+    /// The folder menu's branch page while it's open.
+    pub(crate) branch_menu: Option<crate::branches::BranchMenu>,
     /// A finished selection in the transcript that can be quoted: its thread and text.
     pub(crate) quote_offer: Option<(u64, String)>,
     pub(crate) transcript_area: crate::quote::Area,
@@ -620,6 +622,7 @@ impl SpaceApp {
             file_trees: HashMap::new(),
             file_tabs: HashMap::new(),
             files: crate::files_view::FilesView::new(window, cx),
+            branch_menu: None,
             quote_offer: None,
             transcript_area: Default::default(),
             next_image_id: 0,

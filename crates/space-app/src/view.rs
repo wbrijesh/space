@@ -11,7 +11,7 @@ use gpui::component::input::InputState;
 use space_core::protocol::service::SettingKind;
 use space_ui::components::model_picker::PickerPane;
 use space_ui::components::composer::{
-    ClosedThread, Composer, ComposerBlocker, ComposerControls, ComposerHandlers, ComposerMenu, Handler, ModeChoice,
+    ClosedThread, Composer, ComposerBlocker, ComposerControls, ComposerHandlers, ComposerMenu, FolderPage, Handler, ModeChoice,
 };
 use space_ui::components::settings::{
     Catalog, FieldView, ModelChoice, PluginApproval, PluginRow, PluginSettingsView, SettingsHandlers, SettingsPage,
@@ -213,10 +213,11 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         // Esc closes a message's usage panel, the context panel or a composer menu (the model
         // picker steps back from one of its lists first).
         .when(app.usage_open.is_some(), |d| {
-            d.on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+            d.on_key_down(cx.listener(|this, e: &KeyDownEvent, w, cx| {
                 if e.keystroke.key == "escape" {
                     let back = this.usage_open.as_deref().and_then(composer_menu).and_then(|m| m.back());
                     this.show_usage(back.map(menu_slot), cx);
+                    this.left_branch_page(w, cx);
                 }
             }))
         })
@@ -1129,8 +1130,29 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         },
         on_menu: {
             let this = cx.entity().downgrade();
-            Rc::new(move |menu, _: &mut Window, cx: &mut App| {
-                let _ = this.update(cx, |this, cx| this.show_usage(menu.map(menu_slot), cx));
+            Rc::new(move |menu, w: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| {
+                    this.show_usage(menu.map(menu_slot), cx);
+                    match menu {
+                        // The folder menu: the branch as it is now; its page loads the list.
+                        Some(ComposerMenu::Folder(FolderPage::Root)) => this.refresh_branch(),
+                        Some(ComposerMenu::Folder(FolderPage::Branches)) => this.open_branch_page(w, cx),
+                        _ => {}
+                    }
+                    this.left_branch_page(w, cx);
+                });
+            })
+        },
+        on_branch: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |name, w: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| this.switch_branch(name, false, w, cx));
+            })
+        },
+        on_new_branch: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |name, w: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| this.switch_branch(name, true, w, cx));
             })
         },
         on_resume: {
@@ -1191,6 +1213,7 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
             cwd: thread.cwd.clone(),
             dirs: app.recent_dirs(),
             thread_empty: thread.is_empty(),
+            branch: app.branch_choice(thread, cx),
             status: {
                 // A thread not loaded yet offers what the agent offers now, not what it saved.
                 let mut status = thread.state.status.clone();
@@ -1224,7 +1247,8 @@ const CONTEXT_PANEL: &str = "composer:context";
 /// `usage_open` while one of the composer's menus is open.
 fn menu_slot(menu: ComposerMenu) -> String {
     match menu {
-        ComposerMenu::Folder => "composer:folder",
+        ComposerMenu::Folder(FolderPage::Root) => crate::branches::FOLDER_MENU,
+        ComposerMenu::Folder(FolderPage::Branches) => crate::branches::BRANCH_PAGE,
         ComposerMenu::Mode => "composer:mode",
         ComposerMenu::Resume => "composer:resume",
         ComposerMenu::Model(PickerPane::Root) => "composer:picker",
@@ -1238,7 +1262,7 @@ pub(crate) fn composer_menu(slot: &str) -> Option<ComposerMenu> {
     [PickerPane::Root, PickerPane::Models, PickerPane::Efforts]
         .map(ComposerMenu::Model)
         .into_iter()
-        .chain([ComposerMenu::Folder, ComposerMenu::Mode, ComposerMenu::Resume])
+        .chain([ComposerMenu::Folder(FolderPage::Root), ComposerMenu::Folder(FolderPage::Branches), ComposerMenu::Mode, ComposerMenu::Resume])
         .find(|m| menu_slot(*m) == slot)
 }
 

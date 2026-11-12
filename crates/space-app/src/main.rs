@@ -43,6 +43,8 @@ mod terminal_view;
 mod text_prompt;
 mod paste;
 mod diff;
+mod git;
+mod branches;
 mod files;
 mod files_view;
 mod open_in;
