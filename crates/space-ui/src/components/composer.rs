@@ -763,55 +763,6 @@ fn needs_two_rows(text_width: f32, editor_width: f32, last: Shape, trailing: f32
     text_width > one_row_editor(editor_width, last, trailing) - 2. * EDITOR_PAD
 }
 
-#[cfg(test)]
-mod layout_tests {
-    use super::{BUTTON, BUTTON_GAP, EDITOR_PAD, SEND_GAP, Shape, TEXT_INSET, needs_two_rows, trailing_width};
-
-    /// The editor's width each layout gives a card with `inner` px inside.
-    fn editor_in(inner: f32, expanded: bool, trailing: f32) -> f32 {
-        if expanded { inner - 2. * TEXT_INSET } else { inner - BUTTON - SEND_GAP - trailing }
-    }
-
-    #[test]
-    fn the_answer_is_the_same_from_either_layout() {
-        let inner = 600.;
-        for queueable in [false, true] {
-            let trailing = trailing_width(queueable);
-            for tenth in 0..6000 {
-                let text = tenth as f32 / 10.;
-                let from = |expanded| {
-                    let last = Shape { expanded, trailing };
-                    needs_two_rows(text, editor_in(inner, expanded, trailing), last, trailing)
-                };
-                assert_eq!(from(false), from(true), "text {text}px, queueable {queueable}");
-            }
-        }
-    }
-
-    #[test]
-    fn the_band_that_used_to_flip_is_stable() {
-        // Queueable: two buttons. The old estimate counted one, so text up to a button and the
-        // gap wider than the line read as fitting from two rows, and as not fitting from one.
-        let (inner, trailing) = (600., trailing_width(true));
-        let fits = editor_in(inner, false, trailing) - 2. * EDITOR_PAD;
-        for text in [fits + 1., fits + BUTTON / 2., fits + BUTTON + BUTTON_GAP - 1.] {
-            let one = needs_two_rows(text, editor_in(inner, false, trailing), Shape { expanded: false, trailing }, trailing);
-            let two = needs_two_rows(text, editor_in(inner, true, trailing), Shape { expanded: true, trailing }, trailing);
-            assert!(one && two, "text {text}px: one row says {one}, two rows say {two}");
-        }
-    }
-
-    #[test]
-    fn the_buttons_changing_since_the_last_frame_count() {
-        // The last frame had one button; now there are two (text typed while the agent works).
-        let inner = 600.;
-        let (before, now) = (trailing_width(false), trailing_width(true));
-        let last = Shape { expanded: false, trailing: before };
-        let fits_now = editor_in(inner, false, now) - 2. * EDITOR_PAD;
-        assert!(needs_two_rows(fits_now + 1., editor_in(inner, false, before), last, now));
-        assert!(!needs_two_rows(fits_now - 1., editor_in(inner, false, before), last, now));
-    }
-}
 
 fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
     let status = c.status.clone();
@@ -825,20 +776,36 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
         let on_menu = h.on_menu.clone();
         Rc::new(move |w, cx| on_menu(None, w, cx))
     };
-    // The folder is picked before the first message; after that it's the thread's.
-    let folder = c.thread_empty.then(|| {
+    // The folder is picked before the first message; after that it's the thread's, shown
+    // read-only (no chevron, no menu), with the full path on hover.
+    let folder_label = || div().max_w(px(220.)).truncate().child(format::dir_name(&c.cwd));
+    let folder = if c.thread_empty {
         let is_open = menu_open == Some(ComposerMenu::Folder);
         trigger("project-menu", is_open, true)
             .on_click(toggle_menu(ComposerMenu::Folder))
             .child(Icon::new(IconName::Folder).size(size::ICON))
-            .child(div().max_w(px(220.)).truncate().child(format::dir_name(&c.cwd)))
+            .child(folder_label())
             .child(chevron())
             .when(is_open, |d| {
                 let menu = folder_menu(&c.dirs, &c.cwd, h.on_pick_dir.clone(), h.on_choose_folder.clone(), close_menu.clone());
                 let close = close_menu.clone();
                 d.child(popover(false, menu, move |w, cx| close(w, cx)))
             })
-    });
+    } else {
+        div()
+            .id("project-folder")
+            .flex_none()
+            .h(px(24.))
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .text_size(text::SM)
+            .text_color(color::text_2())
+            .child(Icon::new(IconName::Folder).size(size::ICON))
+            .child(folder_label())
+            .tip(format::abbreviate_home(&c.cwd))
+    };
 
     let mut right = div().flex().items_center().gap_0p5();
     let picker_locked = c.locked || status.available_models.as_ref().is_none_or(|m| m.is_empty());
@@ -925,7 +892,7 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
         .justify_between()
         .pl(px(ROW_INSET_LEFT))
         .pr(px(ROW_INSET_RIGHT))
-        .child(div().flex().items_center().gap_1().min_w_0().children(folder).children(mode).children(resume))
+        .child(div().flex().items_center().gap_1().min_w_0().child(folder).children(mode).children(resume))
         .child(right)
 }
 
@@ -1301,4 +1268,54 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             }),
         ]),
     ]
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::{BUTTON, BUTTON_GAP, EDITOR_PAD, SEND_GAP, Shape, TEXT_INSET, needs_two_rows, trailing_width};
+
+    /// The editor's width each layout gives a card with `inner` px inside.
+    fn editor_in(inner: f32, expanded: bool, trailing: f32) -> f32 {
+        if expanded { inner - 2. * TEXT_INSET } else { inner - BUTTON - SEND_GAP - trailing }
+    }
+
+    #[test]
+    fn the_answer_is_the_same_from_either_layout() {
+        let inner = 600.;
+        for queueable in [false, true] {
+            let trailing = trailing_width(queueable);
+            for tenth in 0..6000 {
+                let text = tenth as f32 / 10.;
+                let from = |expanded| {
+                    let last = Shape { expanded, trailing };
+                    needs_two_rows(text, editor_in(inner, expanded, trailing), last, trailing)
+                };
+                assert_eq!(from(false), from(true), "text {text}px, queueable {queueable}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_band_that_used_to_flip_is_stable() {
+        // Queueable: two buttons. The old estimate counted one, so text up to a button and the
+        // gap wider than the line read as fitting from two rows, and as not fitting from one.
+        let (inner, trailing) = (600., trailing_width(true));
+        let fits = editor_in(inner, false, trailing) - 2. * EDITOR_PAD;
+        for text in [fits + 1., fits + BUTTON / 2., fits + BUTTON + BUTTON_GAP - 1.] {
+            let one = needs_two_rows(text, editor_in(inner, false, trailing), Shape { expanded: false, trailing }, trailing);
+            let two = needs_two_rows(text, editor_in(inner, true, trailing), Shape { expanded: true, trailing }, trailing);
+            assert!(one && two, "text {text}px: one row says {one}, two rows say {two}");
+        }
+    }
+
+    #[test]
+    fn the_buttons_changing_since_the_last_frame_count() {
+        // The last frame had one button; now there are two (text typed while the agent works).
+        let inner = 600.;
+        let (before, now) = (trailing_width(false), trailing_width(true));
+        let last = Shape { expanded: false, trailing: before };
+        let fits_now = editor_in(inner, false, now) - 2. * EDITOR_PAD;
+        assert!(needs_two_rows(fits_now + 1., editor_in(inner, false, before), last, now));
+        assert!(!needs_two_rows(fits_now - 1., editor_in(inner, false, before), last, now));
+    }
 }
