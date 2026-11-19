@@ -13,13 +13,13 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 ditto -x -k "$zip" "$work/Applications"
 app="$work/Applications/Space.app"
-mkdir -p "$work/project" "$work/pi-agent"
+mkdir -p "$work/project"
 
 echo "== $("$app/Contents/MacOS/Space" --version)"
 codesign --verify --strict "$app"
 echo "== signature ok"
 status=0
-SPACE_SETTINGS="$work/settings.json" SPACE_PI_AGENT_DIR="$work/pi-agent" SPACE_NOTIFY=0 \
+SPACE_SETTINGS="$work/settings.json" SPACE_NOTIFY=0 \
     "$app/Contents/MacOS/Space" --check-plugins "$work/project" > "$work/check.txt" || status=$?
 cat "$work/check.txt"
 [ "$status" -eq 0 ] || { echo "a bundled plugin didn't start" >&2; exit 1; }

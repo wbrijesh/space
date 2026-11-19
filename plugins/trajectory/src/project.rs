@@ -586,10 +586,10 @@ mod tests {
             TraceEvent::Prompt { at: 1000, text: "fix the test".into(), files: vec![], images: vec!["/a.png".into()] },
             TraceEvent::Context {
                 at: 1001,
-                sections: vec![ContextFact { plugin: "permissions".into(), id: "mode".into(), text: "Workspace Write".into() }],
+                sections: vec![ContextFact { plugin: "guard".into(), id: "mode".into(), text: "Guarded".into() }],
             },
             TraceEvent::TurnStart { turn: 1, at: 1002 },
-            header(1, HeaderReason::Initial, "You are pi.", &["bash", "read"]),
+            header(1, HeaderReason::Initial, "You are a coding agent.", &["bash", "read"]),
             TraceEvent::Request { request: 1, turn: 1, step: 1, at: 1100, header_id: 1, messages: vec![json!({"role":"user"})], rewritten: false },
             TraceEvent::FirstToken { request: 1, at: 1500 },
             TraceEvent::Chunks { request: 1, stream: ChunkKind::Text, t0: 1500, dt: vec![10, 10] },
@@ -598,7 +598,7 @@ mod tests {
                 call_id: "c1".into(),
                 at: 2001,
                 plugin: None,
-                mode: "workspace-write".into(),
+                mode: "guarded".into(),
                 verdict: GuardVerdict::Allow,
                 reason: None,
                 held_ms: 40,
@@ -639,7 +639,7 @@ mod tests {
                 (Assistant, 1, Some(2), done),
             ]
         );
-        assert_eq!((p.rows[1].images, p.rows[2].label.as_deref(), p.rows[0].preview.as_str()), (1, Some("permissions"), "Initial system prompt"));
+        assert_eq!((p.rows[1].images, p.rows[2].label.as_deref(), p.rows[0].preview.as_str()), (1, Some("guard"), "Initial system prompt"));
         assert_eq!(p.rows[3].preview, "Let me run the tests.");
         assert_eq!((p.rows[3].first_token_ms, p.rows[3].tokens), (Some(1500), Some(20)));
         let tool = &p.rows[4];
@@ -666,7 +666,7 @@ mod tests {
         assert_eq!(system.header.unwrap().tools.len(), 2);
         assert!(system.previous_header.is_none());
         let tool = p.detail("s1:9", &sessions).unwrap();
-        assert_eq!((tool.output.as_deref(), tool.guard.unwrap().mode.as_str()), (Some("1 failed\nmore"), "workspace-write"));
+        assert_eq!((tool.output.as_deref(), tool.guard.unwrap().mode.as_str()), (Some("1 failed\nmore"), "guarded"));
         assert_eq!(tool.raw.len(), 3, "start, end and the guard");
         let by_number = p.detail("request:2", &sessions).unwrap();
         assert_eq!(by_number.request.unwrap().summary.number, 2);
@@ -740,8 +740,8 @@ mod tests {
         let ids = |q: &str| p.search(q).into_iter().map(|i| p.rows[i].id.clone()).collect::<Vec<_>>();
         assert_eq!(ids("cargo FAILED"), ["s1:9"]);
         assert_eq!(ids("more"), ["s1:9"], "the full output, not just the preview");
-        assert_eq!(ids("workspace"), ["s1:1.0"]);
-        assert_eq!(ids("you are pi"), ["s1:3"]);
+        assert_eq!(ids("guarded"), ["s1:1.0"]);
+        assert_eq!(ids("you are a coding agent"), ["s1:3"]);
         assert!(ids("nothing-like-this").is_empty());
     }
 }

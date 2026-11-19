@@ -184,7 +184,7 @@ pub struct TrajectoryHandlers {
     pub on_load_earlier: Handler,
     pub on_copy: IdHandler,
     pub on_open_image: OpenPicsHandler,
-    /// "Continue in Pi": copy this command.
+    /// "Continue in Claude Code": copy this command.
     pub on_continue: IdHandler,
 }
 

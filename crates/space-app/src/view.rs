@@ -182,14 +182,19 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
                 cx.stop_propagation();
             }
         }))
-        // Esc in the composer while the agent works stops it (open panels and menus close first).
+        // Esc in the composer closes the `/` menu, then the side question, then stops the agent
+        // while it works (open panels and menus close first).
         .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
-            if e.keystroke.key == "escape"
-                && !e.keystroke.modifiers.modified()
-                && this.usage_open.is_none()
-                && this.current().is_some_and(|t| t.state.running)
-                && this.input.read(cx).focus_handle(cx).is_focused(window)
+            if e.keystroke.key != "escape"
+                || e.keystroke.modifiers.modified()
+                || this.usage_open.is_some()
+                || !this.input.read(cx).focus_handle(cx).is_focused(window)
             {
+                return;
+            }
+            if this.close_command_menu(cx) || this.close_side(cx) {
+                cx.stop_propagation();
+            } else if this.current().is_some_and(|t| t.state.running) {
                 this.cancel(cx);
                 cx.stop_propagation();
             }
@@ -1031,7 +1036,7 @@ fn plugin_rows(app: &SpaceApp) -> Vec<PluginRow> {
         .collect()
 }
 
-/// "Switch this thread to Full access?" while a mode waits for confirmation.
+/// "Switch this thread to <mode>?" while a mode waits for confirmation.
 fn mode_confirmation(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
     let (key, id) = app.pending_confirm.as_ref()?;
     if *key != thread.key {
@@ -1128,7 +1133,10 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         },
         on_recall: {
             let this = cx.entity().downgrade();
-            Rc::new(move |step, w: &mut Window, cx: &mut App| this.update(cx, |this, cx| this.recall(step, w, cx)).unwrap_or(false))
+            // The `/` menu's selection first, then the sent messages.
+            Rc::new(move |step, w: &mut Window, cx: &mut App| {
+                this.update(cx, |this, cx| this.step_command(step, cx) || this.recall(step, w, cx)).unwrap_or(false)
+            })
         },
         on_paste: {
             let this = cx.entity().downgrade();
@@ -1173,6 +1181,22 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
                 let _ = this.update(cx, |this, cx| this.resume_thread(&id, w, cx));
             })
         },
+        on_command: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |name, w: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| this.run_command(&name, w, cx));
+            })
+        },
+        on_complete_command: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |w: &mut Window, cx: &mut App| this.update(cx, |this, cx| this.complete_command(w, cx)).unwrap_or(false))
+        },
+        on_close_commands: handler(cx, |this, _, cx| {
+            this.close_command_menu(cx);
+        }),
+        on_close_side: handler(cx, |this, _, cx| {
+            this.close_side(cx);
+        }),
     };
     // A new thread with nothing typed offers this folder's closed threads.
     let untouched = thread.is_empty()
@@ -1213,6 +1237,8 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         })
         .collect();
     Composer::new("composer", &app.input)
+        .commands(app.command_menu(cx))
+        .side(app.side_view())
         .running(thread.state.running)
         .queued(thread.queued.is_some())
         .queued_messages(queued_messages)
@@ -1253,7 +1279,7 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
 }
 
 
-/// `copied` just after "Continue in Pi" was clicked.
+/// `copied` just after "Continue in Claude Code" was clicked.
 const CONTINUE_IN: &str = "trajectory:continue-in";
 
 /// `usage_open` while the context ring's panel is open (rows use their ids).
@@ -1283,8 +1309,8 @@ pub(crate) fn composer_menu(slot: &str) -> Option<ComposerMenu> {
 
 /// The agent could not start or exited: say so, with Restart.
 fn agent_problem(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
-    // pi-agent talks to Claude through the Claude CLI; without it nothing works.
-    if app.agent_id.as_deref() == Some("pi-agent") && !app.claude_cli {
+    // claude-agent drives the Claude Code CLI; without it nothing works.
+    if app.agent_id.as_deref() == Some("claude-agent") && !app.claude_cli {
         let message = "Space needs the Claude CLI: install it (brew install --cask claude-code) and run `claude` once to sign in.";
         return Some(problem_card(message, Some(click(cx, |this, _, cx| this.restart_agent(cx)))).into_any_element());
     }

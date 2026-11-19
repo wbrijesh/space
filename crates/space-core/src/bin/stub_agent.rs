@@ -52,7 +52,8 @@ use std::time::Duration;
 use space_core::stub_script::{SCRIPT_ENV, Step, StubScript};
 use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY, STEER_META_KEY, USAGE_META_KEY};
 use space_protocol::{
-    Complete, CompleteResult, Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, Retry, RetryKind, RetryState, SpaceStatus, SteerResult, SteerSession, Steered,
+    CommandInfo, Complete, CompleteResult, Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, Retry, RetryKind, RetryState, SideAnswer, SideQuestion, SpaceStatus,
+    SteerResult, SteerSession, Steered,
     UnsteerResult, UnsteerSession, Verdict,
 };
 use space_protocol::acp::{self, Agent, ByteStreams, Client, Responder, UntypedMessage};
@@ -159,8 +160,12 @@ impl State {
             thinking_levels: Some(LEVELS.iter().map(|l| l.to_string()).collect()),
             context_tokens: Some(s.context_tokens),
             context_window: Some(200_000),
-            // A harmless stand-in for "Continue in Pi".
+            // A harmless stand-in for "Continue in Claude Code".
             continue_in: Some(space_protocol::ContinueIn { app: "Stub".into(), command: format!("echo continue {session_id}") }),
+            commands: Some(vec![
+                CommandInfo { name: "btw".into(), description: "Ask a side question".into(), hint: Some("<question>".into()), side: true },
+                CommandInfo { name: "compact".into(), description: "Summarize the conversation".into(), hint: Some("<instructions>".into()), side: false },
+            ]),
         }
     }
 }
@@ -296,6 +301,17 @@ async fn main() -> acp::Result<()> {
                         responder.respond(CompleteResult { text: format!("\"Title by {model}.\"\n") })
                     })
                 }
+            },
+            acp::on_receive_request!(),
+        )
+        // `/btw`: answered at once (a question with "btwfail" fails).
+        .on_receive_request(
+            async move |req: SideQuestion, responder: Responder<SideAnswer, acp::V1>, _cx: Conn| {
+                eprintln!("space-stub-agent: btw {req:?}");
+                if req.question.contains("btwfail") {
+                    return responder.respond_with_error(acp::Error::new(-32603, "no side answers today"));
+                }
+                responder.respond(SideAnswer { text: format!("Side answer to: {}", req.question) })
             },
             acp::on_receive_request!(),
         )

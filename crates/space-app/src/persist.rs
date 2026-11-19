@@ -35,7 +35,7 @@ pub(crate) fn new_thread_id() -> String {
 /// Add `event` to the events waiting to be saved, merging streamed chunks.
 pub(crate) fn record(unsaved: &mut Vec<SessionEvent>, event: &SessionEvent) {
     match (unsaved.last_mut(), event) {
-        (_, SessionEvent::Created { .. } | SessionEvent::ToolCallHeld { .. } | SessionEvent::Retry(_)) => {}
+        (_, SessionEvent::Created { .. } | SessionEvent::ToolCallHeld { .. } | SessionEvent::Retry(_) | SessionEvent::SideQuestion { .. } | SessionEvent::SideAnswer { .. }) => {}
         (Some(SessionEvent::AgentText { text: buf }), SessionEvent::AgentText { text })
         | (Some(SessionEvent::AgentThought { text: buf }), SessionEvent::AgentThought { text }) => buf.push_str(text),
         (Some(SessionEvent::Status(last)), SessionEvent::Status(status)) => last.merge(status),

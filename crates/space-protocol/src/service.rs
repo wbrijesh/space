@@ -489,7 +489,7 @@ mod tests {
     #[test]
     fn wire_formats() {
         let call: HookCall = serde_json::from_value(serde_json::json!({
-            "sessionId": "s", "mode": "read-only", "projectRoot": "/p",
+            "sessionId": "s", "mode": "locked", "projectRoot": "/p",
             "call": {"id": "c", "tool": "bash", "kind": "execute", "args": {"command": "ls"}, "cwd": "/p"},
             "history": [{"type": "user", "text": "hi"},
                         {"type": "tool", "id": "c0", "tool": "read", "kind": "read", "args": {"path": "a"}, "allowed": true}]

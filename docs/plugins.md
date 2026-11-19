@@ -5,7 +5,7 @@ talking JSON-RPC 2.0 over its stdin/stdout (one message per line; stderr is your
 panel). There are two kinds:
 
 - **Agents** (`provides = ["agent"]`) speak ACP. See [architecture.md](architecture.md#agent-protocol-acp-subset)
-  and `plugins/pi-agent` for a full one.
+  and `plugins/claude-agent` for a full one.
 - **Service plugins** provide anything else: guards, sandboxes, catalogs, settings, hidden context.
   This guide is about them.
 
@@ -119,6 +119,6 @@ wouldn't hand over are listed in `unreadable`.
 ## 5. Testing
 
 `crates/space-core/src/bin/stub_guard.rs` is a scripted service plugin used by the host's tests: a
-good template. `plugins/permissions/tests/guardrail.rs` shows an end-to-end test of a real plugin with
-the stub agent and a fake upstream server. Use your own Keychain service name in tests
+good template. `plugins/titles/tests/titles.rs` shows an end-to-end test of a real plugin with the
+stub agent. Use your own Keychain service name in tests
 (`Secrets::new("…test…")`), never `dev.brijesh.space`.

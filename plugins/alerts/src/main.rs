@@ -130,7 +130,7 @@ mod tests {
     }
 
     fn held(watching: bool) -> Observed {
-        Observed::ToolHeld { session_id: "s".into(), call_id: "c".into(), reason: "OpenAI is unreachable.".into(), watching }
+        Observed::ToolHeld { session_id: "s".into(), call_id: "c".into(), reason: "The guard can't be reached.".into(), watching }
     }
 
     /// (title, banner, sound) of the alert, if any.
@@ -166,7 +166,7 @@ mod tests {
     fn a_paused_call_alerts_once_per_turn() {
         let mut paused = HashSet::new();
         let first = alert(&held(false), ON, &mut paused).unwrap();
-        assert_eq!((first.title.as_str(), first.session_id.as_deref()), ("Paused: OpenAI is unreachable", Some("s")));
+        assert_eq!((first.title.as_str(), first.session_id.as_deref()), ("Paused: The guard can't be reached", Some("s")));
         assert!(alert(&held(false), ON, &mut paused).is_none());
         assert!(alert(&Observed::TurnStarted { session_id: "s".into() }, ON, &mut paused).is_none());
         assert!(alert(&held(true), ON, &mut paused).is_some_and(|n| !n.banner && n.sound));

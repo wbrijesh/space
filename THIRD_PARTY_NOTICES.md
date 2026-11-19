@@ -12,141 +12,123 @@ GNU LGPL 2.1; the source of the JavaScriptCore Bun uses is at https://github.com
 
 ## TypeScript packages
 
-Installed for the bundled TypeScript plugins (pi-agent: the pi SDK, the Claude CLI provider, the
-Agent Client Protocol SDK and their dependencies). Only the code a plugin uses is compiled in.
+Installed for the bundled TypeScript plugins (claude-agent: the Claude Agent SDK, the Agent Client
+Protocol SDK and their dependencies). Only the code a plugin uses is compiled in. The Claude Agent
+SDK is Anthropic's, used under Anthropic's terms (https://code.claude.com/docs/en/legal-and-compliance);
+its native Claude Code binary is installed with it but not shipped: Space runs the Claude Code CLI
+the user installed.
 
 | Name | Version | Licence |
 |---|---|---|
 | @agentclientprotocol/sdk | 2.4.0 | Apache-2.0 |
+| @anthropic-ai/claude-agent-sdk | 0.3.328 | SEE LICENSE IN README.md |
+| @anthropic-ai/claude-agent-sdk-darwin-arm64 | 0.3.328 | SEE LICENSE IN LICENSE.md |
 | @anthropic-ai/sdk | 0.129.0 | MIT |
-| @aws-sdk/client-bedrock-runtime | 3.1127.0 | Apache-2.0 |
-| @aws-sdk/core | 3.980.1 | Apache-2.0 |
-| @aws-sdk/credential-provider-env | 3.972.82 | Apache-2.0 |
-| @aws-sdk/credential-provider-http | 3.972.84 | Apache-2.0 |
-| @aws-sdk/credential-provider-ini | 3.973.27 | Apache-2.0 |
-| @aws-sdk/credential-provider-login | 3.972.89 | Apache-2.0 |
-| @aws-sdk/credential-provider-node | 3.972.94 | Apache-2.0 |
-| @aws-sdk/credential-provider-process | 3.972.82 | Apache-2.0 |
-| @aws-sdk/credential-provider-sso | 3.973.26 | Apache-2.0 |
-| @aws-sdk/credential-provider-web-identity | 3.972.88 | Apache-2.0 |
-| @aws-sdk/eventstream-handler-node | 3.972.40 | Apache-2.0 |
-| @aws-sdk/middleware-eventstream | 3.972.36 | Apache-2.0 |
-| @aws-sdk/middleware-websocket | 3.972.64 | Apache-2.0 |
-| @aws-sdk/nested-clients | 3.998.1 | Apache-2.0 |
-| @aws-sdk/signature-v4-multi-region | 3.996.51 | Apache-2.0 |
-| @aws-sdk/token-providers | 3.1127.0 | Apache-2.0 |
-| @aws-sdk/token-providers | 3.1164.0 | Apache-2.0 |
-| @aws-sdk/types | 3.975.0 | Apache-2.0 |
-| @aws-sdk/xml-builder | 3.972.42 | Apache-2.0 |
-| @aws/lambda-invoke-store | 0.3.0 | Apache-2.0 |
 | @babel/runtime | 7.29.13 | MIT |
-| @earendil-works/pi-agent-core | 1.5.0 | MIT |
-| @earendil-works/pi-ai | 1.5.0 | MIT |
-| @earendil-works/pi-codemode | 1.5.0 | MIT |
-| @earendil-works/pi-coding-agent | 1.5.0 | MIT |
-| @earendil-works/pi-mcp | 1.5.0 | MIT |
-| @earendil-works/pi-schema | 1.5.0 | MIT |
-| @earendil-works/pi-telemetry | 1.5.0 | MIT |
-| @earendil-works/pi-tui | 1.5.0 | MIT |
-| @google/genai | 2.21.0 | Apache-2.0 |
-| @isaacs/nonrecursive-glob-match | 1.1.0 | BlueOak-1.0.0 |
-| @pi-plugins/claude-cli | 0.3.0 | MIT |
-| @protobufjs/aspromise | 1.1.2 | BSD-3-Clause |
-| @protobufjs/base64 | 1.1.2 | BSD-3-Clause |
-| @protobufjs/codegen | 2.0.5 | BSD-3-Clause |
-| @protobufjs/eventemitter | 1.1.1 | BSD-3-Clause |
-| @protobufjs/fetch | 1.1.1 | BSD-3-Clause |
-| @protobufjs/float | 1.0.2 | BSD-3-Clause |
-| @protobufjs/path | 1.1.2 | BSD-3-Clause |
-| @protobufjs/pool | 1.1.0 | BSD-3-Clause |
-| @protobufjs/utf8 | 1.1.2 | BSD-3-Clause |
-| @silvia-odwyer/photon-node | 0.3.4 | Apache-2.0 |
-| @smithy/core | 3.39.0 | Apache-2.0 |
-| @smithy/credential-provider-imds | 4.5.2 | Apache-2.0 |
-| @smithy/fetch-http-handler | 5.8.1 | Apache-2.0 |
-| @smithy/node-http-handler | 4.12.1 | Apache-2.0 |
-| @smithy/node-http-handler | 4.14.2 | Apache-2.0 |
-| @smithy/signature-v4 | 5.7.5 | Apache-2.0 |
-| @smithy/types | 4.20.0 | Apache-2.0 |
+| @hono/node-server | 2.1.9 | MIT |
+| @modelcontextprotocol/sdk | 1.32.2 | MIT |
 | @stablelib/base64 | 1.0.1 | MIT |
 | @types/bun | 1.4.4 | MIT |
 | @types/node | 26.6.6 | MIT |
-| @types/retry | 0.12.0 | MIT |
 | @typescript/typescript-darwin-arm64 | 7.0.2 | Apache-2.0 |
-| agent-base | 7.1.4 | MIT |
-| agent-base | 9.0.0 | MIT |
-| balanced-match | 4.0.4 | MIT |
-| base64-js | 1.5.1 | MIT |
-| bignumber.js | 9.3.1 | MIT |
-| bowser | 2.15.0 | MIT |
-| brace-expansion | 5.0.12 | MIT |
-| buffer-equal-constant-time | 1.0.1 | BSD-3-Clause |
+| accepts | 2.0.0 | MIT |
+| ajv | 8.20.0 | MIT |
+| ajv-formats | 3.0.1 | MIT |
+| body-parser | 2.4.0 | MIT |
 | bun-types | 1.4.4 | MIT |
-| chalk | 6.0.0 | MIT |
+| bytes | 3.1.2 | MIT |
+| call-bind-apply-helpers | 1.0.2 | MIT |
+| call-bound | 1.0.4 | MIT |
+| content-disposition | 2.0.1 | MIT |
+| content-type | 1.0.5 | MIT |
+| content-type | 2.1.0 | MIT |
+| cookie | 0.7.2 | MIT |
+| cookie-signature | 1.2.2 | MIT |
+| cors | 2.8.6 | MIT |
 | cross-spawn | 7.0.6 | MIT |
-| data-uri-to-buffer | 4.0.1 | MIT |
 | debug | 4.4.3 | MIT |
-| diff | 8.0.4 | BSD-3-Clause |
-| ecdsa-sig-formatter | 1.0.11 | Apache-2.0 |
-| extend | 3.0.2 | MIT |
+| depd | 2.0.0 | MIT |
+| dunder-proto | 1.0.1 | MIT |
+| ee-first | 1.1.1 | MIT |
+| encodeurl | 2.0.3 | MIT |
+| es-define-property | 1.0.1 | MIT |
+| es-errors | 1.3.0 | MIT |
+| es-object-atoms | 1.1.2 | MIT |
+| escape-html | 1.0.3 | MIT |
+| etag | 1.8.1 | MIT |
+| eventsource | 3.0.7 | MIT |
+| eventsource-parser | 3.1.1 | MIT |
+| express | 5.3.0 | MIT |
+| express-rate-limit | 8.7.5 | MIT |
+| fast-deep-equal | 3.1.3 | MIT |
 | fast-sha256 | 1.3.0 | Unlicense |
-| fetch-blob | 3.2.0 | MIT |
-| formdata-polyfill | 4.0.10 | MIT |
-| gaxios | 7.3.1 | Apache-2.0 |
-| gcp-metadata | 8.1.2 | Apache-2.0 |
-| get-east-asian-width | 1.6.0 | MIT |
-| google-auth-library | 10.9.1 | Apache-2.0 |
-| google-logging-utils | 1.1.3 | Apache-2.0 |
-| graceful-fs | 4.2.11 | ISC |
-| grok-mermaid | 0.2.3 | Apache-2.0 |
-| highlight.js | 10.7.3 | BSD-3-Clause |
-| hosted-git-info | 9.0.3 | ISC |
-| http-proxy-agent | 9.1.0 | MIT |
-| https-proxy-agent | 7.0.6 | MIT |
-| https-proxy-agent | 9.1.0 | MIT |
-| ignore | 7.0.8 | MIT |
+| fast-uri | 3.1.9 | BSD-3-Clause |
+| finalhandler | 2.1.1 | MIT |
+| forwarded | 0.2.0 | MIT |
+| fresh | 2.0.0 | MIT |
+| function-bind | 1.1.2 | MIT |
+| get-intrinsic | 1.3.0 | MIT |
+| get-proto | 1.0.1 | MIT |
+| gopd | 1.2.0 | MIT |
+| has-symbols | 1.1.0 | MIT |
+| hasown | 2.0.4 | MIT |
+| hono | 4.13.19 | MIT |
+| http-errors | 2.0.1 | MIT |
+| iconv-lite | 0.7.3 | MIT |
+| inherits | 2.0.4 | ISC |
+| ip-address | 10.7.6 | MIT |
+| ipaddr.js | 1.9.1 | MIT |
+| is-promise | 4.0.0 | MIT |
 | isexe | 2.0.0 | ISC |
-| jiti | 2.7.0 | MIT |
-| json-bigint | 1.0.0 | MIT |
+| jose | 6.2.18 | MIT |
 | json-schema-to-ts | 3.1.1 | MIT |
-| jwa | 2.0.1 | MIT |
-| jws | 4.0.1 | MIT |
-| long | 5.3.2 | Apache-2.0 |
-| lru-cache | 11.5.3 | BlueOak-1.0.0 |
-| marked | 18.0.11 | MIT |
-| marked-cjk-friendly | 0.1.2 | MIT |
-| minimatch | 11.0.3 | BlueOak-1.0.0 |
+| json-schema-traverse | 1.0.0 | MIT |
+| json-schema-typed | 8.0.2 | BSD-2-Clause |
+| math-intrinsics | 1.1.0 | MIT |
+| media-typer | 1.1.1 | MIT |
+| merge-descriptors | 2.0.0 | MIT |
+| mime-db | 1.54.0 | MIT |
+| mime-types | 3.0.2 | MIT |
 | ms | 2.1.3 | MIT |
-| node-domexception | 1.0.0 | MIT |
-| node-fetch | 3.3.2 | MIT |
-| openai | 7.19.0 | Apache-2.0 |
-| p-retry | 4.6.2 | MIT |
-| partial-json | 0.1.7 | MIT |
+| negotiator | 1.1.0 | MIT |
+| object-assign | 4.1.1 | MIT |
+| object-inspect | 1.14.0 | MIT |
+| on-finished | 2.4.2 | MIT |
+| once | 1.4.0 | ISC |
+| parseurl | 1.3.3 | MIT |
 | path-key | 3.1.1 | MIT |
-| proper-lockfile | 4.1.2 | MIT |
-| protobufjs | 7.6.6 | BSD-3-Clause |
-| proxy-agent-negotiate | 1.1.0 | MIT |
-| quickjs-wasi | 3.6.2 | MIT |
-| retry | 0.12.0 | MIT |
-| retry | 0.13.1 | MIT |
-| safe-buffer | 5.2.1 | MIT |
-| semver | 7.8.5 | ISC |
+| path-to-regexp | 8.4.2 | MIT |
+| pkce-challenge | 5.0.1 | MIT |
+| proxy-addr | 2.0.8 | MIT |
+| qs | 6.17.1 | BSD-3-Clause |
+| range-parser | 1.3.0 | MIT |
+| raw-body | 3.0.2 | MIT |
+| require-from-string | 2.0.2 | MIT |
+| router | 2.3.0 | MIT |
+| safer-buffer | 2.1.2 | MIT |
+| send | 1.2.1 | MIT |
+| serve-static | 2.2.1 | MIT |
+| setprototypeof | 1.2.0 | ISC |
 | shebang-command | 2.0.0 | MIT |
 | shebang-regex | 3.0.0 | MIT |
-| signal-exit | 3.0.7 | ISC |
+| side-channel | 1.1.1 | MIT |
+| side-channel-list | 1.0.1 | MIT |
+| side-channel-map | 1.0.1 | MIT |
+| side-channel-weakmap | 1.0.2 | MIT |
 | standardwebhooks | 1.1.1 | MIT |
+| statuses | 2.0.2 | MIT |
+| toidentifier | 1.0.1 | MIT |
 | ts-algebra | 2.0.0 | MIT |
-| tslib | 2.9.1 | 0BSD |
-| typebox | 1.3.27 | MIT |
+| type-is | 2.1.0 | MIT |
 | typescript | 7.0.2 | Apache-2.0 |
-| undici | 8.12.3 | MIT |
 | undici-types | 8.9.0 | MIT |
+| unpipe | 1.0.0 | MIT |
+| vary | 1.1.2 | MIT |
 | vscode-jsonrpc | 9.0.0 | MIT |
-| web-streams-polyfill | 3.3.3 | MIT |
 | which | 2.0.2 | ISC |
-| ws | 8.22.2 | MIT |
-| yaml | 2.9.0 | ISC |
+| wrappy | 1.0.2 | ISC |
 | zod | 4.6.7 | MIT |
+| zod-to-json-schema | 3.25.2 | ISC |
 
 ## Rust crates
 
@@ -683,7 +665,6 @@ this repository at `vendor/gpui-base`, with the changes described in its `SPACE_
 | regex-automata | 0.4.18 | MIT OR Apache-2.0 |
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 |
 | renderdoc-sys | 1.1.0 | MIT OR Apache-2.0 |
-| reqwest | 0.13.5 | MIT OR Apache-2.0 |
 | resvg | 0.45.1 | Apache-2.0 OR MIT |
 | resvg | 0.46.0 | Apache-2.0 OR MIT |
 | rgb | 0.8.53 | MIT |
@@ -829,7 +810,6 @@ this repository at `vendor/gpui-base`, with the changes described in its `SPACE_
 | toml_write | 0.1.2 | MIT OR Apache-2.0 |
 | toml_writer | 1.2.0+spec-1.1.0 | MIT OR Apache-2.0 |
 | tower | 0.5.3 | MIT |
-| tower-http | 0.6.11 | MIT |
 | tower-layer | 0.3.3 | MIT |
 | tower-service | 0.3.3 | MIT |
 | tracing | 0.1.44 | MIT |

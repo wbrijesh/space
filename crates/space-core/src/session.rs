@@ -216,6 +216,18 @@ pub enum SessionEvent {
     /// A model request failed after part of its reply streamed and is sent again: that part
     /// (the text and thoughts since the last other item) leaves the transcript.
     AttemptDiscarded,
+    /// The user asked a side question (`/btw`, emitted by the harness): answered from the
+    /// conversation so far, it never joins the conversation or the transcript. Live only: not
+    /// saved.
+    SideQuestion { id: String, question: String },
+    /// The answer to side question `id` (markdown), or why there is none. Live only.
+    SideAnswer {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
 }
 
 /// One entry in the rendered transcript.
@@ -230,6 +242,17 @@ pub enum TranscriptItem {
     Error(String),
     /// The end of a turn: why (`end_turn`, `cancelled`, `error`, ...), when, and what it used.
     TurnEnd { reason: String, at_ms: Option<u64>, usage: Option<TurnUsage> },
+}
+
+/// A side question (`/btw`) and its answer once it came (or why it didn't).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SideQuestion {
+    pub id: String,
+    pub question: String,
+    pub answer: Option<String>,
+    pub error: Option<String>,
+    /// Closed by the user: not shown until asked for again.
+    pub dismissed: bool,
 }
 
 impl SessionEvent {
@@ -258,6 +281,8 @@ pub struct SessionState {
     pub running: bool,
     /// The running turn's model request waits out a bad network.
     pub retry: Option<RetryState>,
+    /// Side questions asked in this session, oldest first.
+    pub sides: Vec<SideQuestion>,
 }
 
 impl SessionState {
@@ -398,6 +423,27 @@ impl SessionState {
                     self.items.pop();
                 }
             }
+            SessionEvent::SideQuestion { id, question } => {
+                self.sides.push(SideQuestion { id: id.clone(), question: question.clone(), ..Default::default() });
+            }
+            SessionEvent::SideAnswer { id, text, error } => {
+                if let Some(side) = self.sides.iter_mut().find(|s| s.id == *id) {
+                    side.answer.clone_from(text);
+                    side.error.clone_from(error);
+                }
+            }
+        }
+    }
+
+    /// The side question to show: the latest, unless it was closed.
+    pub fn side(&self) -> Option<&SideQuestion> {
+        self.sides.last().filter(|s| !s.dismissed)
+    }
+
+    /// Close the shown side question (`false`: show the latest again).
+    pub fn dismiss_side(&mut self, dismissed: bool) {
+        if let Some(side) = self.sides.last_mut() {
+            side.dismissed = dismissed;
         }
     }
 
@@ -600,8 +646,8 @@ mod tests {
             reason: reason.map(Into::into),
         };
         // Held before the agent reports the call: a card with the host's title.
-        s.apply(&held(Some("OpenAI rejected your API key")));
-        assert_eq!(s.held(), Some("OpenAI rejected your API key"));
+        s.apply(&held(Some("the guard is restarting")));
+        assert_eq!(s.held(), Some("the guard is restarting"));
         let [TranscriptItem::Tool(t)] = s.items.as_slice() else { panic!("{:?}", s.items) };
         assert_eq!((t.title.as_str(), t.status), ("bash: ls", ToolStatus::Pending));
         // The agent's report keeps the hold; releasing clears it.
@@ -615,7 +661,7 @@ mod tests {
             blocked: None,
             held: None,
         }));
-        assert_eq!(s.held(), Some("OpenAI rejected your API key"));
+        assert_eq!(s.held(), Some("the guard is restarting"));
         s.apply(&held(None));
         assert_eq!(s.held(), None);
         // A release for an unknown call adds nothing; the end of a turn clears any hold.

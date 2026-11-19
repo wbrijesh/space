@@ -10,7 +10,7 @@ use ts_rs::{Config, TS};
 
 use crate::ext::*;
 
-const OUT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins/pi-agent/src/generated/protocol.ts");
+const OUT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins/claude-agent/src/generated/protocol.ts");
 /// Set to write the file instead of checking it.
 const WRITE_ENV: &str = "SPACE_WRITE_PROTOCOL";
 
@@ -31,6 +31,7 @@ fn generate() -> String {
         ("UNSTEER_METHOD", format!("{UNSTEER_METHOD:?}")),
         ("STEERED_METHOD", format!("{STEERED_METHOD:?}")),
         ("RETRY_METHOD", format!("{RETRY_METHOD:?}")),
+        ("SIDE_QUESTION_METHOD", format!("{SIDE_QUESTION_METHOD:?}")),
         ("STEER_META_KEY", format!("{STEER_META_KEY:?}")),
         ("CONTEXT_META_KEY", format!("{CONTEXT_META_KEY:?}")),
         ("DATA_DIR_META_KEY", format!("{DATA_DIR_META_KEY:?}")),
@@ -44,6 +45,7 @@ fn generate() -> String {
         item::<ModelInfo>(&cfg),
         item::<SpaceStatus>(&cfg),
         item::<ContinueIn>(&cfg),
+        item::<CommandInfo>(&cfg),
         item::<ConfigureSession>(&cfg),
         item::<PreExecute>(&cfg),
         item::<PreExecuteResult>(&cfg),
@@ -52,6 +54,8 @@ fn generate() -> String {
         item::<ConfineResult>(&cfg),
         item::<Complete>(&cfg),
         item::<CompleteResult>(&cfg),
+        item::<SideQuestion>(&cfg),
+        item::<SideAnswer>(&cfg),
         item::<SteerImage>(&cfg),
         item::<SteerText>(&cfg),
         item::<SteerSession>(&cfg),
@@ -94,5 +98,5 @@ fn typescript_bindings_are_current() {
         return;
     }
     let committed = std::fs::read_to_string(OUT).unwrap_or_default();
-    assert!(committed == fresh, "plugins/pi-agent/src/generated/protocol.ts is stale: run `just protocol`");
+    assert!(committed == fresh, "plugins/claude-agent/src/generated/protocol.ts is stale: run `just protocol`");
 }

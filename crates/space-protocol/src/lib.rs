@@ -7,7 +7,7 @@
 //! * [`terminal`] — the terminal seam: shells a plugin runs for the app's terminal pane.
 //!
 //! These Rust types are the only definition of the protocol. TypeScript plugins use bindings
-//! generated from them (`plugins/pi-agent/src/generated/protocol.ts`; `just protocol`
+//! generated from them (`plugins/claude-agent/src/generated/protocol.ts`; `just protocol`
 //! regenerates it, and a test fails while it is stale).
 //! * [`acp`] — re-export of the [`agent_client_protocol`] crate, so downstream crates
 //!   use exactly the ACP version Space was built against.
@@ -22,7 +22,7 @@ mod typescript;
 /// Version of Space's own protocol: the `_space/*` ACP extensions and the service-plugin
 /// protocol. Plugins report the version they were built for when they start, and a plugin on
 /// another version is refused. Bump it on any incompatible change to either.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Re-export of the Agent Client Protocol SDK.
 pub use agent_client_protocol as acp;
@@ -30,7 +30,7 @@ pub use agent_client_protocol as acp;
 pub use agent_client_protocol::v1::schema as acp_schema;
 
 pub use ext::{
-    Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, ContextSection, ContinueIn, ModelInfo, PreExecute, PreExecuteResult, Retry, RetryKind, RetryState, SpaceStatus,
+    CommandInfo, Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, ContextSection, ContinueIn, ModelInfo, PreExecute, PreExecuteResult, Retry, RetryKind, RetryState, SideAnswer, SideQuestion, SpaceStatus,
     SteerImage, SteerResult, SteerSession, SteerText, Steered, TurnUsage, UnsteerResult, UnsteerSession, Verdict,
 };
 pub use manifest::{

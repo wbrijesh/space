@@ -1,0 +1,15 @@
+id = "claude-agent"
+name = "Claude Agent"
+version = "0.1.0"
+provides = ["agent"]
+description = "Coding agent on Claude Code (the Claude Agent SDK), using your Claude subscription."
+# Beyond PATH, HOME, USER, TMPDIR, LANG and SHELL: the Claude Code CLI's config dir, and what the
+# commands it runs commonly need (git over SSH).
+env = ["CLAUDE_CONFIG_DIR", "SSH_AUTH_SOCK", "LOGNAME"]
+
+[run]
+# Every bundled TypeScript plugin runs from one Bun executable (plugins/space-ts.ts), built next
+# to the Rust plugins by `just build`; inside Space.app it's in Contents/Helpers.
+command = "${target}/space-ts"
+args = ["claude-agent"]
+cwd = "plugin"

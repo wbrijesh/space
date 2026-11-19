@@ -274,7 +274,7 @@ mod tests {
     fn plugins() -> Vec<Bundled> {
         let p = |id: &str, build: Build| Bundled { id: id.into(), name: id.into(), dir: PathBuf::from(format!("plugins/{id}")), build };
         vec![
-            p("pi-agent", Build::Bun),
+            p("claude-agent", Build::Bun),
             p("titles", Build::Cargo("space-titles".into())),
             p("trajectory", Build::Cargo("space-trajectory".into())),
             p("memory", Build::Bun),
@@ -286,14 +286,14 @@ mod tests {
         let ps = plugins();
         let hit = |p: &str| affected(Path::new(p), &ps);
         assert_eq!(hit("plugins/titles/src/main.rs"), [1]);
-        assert_eq!(hit("plugins/pi-agent/src/trace.ts"), [0]);
+        assert_eq!(hit("plugins/claude-agent/src/trace.ts"), [0]);
         assert_eq!(hit("crates/space-protocol/src/trace.rs"), [1, 2]);
         assert_eq!(hit("crates/space-plugin/src/lib.rs"), [1, 2]);
         // The space-ts entry and the workspace's packages: every TypeScript plugin.
         assert_eq!(hit("plugins/space-ts.ts"), [0, 3]);
         assert_eq!(hit("bun.lock"), [0, 3]);
         // Build output, dependencies and other crates don't.
-        for none in ["plugins/pi-agent/dist/main.js", "plugins/pi-agent/node_modules/x/y.js", "plugins/titles/target/a", "crates/space-ui/src/lib.rs"] {
+        for none in ["plugins/claude-agent/dist/main.js", "plugins/claude-agent/node_modules/x/y.js", "plugins/titles/target/a", "crates/space-ui/src/lib.rs"] {
             assert!(hit(none).is_empty(), "{none}");
         }
     }
@@ -302,8 +302,8 @@ mod tests {
     fn finds_the_bundled_plugins_and_how_they_build() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let all = bundled(&repo);
-        let pi = all.iter().find(|p| p.id == "pi-agent").expect("pi-agent");
-        assert_eq!(pi.build, Build::Bun);
+        let agent = all.iter().find(|p| p.id == "claude-agent").expect("claude-agent");
+        assert_eq!(agent.build, Build::Bun);
         let titles = all.iter().find(|p| p.id == "titles").expect("titles");
         assert_eq!((titles.build.clone(), titles.dir.clone()), (Build::Cargo("space-titles".into()), PathBuf::from("plugins/titles")));
     }

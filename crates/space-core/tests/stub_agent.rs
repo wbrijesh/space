@@ -263,6 +263,35 @@ async fn configure_switches_model_and_thinking() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn side_questions_are_answered_beside_the_conversation() {
+    let root = stub_root();
+    let (host, mut events) = host(root.path());
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.new_session(root.path()).await.unwrap();
+    let mut state = SessionState::new(session.id());
+    let mut seen = Vec::new();
+    // The status lists the agent's slash commands.
+    until(&mut events, &mut state, &mut seen, |e| matches!(e, HostEvent::Session { event: SessionEvent::Status(_), .. })).await;
+    let commands = state.status.commands.clone().unwrap_or_default();
+    assert!(commands.iter().any(|c| c.name == "btw" && c.side), "{commands:?}");
+
+    assert_eq!(session.ask_aside("why?".into()).await.unwrap(), "Side answer to: why?");
+    until(&mut events, &mut state, &mut seen, |e| matches!(e, HostEvent::Session { event: SessionEvent::SideAnswer { .. }, .. })).await;
+    let side = state.side().cloned().unwrap();
+    assert_eq!((side.question.as_str(), side.answer.as_deref(), side.error), ("why?", Some("Side answer to: why?"), None));
+    // Not part of the transcript.
+    assert!(state.items.is_empty(), "{:?}", state.items);
+
+    let err = session.ask_aside("btwfail".into()).await.unwrap_err();
+    assert!(format!("{err:#}").contains("no side answers today"), "{err:#}");
+    until(&mut events, &mut state, &mut seen, |e| matches!(e, HostEvent::Session { event: SessionEvent::SideAnswer { .. }, .. })).await;
+    assert!(state.side().and_then(|s| s.error.as_deref()).is_some_and(|e| e.contains("no side answers today")));
+    state.dismiss_side(true);
+    assert!(state.side().is_none());
+    assert_eq!(state.sides.len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn an_agent_on_another_protocol_version_is_refused() {
     let tmp = stub_root();
     let manifest = tmp.path().join("stub/space-plugin.toml");

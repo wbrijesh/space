@@ -445,8 +445,8 @@ mod tests {
         store.update(|s| {
             s.new_threads.model = Some(ModelRef { provider: "stub".into(), id: "stub-fast".into() });
             s.new_threads.thinking_level = Some("high".into());
-            s.new_threads.permission_mode = Some("read-only".into());
-            s.plugins.disabled = vec!["permissions".into()];
+            s.new_threads.permission_mode = Some("locked".into());
+            s.plugins.disabled = vec!["alerts".into()];
         });
         let json = std::fs::read_to_string(&path).unwrap();
         assert!(json.contains("\"newThreads\"") && json.contains("\"thinkingLevel\""));

@@ -28,7 +28,7 @@ pub async fn run(host: &Host, project_dir: &Path, agent_id: Option<String>) -> b
         println!("{} {} ({}): {status:?}", if good { "ok  " } else { "FAIL" }, plugin.id(), plugin.manifest.name);
     }
     let agent = agent_id
-        .or_else(|| plugins.iter().find(|p| p.id() == "pi-agent").map(|p| p.id().to_string()))
+        .or_else(|| plugins.iter().find(|p| p.id() == "claude-agent").map(|p| p.id().to_string()))
         .or_else(|| plugins.iter().find(|p| p.manifest.is_agent()).map(|p| p.id().to_string()));
     let Some(agent) = agent else {
         println!("FAIL no agent plugin");

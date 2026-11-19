@@ -10,7 +10,7 @@
 //! Space --version                     print the version
 //! ```
 //!
-//! The app starts the agent plugin (`pi-agent`, or `SPACE_AGENT=<plugin id>`) on launch and
+//! The app starts the agent plugin (`claude-agent`, or `SPACE_AGENT=<plugin id>`) on launch and
 //! opens an empty thread. Env: `SPACE_AUTOPROMPT="..."` sends that prompt in the first
 //! thread; `SPACE_PLUGIN_DIRS` overrides the bundled plugin roots; `SPACE_SETTINGS` overrides
 //! the settings file (`~/.space/settings.json`). Dev: `SPACE_SCRIPT=file`
@@ -38,6 +38,7 @@ mod reload;
 mod scenarios;
 mod settings;
 mod single;
+mod slash;
 mod terminal;
 mod terminal_view;
 mod text_prompt;

@@ -1,5 +1,5 @@
-//! The agent goes to sleep after a while with nothing to do: its process stops (with pi-agent's
-//! Claude CLI processes), each thread keeps its session to load again, and the agent starts
+//! The agent goes to sleep after a while with nothing to do: its process stops (with its
+//! Claude Code processes), each thread keeps its session to load again, and the agent starts
 //! again when you write (typing starts it early) or send.
 
 use std::time::{Duration, Instant};

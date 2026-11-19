@@ -25,9 +25,6 @@ pub struct Scenario {
     pub settings_page: bool,
     /// Contents of the scenario's settings file (a temp file; never `~/.space/settings.json`).
     pub settings: Option<&'static str>,
-    /// Also run the real permissions plugin (its Keychain items use a scenario-only prefix, so
-    /// no decision-model key is set).
-    pub permissions: bool,
     /// Also run the real trajectory plugin, and open the selected thread's Trajectory tab.
     pub trajectory: bool,
     /// Open the right pane on Files (the project folder: the repo, or the folder given).
@@ -35,9 +32,6 @@ pub struct Scenario {
     /// Also run the real terminal plugin (with a scripted shell: a colour test, then `sh`), and
     /// open the selected thread's terminal pane.
     pub terminal: bool,
-    /// With `permissions`: a decision-model key is set (in a scenario-only Keychain item) but
-    /// OpenAI can't be reached, so Workspace Write and Full access calls are paused.
-    pub model_offline: bool,
 }
 
 #[derive(Default)]
@@ -48,8 +42,6 @@ pub struct ScenarioThread {
     /// Project-relative folder for the thread (default: the project).
     pub subdir: Option<&'static str>,
     pub draft: Option<String>,
-    /// Permission mode for the thread (with `permissions`).
-    pub mode: Option<&'static str>,
     /// Hold the transcript this many px above the bottom (as if scrolled up) once it's that long.
     pub scrolled_up: Option<f32>,
     /// Repo-relative images sent with `prompt`, and in the draft.
@@ -79,16 +71,6 @@ fn tool(id: &str, title: &str, kind: &str, status: &str, output: Option<&str>) -
 fn context(tokens: u64) -> Step {
     Step::Context { tokens }
 }
-fn guard(id: &str, title: &str, kind: &str, tool: &str, args: serde_json::Value, output: Option<&str>) -> Step {
-    Step::Guard {
-        id: id.into(),
-        title: title.into(),
-        kind: kind.into(),
-        tool: tool.into(),
-        args,
-        output: output.map(Into::into),
-    }
-}
 fn thread(prompt: &'static str, steps: Vec<Step>) -> ScenarioThread {
     ScenarioThread { prompt: Some(prompt), steps, ..Default::default() }
 }
@@ -102,7 +84,7 @@ const EXPLAIN: &str = "Plugin discovery scans three roots in order: the bundled 
 - The manifest's `run.command` is resolved on `PATH` and spawned with piped stdio.\n\
 - The harness performs the ACP `initialize` handshake.\n\
 - stderr lines are kept in a ring buffer for error messages.\n\n\
-```rust\nlet agent = host.start_agent(\"pi-agent\").await?;\nlet session = agent.new_session(dir).await?;\n```\n\n\
+```rust\nlet agent = host.start_agent(\"claude-agent\").await?;\nlet session = agent.new_session(dir).await?;\n```\n\n\
 Invalid manifests are reported, not fatal.";
 
 fn explain_thread() -> ScenarioThread {
@@ -355,23 +337,6 @@ pub fn all() -> Vec<Scenario> {
             ..Default::default()
         },
         Scenario {
-            name: "guardrail",
-            description: "Permission modes with the real permissions plugin and no decision-model key: a Read Only \
-                          thread with a blocked edit, and a Workspace Write thread paused (sending is blocked).",
-            threads: vec![read_only_thread(), unchecked_thread()],
-            permissions: true,
-            ..Default::default()
-        },
-        Scenario {
-            name: "guardrail-offline",
-            description: "The real permissions plugin with a key set but OpenAI unreachable: a Workspace Write thread \
-                          paused mid-turn, the retrying pill, and a Read Only thread that still works.",
-            threads: vec![read_only_thread(), paused_thread()],
-            permissions: true,
-            model_offline: true,
-            ..Default::default()
-        },
-        Scenario {
             name: "terminal",
             description: "The terminal pane beside a finished thread: the real terminal plugin running a scripted shell \
                           (a colour test and a prompt, then sh).",
@@ -398,62 +363,6 @@ pub fn all() -> Vec<Scenario> {
             ..Default::default()
         },
     ]
-}
-
-/// Read Only: inspection runs, the edit is blocked by the permissions plugin.
-fn read_only_thread() -> ScenarioThread {
-    ScenarioThread {
-        mode: Some("read-only"),
-        ..thread(
-            "Why do tool updates sometimes land out of order?",
-            vec![
-                thought("Inspect the reducer and its tests."),
-                guard("t1", "grep: ToolCallUpdate", "search", "grep", serde_json::json!({"pattern": "ToolCallUpdate"}), Some(
-                    "crates/space-core/src/session.rs:184",
-                )),
-                guard("t2", "write: crates/space-core/src/session.rs", "edit", "write", serde_json::json!({
-                    "path": "crates/space-core/src/session.rs", "content": "…"
-                }), None),
-                say("An update for a call the reducer hasn't seen is materialized **at the end** of the transcript. \
-                     I couldn't apply the fix here (Read Only); switch the thread to Workspace Write and I'll make it."),
-                context(36_000),
-            ],
-        )
-    }
-}
-
-/// Workspace Write while OpenAI can't be reached: the first call ran, the next one waits.
-fn paused_thread() -> ScenarioThread {
-    ScenarioThread {
-        mode: Some("workspace-write"),
-        ..thread(
-            "Rebuild the release binary",
-            vec![
-                thought("Build it with the release profile."),
-                guard("t1", "bash: cargo build --release", "execute", "bash", serde_json::json!({"command": "cargo build --release"}), Some(
-                    "Finished `release` profile",
-                )),
-                say("Built."),
-            ],
-        )
-    }
-}
-
-/// Workspace Write without the decision model's key: the call waits (fail closed).
-fn unchecked_thread() -> ScenarioThread {
-    ScenarioThread {
-        mode: Some("workspace-write"),
-        ..thread(
-            "Upgrade node and rerun the build",
-            vec![
-                thought("Upgrade node first."),
-                guard("t1", "bash: brew upgrade node", "execute", "bash", serde_json::json!({"command": "brew upgrade node"}), Some(
-                    "==> Upgrading node",
-                )),
-                say("Upgraded."),
-            ],
-        )
-    }
 }
 
 /// The explain reply three times over, so the transcript always overflows the window.
@@ -539,8 +448,6 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         script_path.display().to_string(),
     );
     std::fs::write(plugin.join("space-plugin.toml"), manifest)?;
-    let permissions = root.join("permissions");
-    let _ = std::fs::remove_dir_all(&permissions);
     let trajectory = root.join("trajectory");
     let _ = std::fs::remove_dir_all(&trajectory);
     if scenario.trajectory {
@@ -562,23 +469,8 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         manifest.push_str(&format!("\n[run.env]\nSPACE_TERMINAL_SHELL = {:?}\n", shell.display().to_string()));
         std::fs::write(terminal.join("space-plugin.toml"), manifest)?;
     }
-    if scenario.permissions {
-        let repo = space_core::discovery::find_repo_root(&Path::new(env!("CARGO_MANIFEST_DIR")).join("x"))
-            .context("the permissions plugin lives in the repo; run scenarios from a checkout")?;
-        std::fs::create_dir_all(&permissions)?;
-        let mut manifest = std::fs::read_to_string(repo.join("plugins/permissions/space-plugin.toml"))?;
-        if scenario.model_offline {
-            // Nothing listens on port 9: every check fails as "can't connect".
-            manifest.push_str("\n[run.env]\nSPACE_LUNA_BASE_URL = \"http://127.0.0.1:9/v1\"\n");
-        }
-        std::fs::write(permissions.join("space-plugin.toml"), manifest)?;
-    }
-    // Scenario-only Keychain items; the offline scenario has its own, with a (fake) key.
-    let keychain = if scenario.model_offline { "dev.brijesh.space.scenario.offline" } else { "dev.brijesh.space.scenario" };
-    let secrets = space_core::Secrets::new(keychain);
-    if scenario.model_offline {
-        secrets.set("permissions", "openai_api_key", Some("sk-scenario-offline"))?;
-    }
+    // Scenario-only Keychain items.
+    let secrets = space_core::Secrets::new("dev.brijesh.space.scenario");
     let settings_path = root.join("settings.json");
     match scenario.settings {
         Some(json) => std::fs::write(&settings_path, json)?,
@@ -602,7 +494,7 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
             prompt: t.prompt.map(Into::into),
             cwd: t.subdir.map(|d| project_dir.join(d)),
             draft: t.draft.clone(),
-            mode: t.mode.map(Into::into),
+            mode: None,
             scrolled_up: t.scrolled_up,
             images: t.images.iter().map(|p| repo.join(p)).collect(),
             draft_images: t.draft_images.iter().map(|p| repo.join(p)).collect(),
@@ -672,8 +564,6 @@ mod tests {
             "many-threads",
             "long-composer",
             "scrolled-up",
-            "guardrail",
-            "guardrail-offline",
             "settings",
             "terminal",
         ] {

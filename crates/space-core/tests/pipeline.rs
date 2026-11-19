@@ -126,15 +126,15 @@ async fn deny_blocks_with_the_reason_and_sees_mode_and_history() {
     host.start_services().await;
     let agent = host.start_agent("stub").await.unwrap();
     let session = agent.new_session(root.path()).await.unwrap();
-    session.set_permission_mode("read-only");
+    session.set_permission_mode("locked");
     let mut state = SessionState::new(session.id());
     session.prompt("hello").await.unwrap();
     until(&mut events, &mut state, turn_ended).await;
     let t = tool(&state);
     assert_eq!(t.status, space_core::ToolStatus::Failed);
     // The user's message is the one earlier item.
-    assert_eq!(t.output, "blocked: no bash in read-only after 1");
-    assert_eq!(t.blocked.as_deref(), Some("no bash in read-only after 1"));
+    assert_eq!(t.output, "blocked: no bash in locked after 1");
+    assert_eq!(t.blocked.as_deref(), Some("no bash in locked after 1"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -291,22 +291,22 @@ async fn stopping_the_turn_ends_a_held_call() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn switching_mode_rechecks_held_calls() {
-    // Held in workspace-write; the user switches the thread to read-only, where the guard
+    // Held in guarded; the user switches the thread to locked, where the guard
     // decides: the call goes through the whole chain again under the new mode.
-    let root = root(&[("guard", HOOK, r#"{"decision":"deny","reason":"denied in {mode}","holdModes":["workspace-write"]}"#)]);
+    let root = root(&[("guard", HOOK, r#"{"decision":"deny","reason":"denied in {mode}","holdModes":["guarded"]}"#)]);
     let (host, mut events) = host(root.path());
     host.start_services().await;
     let agent = host.start_agent("stub").await.unwrap();
     let session = agent.new_session(root.path()).await.unwrap();
-    session.set_permission_mode("workspace-write");
+    session.set_permission_mode("guarded");
     let mut state = SessionState::new(session.id());
     let s = session.clone();
     let turn = tokio::spawn(async move { s.prompt("hello").await });
     until(&mut events, &mut state, held).await;
-    session.set_permission_mode("read-only");
+    session.set_permission_mode("locked");
     until(&mut events, &mut state, turn_ended).await;
     turn.await.unwrap().unwrap();
-    assert_eq!(tool(&state).blocked.as_deref(), Some("denied in read-only"));
+    assert_eq!(tool(&state).blocked.as_deref(), Some("denied in locked"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -371,14 +371,14 @@ async fn sandbox_wraps_the_argv_and_context_reaches_the_agent() {
     host.start_services().await;
     let agent = host.start_agent("stub").await.unwrap();
     let session = agent.new_session(root.path()).await.unwrap();
-    session.set_permission_mode("workspace-write");
+    session.set_permission_mode("guarded");
     let mut state = SessionState::new(session.id());
     session.prompt("hello").await.unwrap();
     until(&mut events, &mut state, turn_ended).await;
     assert!(tool(&state).output.ends_with("argv: /usr/bin/env -i /bin/sh -c echo stub"), "{}", tool(&state).output);
     let logs = agent.logs();
     assert!(
-        logs.iter().any(|l| l.contains("context [{\"id\":\"stub_guard\",\"text\":\"Mode is workspace-write.\"}]")),
+        logs.iter().any(|l| l.contains("context [{\"id\":\"stub_guard\",\"text\":\"Mode is guarded.\"}]")),
         "{logs:?}"
     );
 }

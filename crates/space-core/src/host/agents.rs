@@ -14,8 +14,8 @@ use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_
 use space_protocol::service::HistoryItem;
 use space_protocol::trace::{ContextFact, TraceBatch, TraceEvent};
 use space_protocol::{
-    Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SpaceStatus, SteerImage, SteerSession, SteerText,
-    Retry, Steered, UnsteerSession,
+    Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SideQuestion, SpaceStatus, SteerImage, SteerSession,
+    SteerText, Retry, Steered, UnsteerSession,
 };
 use tokio::sync::oneshot;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -823,5 +823,31 @@ impl Session {
         }
         host.emit_session(&self.inner.id, SessionEvent::Status(status.clone()));
         Ok(status)
+    }
+
+    /// `_space/session/btw`: a side question about the conversation so far. The question and
+    /// its answer go out as [`SessionEvent::SideQuestion`] and [`SessionEvent::SideAnswer`];
+    /// neither joins the conversation. It can be asked while a turn runs.
+    pub async fn ask_aside(&self, question: String) -> Result<String> {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let id = format!("btw-{}", NEXT.fetch_add(1, Ordering::Relaxed));
+        let agent = self.inner.agent.clone();
+        let host = agent.inner.shared.host.clone();
+        host.emit_session(&self.inner.id, SessionEvent::SideQuestion { id: id.clone(), question: question.clone() });
+        let request = SideQuestion { session_id: self.inner.id.clone(), question };
+        let result = host
+            .rt
+            .spawn(async move {
+                agent.inner.conn.send_request(request).block_task().await.map_err(|e| acp_error("_space/session/btw", e, &agent.inner.process))
+            })
+            .await
+            .map_err(|e| anyhow!("side question task failed: {e}"))
+            .and_then(|r| r);
+        let answer = match &result {
+            Ok(answer) => SessionEvent::SideAnswer { id, text: Some(answer.text.clone()), error: None },
+            Err(e) => SessionEvent::SideAnswer { id, text: None, error: Some(format!("{e:#}")) },
+        };
+        host.emit_session(&self.inner.id, answer);
+        result.map(|a| a.text)
     }
 }

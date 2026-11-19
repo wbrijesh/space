@@ -34,7 +34,6 @@ build-ts:
 release:
     cargo build --release --workspace --no-default-features
     bun install
-    # (not --bytecode: Bun can't precompile the pi SDK's modules to bytecode)
     bun build --compile --minify plugins/space-ts.ts --outfile target/release/space-ts
     scripts/bundle.sh release
 
@@ -60,7 +59,7 @@ publish: release-check
 # Run all tests: Rust (with the space-stub-agent) and the TypeScript plugins; no model calls
 test: build-ts
     cargo test --workspace
-    cd plugins/pi-agent && bun test src && bun scripts/host-test.ts
+    cd plugins/claude-agent && bun test src
 
 # While iterating: clippy and tests for the given crates only (e.g. `just check space-ui space-app`);
 # run `just lint` and `just test` before committing
@@ -71,7 +70,7 @@ check +crates="space-app":
 lint:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo clippy -p space-app --no-default-features --all-targets -- -D warnings
-    cd plugins/pi-agent && bun run typecheck
+    cd plugins/claude-agent && bun run typecheck
 
 # Headless end-to-end prompt against the real agent plugin (bills your Claude subscription)
 smoke prompt="Reply with exactly: pong": build
@@ -87,6 +86,6 @@ smoke-stub prompt="hello, permission please":
         "{{project}}/target/debug/space-stub-agent" > "$dir/space-plugin.toml"
     SPACE_PLUGIN_DIRS="$(dirname "$dir")" ./target/debug/Space --smoke "{{prompt}}" --allow {{project}}
 
-# Regenerate the TypeScript protocol bindings (plugins/pi-agent/src/generated) from the Rust types
+# Regenerate the TypeScript protocol bindings (plugins/claude-agent/src/generated) from the Rust types
 protocol:
     SPACE_WRITE_PROTOCOL=1 cargo test -p space-protocol typescript_bindings_are_current

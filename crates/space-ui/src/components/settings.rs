@@ -767,20 +767,19 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         Some(("claude-cli".into(), "claude-sonnet-5-5".into()))
     }
     fn modes() -> Vec<CatalogEntry> {
-        super::composer::fixtures::modes("workspace-write", true).entries
+        super::composer::fixtures::modes("guarded", true).entries
     }
-    /// The permissions plugin's section, its key field over a persistent input.
+    /// A guard plugin's section, its key field over a persistent input.
     fn key_section(name: &'static str, set: bool, check: fn() -> FieldCheck, status: Option<(&'static str, bool)>) -> Example {
         Example::new(name, move |window, cx| {
             let input = window.use_keyed_state(SharedString::from(format!("p-key-{name}")), cx, |window, cx| {
                 InputState::new(window, cx).masked(true).placeholder(if set { "Enter a new key to replace it" } else { "sk-…" })
             });
             let field = FieldView {
-                plugin_id: "permissions".into(),
-                key: "openai_api_key".into(),
-                label: "OpenAI API key".into(),
-                description: "For the decision model (gpt-6-luna) that checks every operation in Workspace Write and Full access."
-                    .into(),
+                plugin_id: "guard".into(),
+                key: "api_key".into(),
+                label: "API key".into(),
+                description: "For the service that checks each operation in Guarded mode.".into(),
                 secret: true,
                 switch: None,
                 model: None,
@@ -789,7 +788,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 check: check(),
                 status: status.map(|(t, ok)| (t.into(), ok)),
             };
-            section("Permissions", None, vec![field_row(&field, &SettingsHandlers::default(), window).into_any_element()])
+            section("Guard", None, vec![field_row(&field, &SettingsHandlers::default(), window).into_any_element()])
                 .into_any_element()
         })
         .width(size::CONTENT_MAX_W)
@@ -797,23 +796,11 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     fn plugins() -> Vec<PluginRow> {
         vec![
             PluginRow {
-                id: "pi-agent".into(),
-                name: "Pi Agent".into(),
-                description: "Coding agent on the pi SDK, using the Claude CLI subscription.".into(),
+                id: "claude-agent".into(),
+                name: "Claude Agent".into(),
+                description: "Coding agent on Claude Code (the Claude Agent SDK), using your Claude subscription.".into(),
                 agent: true,
                 required: false,
-                enabled: true,
-                status: "Running".into(),
-                approval: None,
-            },
-            PluginRow {
-                id: "permissions".into(),
-                name: "Permissions".into(),
-                description: "Read Only runs commands in the macOS sandbox; Workspace Write and Full access check every \
-                              operation with a decision model first."
-                    .into(),
-                agent: false,
-                required: true,
                 enabled: true,
                 status: "Running".into(),
                 approval: None,
@@ -830,7 +817,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                         .model(sonnet())
                         .thinking(Some("high".into()))
                         .permission(NotificationPermission::Allowed)
-                        .modes(modes(), Some("read-only".into()))
+                        .modes(modes(), Some("trusted".into()))
                         .plugins(plugins())
                 }),
                 page("agent defaults", || SettingsPage::new(ready()).permission(NotificationPermission::Allowed)),
@@ -897,11 +884,11 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 .width(size::CONTENT_MAX_W),
                 key_section("key not set", false, || FieldCheck::Idle, None),
                 key_section("checking a new key", false, || FieldCheck::Checking, None),
-                key_section("rejected", false, || FieldCheck::Invalid("OpenAI rejected this key.".into()), None),
+                key_section("rejected", false, || FieldCheck::Invalid("The service rejected this key.".into()), None),
                 key_section(
                     "couldn't check (save anyway)",
                     false,
-                    || FieldCheck::Unverifiable("Couldn't reach OpenAI to check it (can't connect; offline?).".into()),
+                    || FieldCheck::Unverifiable("Couldn't reach the service to check it (can't connect; offline?).".into()),
                     None,
                 ),
                 key_section("saved and working", true, || FieldCheck::Saved, Some(("Working.", true))),
@@ -909,7 +896,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                     "saved, stopped working",
                     true,
                     || FieldCheck::Idle,
-                    Some(("OpenAI rejected your API key, so actions are paused. Last tried 2m 14s ago · next try in 2m 46s", false)),
+                    Some(("The service rejected your key, so actions are paused. Last tried 2m 14s ago · next try in 2m 46s", false)),
                 ),
             ]),
         ComponentPreview::new(

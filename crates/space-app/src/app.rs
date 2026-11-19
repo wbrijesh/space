@@ -28,7 +28,7 @@ use space_core::{
 use space_ui::components::settings::FieldCheck;
 
 pub use space_ui::actions::{
-    CloseSettings, CloseThread, CyclePermissionMode, FocusComposer, NextThread, PreviousThread, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious,
+    CloseSettings, CloseThread, CyclePermissionMode, FocusComposer, NextThread, PreviousThread, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious, CompleteCommand,
     ScrollToBottom,
     ToggleSidebar,
     ShowChat, ShowTrajectory, CloseFile, OpenInLastApp,
@@ -49,14 +49,14 @@ use crate::threads::Thread;
 /// Where ⌘↓ means Scroll to Bottom inside the composer: a single-line textarea. Bound after
 /// gpui-component's own `cmd-down` (MoveToEnd, context `Input`), so it wins at equal depth.
 const SCROLL_IN_COMPOSER: &str = "Input && !ComposerMultiline";
-const DEFAULT_AGENT: &str = "pi-agent";
+const DEFAULT_AGENT: &str = "claude-agent";
 
 pub struct Options {
     pub project_dir: PathBuf,
     /// No folder came with the launch: once the saved threads are listed, new threads start in
     /// the folder of the one used last (instead of `project_dir`, the home folder).
     pub last_folder: bool,
-    /// Plugin id of the agent to run (default `pi-agent`, else the first agent plugin).
+    /// Plugin id of the agent to run (default `claude-agent`, else the first agent plugin).
     pub agent: Option<String>,
     /// Threads to open at launch (newest last); empty: one new thread.
     pub seed: Vec<SeedThread>,
@@ -165,6 +165,8 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             // messages; otherwise they reach the text field (its MoveUp/MoveDown).
             KeyBinding::new("up", RecallPrevious, Some("Composer > Input")),
             KeyBinding::new("down", RecallNext, Some("Composer > Input")),
+            // Tab completes the `/` menu's selected command; with the menu closed it goes on.
+            KeyBinding::new("tab", CompleteCommand, Some("Composer > Input")),
             KeyBinding::new("cmd-q", Quit, None),
             // The right pane, from anywhere: ⌘J (or ⌃`, as in VS Code) Terminal, ⌘⌥B show / hide,
             // ⌘P the file tree; the rest while a terminal has focus. ⌘J is bound after ⌃`, so
@@ -419,9 +421,10 @@ pub struct SpaceApp {
     pub(crate) settings: SettingsStore,
     /// The Settings page replaces the thread view.
     pub(crate) show_settings: bool,
-    /// Models and thinking levels from the latest `_space/status` that listed them.
+    /// Models, thinking levels and slash commands from the latest `_space/status` that listed them.
     pub(crate) agent_models: Option<Vec<ModelInfo>>,
     pub(crate) agent_levels: Option<Vec<String>>,
+    pub(crate) agent_commands: Option<Vec<space_core::protocol::CommandInfo>>,
     pub(crate) permission: NotificationPermission,
     /// The `permission-modes` catalog (empty until a plugin publishes it).
     pub(crate) permission_modes: Vec<CatalogEntry>,
@@ -439,13 +442,15 @@ pub struct SpaceApp {
     /// being idle (it starts again when you write).
     pub(crate) agent_activity: std::time::Instant,
     pub(crate) agent_asleep: bool,
-    /// The `claude` CLI pi-agent needs was found (checked at launch and on each restart).
+    /// The `claude` CLI claude-agent needs was found (checked at launch and on each restart).
     pub(crate) claude_cli: bool,
     pub(crate) _subscriptions: Vec<Subscription>,
     /// Numbers queued messages.
     pub(crate) next_pending: u64,
     /// ⌘ is held (the composer's send button shows "after this step").
     pub(crate) cmd_held: bool,
+    /// The composer's `/` menu.
+    pub(crate) slash: crate::slash::SlashMenu,
     pub(crate) terminals: crate::terminal::Terminals,
 }
 
@@ -480,6 +485,8 @@ impl SpaceApp {
                 // typing while the agent sleeps starts it, so it's up when you send.
                 InputEvent::Change => {
                     this.end_recall();
+                    let text = this.input.read(cx).value().to_string();
+                    this.slash.edited(&text);
                     if !this.input.read(cx).value().trim().is_empty() {
                         this.wake_agent(cx);
                     }
@@ -587,7 +594,7 @@ impl SpaceApp {
         let wanted = options.agent.clone().unwrap_or_else(|| DEFAULT_AGENT.to_string());
         let agent_plugin = agents.iter().find(|p| p.id() == wanted).or(agents.first()).copied();
         let banner = match (&agent_plugin, &options.agent) {
-            (None, _) => Some("No agent plugin found. Build plugins/pi-agent (just build) or set SPACE_PLUGIN_DIRS.".into()),
+            (None, _) => Some("No agent plugin found. Build plugins/claude-agent (just build) or set SPACE_PLUGIN_DIRS.".into()),
             (Some(p), Some(w)) if p.id() != w => Some(format!("Agent plugin `{w}` not found; using `{}`.", p.id())),
             _ => None,
         };
@@ -647,6 +654,7 @@ impl SpaceApp {
             show_settings: false,
             agent_models: None,
             agent_levels: None,
+            agent_commands: None,
             permission: NotificationPermission::Checking,
             permission_modes: Vec::new(),
             plugin_settings: BTreeMap::new(),
@@ -661,6 +669,7 @@ impl SpaceApp {
             terminals: crate::terminal::Terminals::new(&host_for_terminals),
             next_pending: 0,
             cmd_held: false,
+            slash: Default::default(),
         };
         this.watch_agent_idle(cx);
         this.watch_midnight(cx);
@@ -1126,8 +1135,8 @@ impl SpaceApp {
         }
     }
 
-    /// Switch the selected thread to mode `id`. A mode that asks for confirmation (Full access)
-    /// does so once per thread first. Applies from the agent's next tool call.
+    /// Switch the selected thread to mode `id`. A mode that asks for confirmation does so once
+    /// per thread first. Applies from the agent's next tool call.
     pub(crate) fn set_mode(&mut self, id: String, cx: &mut Context<Self>) {
         self.touch_agent();
         let Some(key) = self.selected else { return };
@@ -1261,8 +1270,8 @@ pub(crate) fn now_ms() -> u64 {
 
 /// A thread's permission mode: its own choice, else the default for new threads, else the
 /// catalog's default entry, else its first; ids the catalog doesn't have are skipped. Before
-/// the catalog has arrived, the choices are taken as they are (so a Read Only thread is never
-/// sent off in the default mode while the permissions plugin starts).
+/// the catalog has arrived, the choices are taken as they are (so a thread is never sent off in
+/// the default mode while the plugin that publishes the modes starts).
 pub(crate) fn resolve_mode(entries: &[CatalogEntry], thread: Option<&str>, default: Option<&str>) -> Option<String> {
     if entries.is_empty() {
         return thread.or(default).map(str::to_string);
@@ -1295,7 +1304,7 @@ impl Render for SpaceApp {
     }
 }
 
-/// Whether the Claude CLI is installed where pi-agent looks for it: on `PATH`, or in the usual
+/// Whether the Claude CLI is installed where claude-agent looks for it: on `PATH`, or in the usual
 /// install folders (a GUI app gets a minimal `PATH`).
 pub(crate) fn claude_cli_installed() -> bool {
     let home = dirs_home();
@@ -1319,15 +1328,15 @@ mod tests {
     #[test]
     fn mode_resolution() {
         let e = |id: &str, default: bool| CatalogEntry { id: id.into(), name: id.into(), default, ..Default::default() };
-        let modes = vec![e("read-only", false), e("workspace-write", true), e("full-access", false)];
+        let modes = vec![e("locked", false), e("guarded", true), e("trusted", false)];
         assert_eq!(resolve_mode(&[], None, None), None);
-        assert_eq!(resolve_mode(&[], Some("read-only"), None).as_deref(), Some("read-only"));
-        assert_eq!(resolve_mode(&[], None, Some("full-access")).as_deref(), Some("full-access"));
-        assert_eq!(resolve_mode(&modes, None, None).as_deref(), Some("workspace-write"));
-        assert_eq!(resolve_mode(&modes, None, Some("read-only")).as_deref(), Some("read-only"));
-        assert_eq!(resolve_mode(&modes, Some("full-access"), Some("read-only")).as_deref(), Some("full-access"));
+        assert_eq!(resolve_mode(&[], Some("locked"), None).as_deref(), Some("locked"));
+        assert_eq!(resolve_mode(&[], None, Some("trusted")).as_deref(), Some("trusted"));
+        assert_eq!(resolve_mode(&modes, None, None).as_deref(), Some("guarded"));
+        assert_eq!(resolve_mode(&modes, None, Some("locked")).as_deref(), Some("locked"));
+        assert_eq!(resolve_mode(&modes, Some("trusted"), Some("locked")).as_deref(), Some("trusted"));
         // Unknown ids fall through.
-        assert_eq!(resolve_mode(&modes, Some("gone"), Some("also-gone")).as_deref(), Some("workspace-write"));
+        assert_eq!(resolve_mode(&modes, Some("gone"), Some("also-gone")).as_deref(), Some("guarded"));
         let no_default = vec![e("a", false), e("b", false)];
         assert_eq!(resolve_mode(&no_default, None, None).as_deref(), Some("a"));
     }

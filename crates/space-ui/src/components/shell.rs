@@ -77,7 +77,7 @@ pub fn problem_card(message: impl Into<SharedString>, on_restart: Option<ClickHa
 }
 
 /// A question above the composer that needs an answer before something happens (e.g. switching
-/// a thread to Full access): a yellow shield, the message, Cancel and the confirming action.
+/// a thread to a mode that asks first): a yellow shield, the message, Cancel and the confirming action.
 pub fn confirm_card(
     message: impl Into<SharedString>,
     confirm_label: impl Into<SharedString>,
@@ -121,14 +121,13 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             })
             .width(size::CONTENT_MAX_W),
             Example::new("notice", |_, _| {
-                banner("Agent plugin `foo` not found; using `pi-agent`.", |_, _, _| {}).into_any_element()
+                banner("Agent plugin `foo` not found; using `claude-agent`.", |_, _, _| {}).into_any_element()
             })
             .width(size::CONTENT_MAX_W),
-            Example::new("confirm a mode (Full access)", |_, _| {
+            Example::new("confirm a mode", |_, _| {
                 confirm_card(
-                    "Full access lets the agent change files anywhere on this Mac. A decision model still checks every \
-                     operation first.",
-                    "Use Full access",
+                    "Trusted lets the agent change files anywhere on this Mac without asking.",
+                    "Use Trusted",
                     |_, _, _| {},
                     |_, _, _| {},
                 )

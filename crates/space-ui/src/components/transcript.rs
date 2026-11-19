@@ -1085,7 +1085,7 @@ Before any of that, make sure the tests pass and lint is clean, and that the ter
 - The manifest's `run.command` is resolved on `PATH` and spawned with piped stdio.\n\
 - The harness performs the ACP `initialize` handshake.\n\
 - stderr lines are kept in a ring buffer for error messages.\n\n\
-```rust\nlet agent = host.start_agent(\"pi-agent\").await?;\nlet session = agent.new_session(dir).await?;\n```\n\n\
+```rust\nlet agent = host.start_agent(\"claude-agent\").await?;\nlet session = agent.new_session(dir).await?;\n```\n\n\
 Invalid manifests are reported, not fatal.";
 
     /// Every markdown element a reply can have, for styling them together.
@@ -1157,7 +1157,7 @@ Long lines wrap only at spaces, and wrapped rows hang past their line:\n\n\
             output: String::new(),
             locations: vec![],
             blocked: None,
-            held: Some("OpenAI rejected your API key, so actions are paused.".into()),
+            held: Some("The guard can't decide right now, so actions are paused.".into()),
         }
     }
 
@@ -1165,7 +1165,7 @@ Long lines wrap only at spaces, and wrapped rows hang past their line:\n\n\
     pub fn guardrail_ask() -> PermissionRequest {
         PermissionRequest {
             reason: Some(
-                "The guardrail isn't sure about this call (allow, 64% sure): it changes the system outside the project."
+                "The guardrail isn't sure about this call: it changes the system outside the project."
                     .into(),
             ),
             tool_call: space_core::ToolCallPatch {
@@ -1305,7 +1305,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             ex(
                 "user with a quote",
                 Rc::new(|| {
-                    let quote = "The guardrail asks when it is less than 80% sure, so an \"allow at 64%\" verdict still asks you.";
+                    let quote = "The guardrail asks when it isn't sure, so an unclear call still comes to you.";
                     user_message("preview-quote", "Why 80%? Can it be lower for read-only commands?", UserExtras { quote: Some(quote), ..Default::default() }, None, None)
                 }),
             ),

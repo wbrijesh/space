@@ -12,8 +12,8 @@ brew install --cask wbrijesh/tools/space                      # install
 brew update && brew upgrade --cask wbrijesh/tools/space       # update
 ```
 
-Apple Silicon, macOS 13 or later. Space uses your Claude subscription through the Claude CLI: install it
-(`brew install --cask claude-code`) and run `claude` once to sign in. The app isn't notarized yet; the
+Apple Silicon, macOS 13 or later. Space runs Claude Code on your Claude subscription: install the
+Claude CLI (`brew install --cask claude-code`) and run `claude` once to sign in. The app isn't notarized yet; the
 cask clears macOS's download mark so it opens normally.
 
 ## Using Space
@@ -21,15 +21,15 @@ cask clears macOS's download mark so it opens normally.
 | | |
 |---|---|
 | **Threads** | ⌘N new · ⌘W close · ⌘R rename · ⇧⌘P pin / unpin (or right-click a row) · ⌘O open its folder in the app used last · ⌘[ / ⌘] back / forward · ⌘⌥↑ / ⌘⌥↓ previous / next · hold ⌘ and type a row's number to jump · ⌘B sidebar |
-| **Composer** | ⏎ send · ⇧⏎ newline · ↑ / ↓ your earlier messages · ⌘L focus · ⇧⌘R next permission mode · Esc stops the agent · a paste over 4,096 characters becomes a "Pasted text" attachment (click to read it) · a quote from the transcript sits above the input (× removes it) |
+| **Composer** | ⏎ send · ⇧⏎ newline · ↑ / ↓ your earlier messages · `/` the agent's commands (↑ / ↓ pick, Tab completes, ⏎ runs, Esc closes) · ⌘L focus · Esc stops the agent · a paste over 4,096 characters becomes a "Pasted text" attachment (click to read it) · a quote from the transcript sits above the input (× removes it) |
 | **While the agent works** | ⏎ queues a message for when it's done · ⌘⏎ sends it into the running turn, after the current step |
 | **Transcript** | ⌘F find · ⌘G / ⇧⌘G next / previous · ⌘↓ scroll to the bottom · ⇧⌘C Chat · ⇧⌘T Trajectory · select text in a message, then **Quote** to answer it (the agent gets it as a blockquote) |
 | **Right pane** | ⌘⌥B (or the title bar's pane button) show / hide, on the tab used last · ⌘J (or ⌃\`) Terminal, from it hide · ⌘P the file tree, from it hide · in Files, ⌘W closes the open file, from the tree hides the pane · in a terminal, ⌘T new tab · ⌘W close tab · ⌃Tab next tab · ⇧⌘⏎ maximize · ⌘K clear |
 | **App** | ⌘, Settings · ⌘Q quit (always asks, and says if threads are working or terminals run something) |
 
-- **Permission modes** (the shield under the composer): Read Only, Workspace Write (default) or Full
-  access. Outside Read Only, a guardrail model checks every tool call and asks you when it isn't sure;
-  it needs an OpenAI key in Settings. See [plugins/permissions](plugins/permissions/README.md).
+- **No checks:** the agent runs every tool call it decides on (shell commands, edits, fetches)
+  without asking. Space's guard hooks stay open to a plugin that wants to add checks
+  ([writing a plugin](docs/plugins.md)).
 - **Closing** a thread keeps it: a new, empty thread in the same folder offers it under **Resume**.
   Closed threads are deleted after 30 days (Settings ▸ Threads).
 - **Titles** come from the agent's model after your first message. A name you give (⌘R) stays.
@@ -54,10 +54,14 @@ cask clears macOS's download mark so it opens normally.
   commit: old and new line numbers, added lines green, removed red, changed words brighter);
   **Full file** shows the whole file with the changes in place. Open files reload when they change. Arrows move in the tree; right-click for Open in, Reveal in Finder and Copy Path.
 - **Terminals** belong to a thread and start in its folder; they keep running while hidden.
+- **Slash commands**: `/compact` (optionally with what to keep), `/context`, `/goal <condition>`
+  (Claude keeps working until it holds) and `/btw <question>`: a side question about the
+  conversation, answered above the composer (also while the agent works) without joining the
+  conversation; `/btw` alone shows the last answer again, Esc or × closes it.
 - **Trajectory** shows every model request and tool call of a thread
-  ([plugins/trajectory](plugins/trajectory/README.md)). **Continue in Pi** (left of its search)
-  copies a command that continues the thread in the Pi CLI: it copies the thread's session file
-  to your temp folder and forks that copy (`pi --fork`), so the thread in Space is never touched.
+  ([plugins/trajectory](plugins/trajectory/README.md)). **Continue in Claude Code** (left of its
+  search) copies a command that continues the thread in the Claude CLI as a fork
+  (`claude --resume <id> --fork-session`), so the thread in Space is never touched.
 - The agent sleeps after 30 minutes with nothing to do and wakes when you type.
 - Threads, settings and traces are kept in `~/.space`.
 
@@ -96,7 +100,7 @@ crates/space-plugin     SDK for Rust service plugins
 crates/space-terminal   a terminal's screen (alacritty's parser), keys and mouse to bytes
 crates/space-ui         tokens, components, previews and gallery
 crates/space-app        the app (binary `Space`)
-plugins/                pi-agent (TypeScript) · permissions · alerts · session-store · titles ·
+plugins/                claude-agent (TypeScript) · alerts · session-store · titles ·
                         trajectory · terminal; each has a README
 vendor/gpui-base        patched copy of a GPUI dependency (SPACE_PATCH.md)
 packaging/, scripts/    release, cask, notices, app icon (scripts/make_app_icon.py)

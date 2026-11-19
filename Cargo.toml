@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "plugins/permissions", "plugins/alerts", "plugins/session-store", "plugins/titles", "plugins/trajectory", "plugins/terminal"]
+members = ["crates/*", "plugins/alerts", "plugins/session-store", "plugins/titles", "plugins/trajectory", "plugins/terminal"]
 exclude = ["vendor"]
 
 [workspace.package]

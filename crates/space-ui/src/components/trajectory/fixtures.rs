@@ -28,8 +28,8 @@ pub fn page() -> TrajectoryPage {
         TrajectoryRow { label: Some("Initial system prompt".into()), ..row("sys-1", RecordKind::System, 0, None, "Initial system prompt · 4 tools", 0, None) },
         TrajectoryRow { images: 1, ..row("u-1", RecordKind::User, 1, None, "The login test fails since the redirect change. Can you fix it?", 0, None) },
         TrajectoryRow {
-            label: Some("permissions".into()),
-            ..row("c-1", RecordKind::Context, 1, None, "Permission mode: Workspace Write. Every tool call is checked by a decision model first.", 0, None)
+            label: Some("guard".into()),
+            ..row("c-1", RecordKind::Context, 1, None, "Permission mode: Guarded. Every tool call is checked first.", 0, None)
         },
         TrajectoryRow { first_token_ms: Some(T0 + 1330), tokens: Some(41), ..row("a-1", RecordKind::Assistant, 1, Some(1), "Let me run the tests first.", 20, Some(1460)) },
         TrajectoryRow { label: Some("bash".into()), guard: Some(GuardVerdict::Allow), ..row("t-1", RecordKind::Tool, 1, Some(1), "cargo test -p space-core → 1 failed", 1500, Some(8200)) },
@@ -97,7 +97,7 @@ pub fn header(id: u32, with_grep: bool) -> HeaderDetail {
     HeaderDetail {
         header_id: id,
         reason: Some(if id == 1 { HeaderReason::Initial } else { HeaderReason::Change }),
-        system_prompt: "You are an expert coding assistant operating inside pi, a coding agent harness.\n\n\
+        system_prompt: "You are a coding agent working in the user's project.\n\n\
 Available tools:\n- read: Read file contents\n- bash: Execute bash commands\n- edit: Make surgical edits to files\n- write: Create or overwrite files\n\n\
 Guidelines:\n- Use read to examine files before editing.\n- Use edit for precise changes (old text must match exactly).\n- Be concise in your responses.\n\n\
 Current working directory: /Users/brijesh/projects/space"
@@ -147,7 +147,7 @@ pub fn detail(id: &str) -> TrajectoryDetail {
             raw,
             ..Default::default()
         },
-        "c-1" => TrajectoryDetail { id: id.into(), text: Some("Permission mode: Workspace Write. Every tool call is checked by a decision model first.".into()), raw, ..Default::default() },
+        "c-1" => TrajectoryDetail { id: id.into(), text: Some("Permission mode: Guarded. Every tool call is checked first.".into()), raw, ..Default::default() },
         "t-1" | "t-3" | "t-4" => TrajectoryDetail {
             id: id.into(),
             input: Some(if id == "t-1" { json!({"command": "cargo test -p space-core"}) } else { json!({"path": "crates/space-core/tests/login.rs", "oldText": "/login", "newText": "/login?next=/home"}) }),
@@ -157,8 +157,8 @@ pub fn detail(id: &str) -> TrajectoryDetail {
                 "{\"ok\": true, \"replacements\": 1}".into()
             }),
             guard: Some(GuardDetail {
-                plugin: Some("permissions".into()),
-                mode: "workspace-write".into(),
+                plugin: Some("guard".into()),
+                mode: "guarded".into(),
                 verdict: Some(if id == "t-4" { GuardVerdict::Deny } else { GuardVerdict::Allow }),
                 reason: Some(if id == "t-4" { "Searches outside the project folder.".into() } else { "Edits a test inside the project.".into() }),
                 held_ms: if id == "t-3" { 2600 } else { 0 },

@@ -327,8 +327,8 @@ mod tests {
     use super::*;
 
     const EXAMPLE: &str = r#"
-id = "pi-agent"
-name = "Pi Agent"
+id = "claude-agent"
+name = "Claude Agent"
 version = "0.1.0"
 provides = ["agent"]
 description = "Coding agent."
@@ -345,7 +345,7 @@ FOO = "bar"
     #[test]
     fn parses_doc_example() {
         let m = Manifest::parse(EXAMPLE, Path::new("x.toml")).unwrap();
-        assert_eq!(m.id, "pi-agent");
+        assert_eq!(m.id, "claude-agent");
         assert!(m.is_agent());
         assert_eq!(m.run.args, vec!["dist/main.js"]);
         assert_eq!(m.run.cwd, RunCwd::Plugin);
@@ -379,7 +379,7 @@ FOO = "bar"
     #[test]
     fn rejects_bad_id_and_missing_run() {
         let err = Manifest::parse(
-            "id='Pi_Agent'\nname='A'\nversion='1'\nprovides=['agent']\n[run]\ncommand='x'\n",
+            "id='Claude_Agent'\nname='A'\nversion='1'\nprovides=['agent']\n[run]\ncommand='x'\n",
             Path::new("m.toml"),
         )
         .unwrap_err();
@@ -403,8 +403,8 @@ FOO = "bar"
     #[test]
     fn service_plugin_with_hooks_and_catalogs() {
         let m = Manifest::parse(
-            "id='permissions'\nname='P'\nversion='1'\nprovides=['sandbox','context','settings','catalog:permission-modes']\n\
-             hooks=[{event='tools/pre-execute', order=10}]\nrequired=true\n[run]\ncommand='${target}/space-permissions'\n",
+            "id='guard'\nname='G'\nversion='1'\nprovides=['sandbox','context','settings','catalog:permission-modes']\n\
+             hooks=[{event='tools/pre-execute', order=10}]\nrequired=true\n[run]\ncommand='${target}/space-guard'\n",
             Path::new("m.toml"),
         )
         .unwrap();
@@ -483,7 +483,7 @@ FOO = "bar"
         assert!(parse("provides=['context']\nenv=['lower']").unwrap_err().to_string().contains("lower"));
         let err = parse("provides=['agent']\nuses=['host/notify']").unwrap_err();
         assert!(err.to_string().contains("nothing else"), "{err}");
-        assert_eq!(parse("provides=['agent']\nenv=['SPACE_PI_MODEL']").unwrap().permissions(), ["env:SPACE_PI_MODEL", "provides:agent"]);
+        assert_eq!(parse("provides=['agent']\nenv=['SSH_AUTH_SOCK']").unwrap().permissions(), ["env:SSH_AUTH_SOCK", "provides:agent"]);
     }
 
     #[test]

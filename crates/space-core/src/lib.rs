@@ -4,7 +4,7 @@
 //! # async fn demo() -> anyhow::Result<()> {
 //! use space_core::{Host, HostOptions};
 //! let (host, mut events) = Host::new(tokio::runtime::Handle::current(), HostOptions::for_project("."));
-//! let agent = host.start_agent("pi-agent").await?;
+//! let agent = host.start_agent("claude-agent").await?;
 //! let session = agent.new_session(".").await?;
 //! tokio::spawn(async move { while let Some(e) = events.recv().await { println!("{e:?}"); } });
 //! let stop_reason = session.prompt("Reply with exactly: pong").await?;
@@ -30,7 +30,7 @@ pub use host::{
 pub use secrets::Secrets;
 pub use session::{
     ImageRef, TextRef, UserInput, PermissionDecision, PermissionKind, PermissionOption, PermissionRequest, PlanEntry, SessionEvent, SessionId,
-    SessionState, ToolCallInfo, ToolCallPatch, ToolStatus, TranscriptItem,
+    SessionState, SideQuestion, ToolCallInfo, ToolCallPatch, ToolStatus, TranscriptItem,
 };
 pub use space_protocol as protocol;
 

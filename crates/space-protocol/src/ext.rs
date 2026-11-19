@@ -25,6 +25,8 @@ pub const UNSTEER_METHOD: &str = "_space/session/unsteer";
 pub const STEERED_METHOD: &str = "_space/steered";
 /// Method name of the [`Retry`] notification (agent → client).
 pub const RETRY_METHOD: &str = "_space/retry";
+/// Method name of the [`SideQuestion`] request (client → agent).
+pub const SIDE_QUESTION_METHOD: &str = "_space/session/btw";
 /// `_meta` key of the ACP `initialize` response: `true` when the agent takes
 /// [`SteerSession`] (messages delivered between the steps of a running turn).
 pub const STEER_META_KEY: &str = "space/steer";
@@ -133,6 +135,28 @@ pub struct SpaceStatus {
     /// How to continue this session outside Space (the Trajectory page copies it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continue_in: Option<ContinueIn>,
+    /// The slash commands the agent runs, for the composer's `/` menu.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commands: Option<Vec<CommandInfo>>,
+}
+
+/// A slash command: a prompt that is exactly `/<name>`, or `/<name> <arguments>`, runs it
+/// instead of going to the model as text.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+#[serde(rename_all = "camelCase")]
+pub struct CommandInfo {
+    /// Without the slash: `compact`.
+    pub name: String,
+    pub description: String,
+    /// What the arguments are, for the menu (`<instructions>`); absent when it takes none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    /// Answered on the side: the client sends the arguments with [`SideQuestion`] (which works
+    /// while a turn runs and never joins the conversation) instead of as a prompt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(test, ts(optional, as = "Option<bool>"))]
+    pub side: bool,
 }
 
 /// A command that continues a session in another tool, from a copy of it (the session's own
@@ -141,7 +165,7 @@ pub struct SpaceStatus {
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct ContinueIn {
-    /// The tool, for the button: "Pi" ("Continue in Pi").
+    /// The tool, for the button: "Claude Code" ("Continue in Claude Code").
     pub app: String,
     /// The shell command, ready to paste into a terminal.
     pub command: String,
@@ -166,6 +190,7 @@ impl SpaceStatus {
         take(&mut self.context_tokens, &other.context_tokens);
         take(&mut self.context_window, &other.context_window);
         take(&mut self.continue_in, &other.continue_in);
+        take(&mut self.commands, &other.commands);
     }
 
     /// The [`ModelInfo`] of the current model, if the agent listed it.
@@ -403,6 +428,26 @@ pub struct CompleteResult {
     pub text: String,
 }
 
+/// `_space/session/btw` (client → agent request): a side question about session `session_id`,
+/// answered by its model from the conversation so far, without tools. Neither the question nor
+/// the answer joins the conversation, and it can be asked while a turn runs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
+#[request(method = "_space/session/btw", response = SideAnswer)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct SideQuestion {
+    pub session_id: String,
+    pub question: String,
+}
+
+/// The answer to [`SideQuestion`], as markdown.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcResponse)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct SideAnswer {
+    pub text: String,
+}
+
 /// Hidden text a plugin adds to a prompt (the agent puts it in its system prompt, never in
 /// the user's message or the transcript).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -477,5 +522,24 @@ mod tests {
         assert_eq!(a.provider.as_deref(), Some("p"));
         assert_eq!(a.thinking_levels, Some(vec!["low".to_string()]));
         assert_eq!(a.session_id, "s");
+    }
+
+    #[test]
+    fn commands_and_side_question_wire_format() {
+        let s: SpaceStatus = serde_json::from_value(serde_json::json!({
+            "sessionId": "s",
+            "commands": [{"name": "compact", "description": "Summarize", "hint": "<instructions>"}, {"name": "btw", "description": "Ask", "side": true}]
+        }))
+        .unwrap();
+        let commands = s.commands.unwrap();
+        assert_eq!(commands[0].hint.as_deref(), Some("<instructions>"));
+        assert!(!commands[0].side && commands[1].side);
+        assert_eq!(
+            serde_json::to_value(&commands[0]).unwrap(),
+            serde_json::json!({"name": "compact", "description": "Summarize", "hint": "<instructions>"})
+        );
+        let q = SideQuestion { session_id: "s".into(), question: "why?".into() };
+        assert_eq!(q.method(), SIDE_QUESTION_METHOD);
+        assert_eq!(serde_json::to_value(&q).unwrap(), serde_json::json!({"sessionId": "s", "question": "why?"}));
     }
 }

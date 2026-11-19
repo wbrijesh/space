@@ -128,8 +128,8 @@ fn one_paragraph(text: &str) -> String {
 #[cfg(feature = "dev")]
 pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     use crate::preview::{Area, ComponentPreview, Example};
-    const QUOTE: &str = "The guardrail asks when it is less than 80% sure, so an \"allow at 64%\" verdict still \
-                         asks you. Raising the folder from / to the project made it confident again.";
+    const QUOTE: &str = "The guardrail asks when it isn't sure, so an unclear call still comes to you. Raising the \
+                         folder from / to the project made it confident again.";
     let remove: Handler = Rc::new(|_, _| {});
     vec![ComponentPreview::new(Area::Transcript, "Quote", "Quoting a selection: the button over it, the quote above a sent message.")
         .stacked()

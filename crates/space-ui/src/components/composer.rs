@@ -16,7 +16,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::protocol::service::CatalogEntry;
 use space_core::protocol::trace::TrajectoryStats;
-use space_core::protocol::{ConfigureSession, SpaceStatus};
+use space_core::protocol::{CommandInfo, ConfigureSession, SpaceStatus};
 
 use super::images::draft_thumb;
 use super::pastes::{Handler as ChipHandler, paste_chip};
@@ -24,11 +24,11 @@ use super::quote::composer_quote;
 use super::loaders::ContextRing;
 use super::model_picker::{PaneHandler, PickerPane, model_picker};
 use super::trajectory::duration_label;
-use super::transcript::attachment_chip;
+use super::transcript::{agent_message, attachment_chip};
 use super::tip::TipExt as _;
 use super::menu::{chevron, choice, heading, popover, row, separator, surface, trigger};
 use super::widgets::icon_button;
-use crate::actions::{RecallNext, RecallPrevious};
+use crate::actions::{CompleteCommand, RecallNext, RecallPrevious};
 use crate::format;
 use crate::theme::{color, radius, size, space, text};
 
@@ -82,6 +82,8 @@ pub type PathHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 pub type ConfigureHandler = Rc<dyn Fn(ConfigureSession, &mut Window, &mut App)>;
 pub type BoolHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
 pub type StringHandler = Rc<dyn Fn(String, &mut Window, &mut App)>;
+/// Takes a key (`true`), or lets it go on (`false`).
+pub type KeyHandler = Rc<dyn Fn(&mut Window, &mut App) -> bool>;
 pub type PathsHandler = Rc<dyn Fn(Vec<PathBuf>, &mut Window, &mut App)>;
 /// Gets a paste first: `true` took it (images, copied files, long text), `false` lets the text
 /// go in.
@@ -127,6 +129,14 @@ pub struct ComposerHandlers {
     pub on_branch: StringHandler,
     /// "Create branch" on the branch page (the typed name).
     pub on_new_branch: StringHandler,
+    /// A command was clicked in the `/` menu (its name): run it.
+    pub on_command: StringHandler,
+    /// Tab: complete the `/` menu's selected command. `false`: the menu is closed, the key goes on.
+    pub on_complete_command: KeyHandler,
+    /// A click outside the `/` menu.
+    pub on_close_commands: Handler,
+    /// The side question's × was clicked.
+    pub on_close_side: Handler,
 }
 
 /// A message waiting for the agent, as its row above the composer shows it.
@@ -176,6 +186,10 @@ impl Default for ComposerHandlers {
             on_resume: Rc::new(|_, _, _| {}),
             on_branch: Rc::new(|_, _, _| {}),
             on_new_branch: Rc::new(|_, _, _| {}),
+            on_command: Rc::new(|_, _, _| {}),
+            on_complete_command: Rc::new(|_, _| false),
+            on_close_commands: Rc::new(|_, _| {}),
+            on_close_side: Rc::new(|_, _| {}),
         }
     }
 }
@@ -292,6 +306,22 @@ impl ModeChoice {
     }
 }
 
+/// The `/` menu: the agent's commands matching what's typed after the slash, one selected.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CommandMenu {
+    pub items: Vec<CommandInfo>,
+    pub selected: usize,
+}
+
+/// A side question (`/btw`) and its answer, shown above the composer until it's closed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SideView {
+    pub question: SharedString,
+    /// Markdown; `None` while it's on its way.
+    pub answer: Option<SharedString>,
+    pub error: Option<SharedString>,
+}
+
 /// Why the composer can't send, and the links that fix it.
 #[derive(Clone, Default)]
 pub struct ComposerBlocker {
@@ -324,6 +354,10 @@ pub struct Composer {
     /// ⌘ is held and the agent takes messages mid-turn: sending while it works goes in after
     /// the current step (the button turns white).
     after_step: bool,
+    /// The `/` menu is open.
+    commands: Option<CommandMenu>,
+    /// A side question to show above the card.
+    side: Option<SideView>,
 }
 
 impl Composer {
@@ -341,7 +375,19 @@ impl Composer {
             handlers: ComposerHandlers::default(),
             queued_messages: Vec::new(),
             after_step: false,
+            commands: None,
+            side: None,
         }
+    }
+
+    pub fn commands(mut self, commands: Option<CommandMenu>) -> Self {
+        self.commands = commands;
+        self
+    }
+
+    pub fn side(mut self, side: Option<SideView>) -> Self {
+        self.side = side;
+        self
     }
 
     pub fn queued_messages(mut self, queued: Vec<QueuedView>) -> Self {
@@ -397,7 +443,7 @@ impl Composer {
 
 impl RenderOnce for Composer {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let Self { id, input, running, queued, attachments, images, pastes, quote, controls, handlers: h, queued_messages, after_step } = self;
+        let Self { id, input, running, queued, attachments, images, pastes, quote, controls, handlers: h, queued_messages, after_step, commands, side } = self;
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
         let has_text = !input.read(cx).value().trim().is_empty();
         let blocker = controls.as_ref().and_then(|c| c.blocker.clone());
@@ -600,10 +646,16 @@ impl RenderOnce for Composer {
                 let drop = h.on_drop.clone();
                 move |paths: &ExternalPaths, w, cx| drop(paths.paths().to_vec(), w, cx)
             })
+            .relative()
             .children(quote.map(|q| composer_quote(&q, h.on_remove_quote.clone())))
             .children(thumbs)
             .children(chips)
-            .child(body);
+            .child(body)
+            // The `/` menu floats above the card, from its left edge.
+            .children(commands.map(|menu| {
+                let close = h.on_close_commands.clone();
+                popover(false, command_menu(&menu, h.on_command.clone()), move |w, cx| close(w, cx))
+            }));
 
         div()
             .w_full()
@@ -634,11 +686,82 @@ impl RenderOnce for Composer {
                     }
                 }
             })
+            .on_action({
+                let complete = h.on_complete_command.clone();
+                move |_: &CompleteCommand, w, cx| {
+                    if !complete(w, cx) {
+                        cx.propagate();
+                    }
+                }
+            })
+            .children(side.map(|s| side_card(&s, h.on_close_side.clone())))
             .children((!queued_messages.is_empty()).then(|| queued_rows(&queued_messages, running, h.on_queued.clone())))
             .children(blocker.map(|b| blocker_row(b, h.on_blocker_action.clone())))
             .child(card)
             .children(controls.map(|c| control_row(c, &h)))
     }
+}
+
+/// The `/` menu: each command's name and what it does; the selected one highlighted. ↑/↓,
+/// Tab, ⏎ and Esc are the app's (the composer's text keeps the focus); a click runs a command.
+pub fn command_menu(menu: &CommandMenu, on_command: StringHandler) -> Div {
+    surface().w(px(440.)).max_w(px(440.)).children(menu.items.iter().enumerate().map(|(ix, c)| {
+        let (name, run) = (c.name.clone(), on_command.clone());
+        row(("command", ix))
+            .when(ix == menu.selected, |d| d.bg(color::hover()))
+            // Names in one column, so the descriptions line up.
+            .child(div().w(px(96.)).flex_none().truncate().text_color(color::text()).child(format!("/{}", c.name)))
+            .child(div().flex_1().min_w_0().truncate().text_size(text::SM).text_color(color::text_3()).child(c.description.clone()))
+            .on_click(move |_, w, cx| run(name.clone(), w, cx))
+    }))
+}
+
+/// A side question above the card: the question, its answer (or that it's coming, or why it
+/// didn't), and × to close it. The answer scrolls when it's long.
+pub fn side_card(side: &SideView, on_close: Handler) -> Div {
+    let body = match (&side.answer, &side.error) {
+        (Some(answer), _) => div()
+            .id("side-answer")
+            .max_h(px(280.))
+            .overflow_y_scroll()
+            .child(agent_message("side-answer-md", answer))
+            .into_any_element(),
+        (None, Some(error)) => div().text_size(text::SM).text_color(color::red()).child(format::clean_error(error)).into_any_element(),
+        (None, None) => div()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .text_size(text::SM)
+            .text_color(color::text_3())
+            .child(super::loaders::Spinner::new(size::SPINNER_MD))
+            .child("Answering on the side…")
+            .into_any_element(),
+    };
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .rounded(radius::XL)
+        .bg(color::surface())
+        .border_1()
+        .border_color(color::border())
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(text::SM)
+                .text_color(color::text_2())
+                .child(Icon::new(Lucide::MessageCircleQuestionMark).size(size::ICON).flex_none())
+                .child(div().flex_1().min_w_0().truncate().child(side.question.clone()))
+                .child(
+                    icon_button("close-side", IconName::Close, true, false)
+                        .tip("Close  ⎋")
+                        .on_click(move |_, w, cx| on_close(w, cx)),
+                ),
+        )
+        .child(body)
 }
 
 /// Messages waiting for the agent, above the card: when each goes (a small arrow, white for
@@ -1234,6 +1357,26 @@ pub mod fixtures {
             context_tokens: Some(tokens),
             context_window: Some(1_000_000),
             continue_in: None,
+            commands: Some(commands()),
+        }
+    }
+
+    /// The commands claude-agent offers.
+    pub fn commands() -> Vec<CommandInfo> {
+        let c = |name: &str, description: &str, side: bool| CommandInfo { name: name.into(), description: description.into(), hint: None, side };
+        vec![
+            c("btw", "Ask a side question about the conversation without adding to it", true),
+            c("compact", "Free up context by summarizing the conversation so far", false),
+            c("context", "Show current context usage", false),
+            c("goal", "Set a goal — keep working until the condition is met", false),
+        ]
+    }
+
+    pub fn side(answer: Option<&str>, error: Option<&str>) -> SideView {
+        SideView {
+            question: "Which files did the last edit touch?".into(),
+            answer: answer.map(|a| a.to_string().into()),
+            error: error.map(|e| e.to_string().into()),
         }
     }
 
@@ -1246,7 +1389,7 @@ pub mod fixtures {
             thread_empty: tokens == 0,
             status: status(tokens),
             locked,
-            mode: Some(modes("workspace-write", true)),
+            mode: Some(modes("guarded", true)),
             blocker: None,
             stats: None,
             context_open: false,
@@ -1272,7 +1415,7 @@ pub mod fixtures {
         }
     }
 
-    /// The permissions plugin's three modes; `ready`: the decision model is set up.
+    /// The modes a guard plugin might publish (`permission-modes`); `ready`: it's set up.
     pub fn modes(current: &str, ready: bool) -> ModeChoice {
         let entry = |id: &str, name: &str, icon: &str, default: bool, needs_setup: bool| CatalogEntry {
             id: id.into(),
@@ -1284,9 +1427,8 @@ pub mod fixtures {
         };
         ModeChoice {
             entries: vec![
-                entry("read-only", "Read Only", "shield-check", false, false),
-                entry("workspace-write", "Workspace Write", "shield-half", true, true),
-                entry("full-access", "Full access", "shield-alert", false, true),
+                entry("guarded", "Guarded", "shield-half", true, true),
+                entry("trusted", "Trusted", "shield-alert", false, false),
             ],
             current: current.into(),
         }
@@ -1294,7 +1436,7 @@ pub mod fixtures {
 
     pub fn with_mode(mut c: ComposerControls, current: &str, ready: bool) -> ComposerControls {
         c.mode = Some(modes(current, ready));
-        if !ready && current != "read-only" {
+        if !ready && current == "guarded" {
             c.blocker = Some(not_set_up());
         }
         c
@@ -1304,45 +1446,18 @@ pub mod fixtures {
         (SharedString::from(label.to_string()), SharedString::from(action.to_string()))
     }
 
-    const TIMES: &str = "Last tried 2m 14s ago · next try in 2m 46s";
-
-    /// The blockers the permissions plugin shows, by state (as the app formats them).
+    /// A mode that needs setting up first.
     pub fn not_set_up() -> ComposerBlocker {
+        ComposerBlocker { text: "Guarded needs setting up.".into(), actions: vec![action("Open Settings", "open-settings:guard")], times: None }
+    }
+
+    /// The guard can't decide right now; it tries again.
+    pub fn paused() -> ComposerBlocker {
         ComposerBlocker {
-            text: "Workspace Write needs an OpenAI API key.".into(),
-            actions: vec![action("Open Settings", "open-settings:permissions")],
-            times: None,
+            text: "The guard can't decide right now, so actions are paused.".into(),
+            actions: vec![action("Retry now", "retry:guard")],
+            times: Some("Last tried 2m 14s ago · next try in 2m 46s".into()),
         }
-    }
-
-    pub fn failing(text: &str, fix: Option<(&str, &str)>) -> ComposerBlocker {
-        let mut actions: Vec<_> = fix.into_iter().map(|(l, a)| action(l, a)).collect();
-        actions.push(action("Retry now", "retry:permissions"));
-        ComposerBlocker { text: text.to_string().into(), actions, times: Some(TIMES.into()) }
-    }
-
-    pub fn key_rejected() -> ComposerBlocker {
-        failing("OpenAI rejected your API key, so actions are paused.", Some(("Update key", "open-settings:permissions")))
-    }
-
-    pub fn unreachable() -> ComposerBlocker {
-        failing("Can't reach OpenAI (no answer within 3s), so actions are paused.", None)
-    }
-
-    pub fn no_access() -> ComposerBlocker {
-        failing(
-            "This OpenAI account doesn't have the Decisions API (Decision API is not enabled for this user.), so actions \
-             are paused.",
-            Some(("Open Settings", "open-settings:permissions")),
-        )
-    }
-
-    pub fn no_credit() -> ComposerBlocker {
-        failing("OpenAI says the account is out of credit, so actions are paused.", Some(("Open billing", "open-url:https://platform.openai.com")))
-    }
-
-    pub fn incompatible() -> ComposerBlocker {
-        failing("OpenAI's decision API changed (Unknown parameter); Space needs an update. Actions are paused.", None)
     }
 
     /// A plugin from your home or project folder waits for your approval.
@@ -1355,7 +1470,7 @@ pub mod fixtures {
     }
 
     pub fn with_blocker(mut c: ComposerControls, blocker: ComposerBlocker) -> ComposerControls {
-        c.mode = Some(modes("workspace-write", false));
+        c.mode = Some(modes("guarded", false));
         c.blocker = Some(blocker);
         c
     }
@@ -1403,33 +1518,20 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             example("pasted text", "What is failing here?", |c| c.pastes(vec![5_230])),
             example("quote", "Why 80%?", |c| {
                 c.quote(Some(
-                    "The guardrail asks when it is less than 80% sure, so an \"allow at 64%\" verdict still asks you. \
+                    "The guardrail asks when it isn't sure, so an unclear call still comes to you. \
                      Raising the folder from / to the project made it confident again."
                         .into(),
                 ))
             }),
             example("agent starting (locked)", "", |c| c.queued(true).controls(fixtures::controls(0, true))),
-            example("read only", "Why does the composer flicker when it grows?", |c| {
-                c.controls(fixtures::with_mode(fixtures::controls(18_200, false), "read-only", true))
+            example("a permission mode (from a guard plugin)", "Why does the composer flicker when it grows?", |c| {
+                c.controls(fixtures::with_mode(fixtures::controls(18_200, false), "trusted", true))
             }),
-            example("full access", "", |c| c.controls(fixtures::with_mode(fixtures::controls(18_200, false), "full-access", true))),
             example("mode not set up (sending blocked)", "Clean up the build cache", |c| {
-                c.controls(fixtures::with_mode(fixtures::controls(18_200, false), "workspace-write", false))
+                c.controls(fixtures::with_mode(fixtures::controls(18_200, false), "guarded", false))
             }),
-            example("key rejected (paused, retrying)", "", |c| {
-                c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::key_rejected()))
-            }),
-            example("can't reach OpenAI", "", |c| {
-                c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::unreachable()))
-            }),
-            example("no Decisions access", "", |c| {
-                c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::no_access()))
-            }),
-            example("out of credit", "", |c| {
-                c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::no_credit()))
-            }),
-            example("API changed", "", |c| {
-                c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::incompatible()))
+            example("the guard can't decide (paused, retrying)", "", |c| {
+                c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::paused()))
             }),
             example("a plugin needs approval", "", |c| {
                 c.controls(fixtures::with_blocker(fixtures::controls(18_200, false), fixtures::needs_approval()))
@@ -1437,10 +1539,19 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             example("no permission modes (no plugin)", "", |c| {
                 c.controls(ComposerControls { mode: None, ..fixtures::controls(18_200, false) })
             }),
+            example("slash commands", "/co", |c| {
+                let items = fixtures::commands().into_iter().filter(|c| c.name.starts_with("co")).collect();
+                c.commands(Some(CommandMenu { items, selected: 1 }))
+            }),
+            example("side question: answering", "", |c| c.running(true).side(Some(fixtures::side(None, None)))),
+            example("side question: answered", "", |c| {
+                c.side(Some(fixtures::side(Some("`src/session.ts` and its test, `src/session.test.ts`: the turn now ends when Claude Code is **idle**."), None)))
+            }),
+            example("side question: failed", "", |c| c.side(Some(fixtures::side(None, Some("There's no conversation to ask about yet."))))),
         ]),
         ComponentPreview::new(Area::Composer, "Menus", "Dropdown contents, rendered open.").examples([
             menu("permission mode", || {
-                let modes = fixtures::modes("workspace-write", true);
+                let modes = fixtures::modes("guarded", true);
                 mode_menu(&modes.entries, &modes.current, Rc::new(|_, _, _| {}), Rc::new(|_, _| {}))
             }),
             menu("folder", || {
@@ -1479,6 +1590,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 let b = BranchChoice { head: "a1b2c3d".into(), detached: true, more: 23, changed: 0, ..fixtures::branch() };
                 branch_page(&c.cwd, &b, &ComposerHandlers::default())
             }),
+            menu("slash commands", || command_menu(&CommandMenu { items: fixtures::commands(), selected: 0 }, Rc::new(|_, _, _| {}))),
             menu("resume", || {
                 let t = |id: &str, title: &str, closed: &str| ClosedThread { id: id.into(), title: title.to_string().into(), closed: closed.to_string().into() };
                 let threads = [

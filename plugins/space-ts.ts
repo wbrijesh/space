@@ -2,7 +2,7 @@
 // `just build` compiles it with Bun into target/<profile>/space-ts; each plugin's manifest runs
 // `${target}/space-ts` with its id. Adding a TypeScript plugin: its folder, plus one line here.
 const plugins: Record<string, () => Promise<unknown>> = {
-	"pi-agent": () => import("./pi-agent/src/main.ts"),
+	"claude-agent": () => import("./claude-agent/src/main.ts"),
 };
 
 const id = process.argv[2] ?? "";

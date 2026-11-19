@@ -185,7 +185,7 @@ pub fn truncate_chars(s: &str, max: usize) -> String {
     format!("{}…", cut.trim_end())
 }
 
-/// pi-style tool titles `bash: ls -la` → ("Bash", "ls -la"); other titles → (title, "").
+/// Tool titles like `bash: ls -la` → ("Bash", "ls -la"); other titles → (title, "").
 pub fn tool_parts(title: &str) -> (String, String) {
     match title.split_once(": ") {
         Some((name, detail)) if !name.is_empty() && !name.contains(' ') => {

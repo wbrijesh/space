@@ -79,7 +79,7 @@ pub struct Thread {
     /// Permission mode picked for this thread (a `permission-modes` id); `None`: the default
     /// for new threads. Applied to every session the thread gets.
     pub mode: Option<String>,
-    /// Modes that need confirming (Full access) and were confirmed in this thread.
+    /// Modes that need confirming and were confirmed in this thread.
     pub confirmed: HashSet<String>,
     /// This turn already counted a paused tool call as unread.
     paused_seen: bool,
@@ -212,6 +212,9 @@ impl SpaceApp {
             }
             if let Some(levels) = &status.thinking_levels {
                 self.agent_levels = Some(levels.clone());
+            }
+            if let Some(commands) = &status.commands {
+                self.agent_commands = Some(commands.clone());
             }
         }
         // On the Settings page nothing is being watched.
@@ -490,7 +493,15 @@ impl SpaceApp {
     fn send_when(&mut self, when: crate::queue::When, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected else { return };
         self.touch_agent();
+        // ⏎ in the `/` menu sends the selected command.
+        self.accept_command(window, cx);
         let text = self.input.read(cx).value().trim().to_string();
+        let Some(thread) = self.thread_mut(key) else { return };
+        // A side question (`/btw …`) goes beside the conversation, also while a turn runs.
+        let plain = thread.attachments.is_empty() && thread.images.is_empty() && thread.pastes.is_empty() && thread.quote.is_none();
+        if plain && self.send_side_question(key, &text, window, cx) {
+            return;
+        }
         let Some(thread) = self.thread_mut(key) else { return };
         if text.is_empty() && thread.attachments.is_empty() && thread.images.is_empty() && thread.pastes.is_empty() && thread.quote.is_none() {
             return;

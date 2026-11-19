@@ -12,7 +12,7 @@ import json
 import os
 import subprocess
 
-SHIPPED_CRATES = {"space-app", "space-alerts", "space-permissions", "space-session-store", "space-titles", "space-trajectory", "space-terminal-plugin"}
+SHIPPED_CRATES = {"space-app", "space-alerts", "space-session-store", "space-titles", "space-trajectory", "space-terminal-plugin"}
 
 
 def rust_crates():
@@ -70,8 +70,11 @@ GNU LGPL 2.1; the source of the JavaScriptCore Bun uses is at https://github.com
 
 ## TypeScript packages
 
-Installed for the bundled TypeScript plugins (pi-agent: the pi SDK, the Claude CLI provider, the
-Agent Client Protocol SDK and their dependencies). Only the code a plugin uses is compiled in.
+Installed for the bundled TypeScript plugins (claude-agent: the Claude Agent SDK, the Agent Client
+Protocol SDK and their dependencies). Only the code a plugin uses is compiled in. The Claude Agent
+SDK is Anthropic's, used under Anthropic's terms (https://code.claude.com/docs/en/legal-and-compliance);
+its native Claude Code binary is installed with it but not shipped: Space runs the Claude Code CLI
+the user installed.
 
 {table(js_packages())}
 

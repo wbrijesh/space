@@ -288,7 +288,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                         .children(section("Today", false, &["Fix the failing smoke test in space-core", "Bump the gpui-kit version"]))
                         .children(section("Yesterday", false, &["Explain how plugin discovery works"]))
                         .children(section("3 Nov", false, &["Add a context ring to the composer"]))
-                        .children(section("28 Oct 2025", false, &["Sketch the permissions plugin"]))
+                        .children(section("28 Oct 2025", false, &["Sketch the plugin manifest"]))
                         .into_any_element()
                 })
                 .width(size::SIDEBAR_W - px(20.)),

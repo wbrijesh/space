@@ -1,7 +1,8 @@
 # Space architecture
 
-A Rust/GPUI **harness** hosts out-of-process **plugins**: an agent (pi-agent, on the pi SDK) and
-service plugins for permissions, alerts, saved threads, titles, traces and terminals.
+A Rust/GPUI **harness** hosts out-of-process **plugins**: an agent (claude-agent, on Claude Code) and
+service plugins for alerts, saved threads, titles, traces and terminals. No guard plugin is bundled:
+the agent's tool calls run unchecked unless one is installed.
 
 ```
 ┌──────────────────────────── space (Rust) ─────────────────────────────┐
@@ -13,10 +14,9 @@ service plugins for permissions, alerts, saved threads, titles, traces and termi
 └──────┬──────────────────────────────────────────┬────────────────────┘
        │ ACP (JSON-RPC over stdio)                │ service protocol (JSON-RPC over stdio)
 ┌──────▼───────────────────────┐   ┌──────────────▼──────────────────────────┐
-│ plugins/pi-agent (TS, Bun)   │   │ permissions: modes · sandbox · guardrail │
-│ pi SDK + claude-cli          │   │ alerts · session-store · titles          │
-└──────────────────────────────┘   │ trajectory · terminal                    │
-                                   └──────────────────────────────────────────┘
+│ plugins/claude-agent (TS,Bun)│   │ alerts · session-store · titles         │
+│ Claude Agent SDK → `claude`  │   │ trajectory · terminal                   │
+└──────────────────────────────┘   └─────────────────────────────────────────┘
 ```
 
 Everything a plugin adds goes through the host: agents ask the host before every tool call
@@ -35,27 +35,27 @@ hook chain and routes seams to whichever plugin provides them. Agents and guards
 | Tool pipeline | Owned by the host, run for every agent | Every agent gets the same guards for free |
 | Failing guards | Fail closed: the call is **held** until the guard can decide | A broken guard never lets a call through or turns into a prompt |
 | Core placement | `space-core` is a library used in-process by `space-app` | One binary; everything crosses a protocol |
-| Model access | pi + `@pi-plugins/claude-cli` | Uses the user's `claude` CLI subscription; no API key |
+| Model access | The Claude Agent SDK driving the user's `claude` CLI | Claude Code's agent loop, commands and compaction on the user's Claude subscription; no API key, nothing of the user's Claude Code setup loaded |
 
 ## Plugin manifest
 
 Every plugin is a directory containing `space-plugin.toml`:
 
 ```toml
-id = "permissions"              # unique, kebab-case
-name = "Permissions"
+id = "guard"                    # unique, kebab-case
+name = "Guard"
 version = "0.1.0"
 description = "…"
 provides = ["sandbox", "context", "settings", "catalog:permission-modes"]   # or ["agent"]
 hooks = [{ event = "tools/pre-execute", order = 10 }]                      # lower order runs first
 required = true                 # a guard Space can't run tools without (can't be turned off)
-requires = []                   # capabilities another plugin must provide (pi-agent: ["sandbox"])
+requires = []                   # capabilities another plugin must provide (e.g. ["sandbox"])
 observes = []                   # events a service plugin is told about (e.g. "turn/ended")
 uses = ["read:transcript"]      # host services it may call, and read:transcript
-env = []                        # variables of Space's environment it gets (pi-agent: ["SSH_AUTH_SOCK", …])
+env = []                        # variables of Space's environment it gets (claude-agent: ["SSH_AUTH_SOCK", …])
 
 [run]
-command = "${target}/space-permissions"   # ${target}: the cargo profile dir Space runs from
+command = "${target}/space-guard"   # ${target}: the cargo profile dir Space runs from
 args = []                       # relative paths resolve against the plugin directory
 cwd = "plugin"                  # "plugin" or "project"
 
@@ -136,6 +136,7 @@ Space extensions:
 | client → agent | `_space/session/configure` | `{ sessionId, provider?, model?, thinkingLevel? }` → the full `SpaceStatus` |
 | agent → client | `_space/tools/preExecute` | `{ sessionId, toolCallId, tool, kind, args, cwd? }` → `{ decision: allow \| deny, reason? }`, after the host's pipeline (may take as long as the call is held) |
 | agent → client | `_space/sandbox/confine` | `{ sessionId, argv, cwd }` → `{ argv }` to spawn instead (unchanged without a `sandbox` provider) |
+| client → agent | `_space/session/btw` | `{ sessionId, question }` → `{ text }`: a side question about the conversation so far, answered by the session's model without tools; neither joins the conversation, and it can be asked while a turn runs. The host emits it and its answer as `SideQuestion` / `SideAnswer` session events (live only, not saved), shown above the composer |
 | client → agent | `_space/complete` | `{ sessionId, prompt, provider?, model? }` → `{ text }`: one short, tool-free completion by the session's model (or the one named), outside the conversation. The host forwards plugins' `agent/complete` here |
 | client → agent | `_space/session/steer` | `{ sessionId, id, text, images?, texts?, attachments? }`: a message for the running turn, delivered after the current step |
 | client → agent | `_space/session/unsteer` | `{ sessionId }` → `{ ids }`: take back the undelivered ones (the turn was stopped) |
@@ -149,18 +150,22 @@ Space extensions:
 { "sessionId": "…", "provider": "claude-cli", "model": "claude-opus-5-5", "thinkingLevel": "medium",
   "availableModels": [{ "provider": "claude-cli", "id": "claude-opus-5-5", "name": "Claude Opus 5.5" }],
   "thinkingLevels": ["low", "medium", "high", "xhigh", "max"], "contextTokens": 18234, "contextWindow": 1000000,
-  "continueIn": { "app": "Pi", "command": "cp … \"$TMPDIR/space-4eee6f75.jsonl\" && cd … && pi --fork …" } }
+  "continueIn": { "app": "Claude Code", "command": "cd … && claude --resume 4eee6f75-… --fork-session" },
+  "commands": [{ "name": "btw", "description": "Ask a side question…", "hint": "<question>", "side": true },
+               { "name": "compact", "description": "Free up context by summarizing the conversation so far" }] }
 ```
 
 `continueIn` (optional) is how to carry the session on outside Space; the Trajectory page offers
-it as "Continue in <app>" and copies the command.
+it as "Continue in <app>" and copies the command. `commands` (optional) are the agent's slash
+commands for the composer's `/` menu: a prompt that is exactly `/<name>` or `/<name> <arguments>`
+runs the command; one marked `side` is sent with `_space/session/btw` instead of as a prompt.
 
 ## Service protocol
 
 Service plugins speak [`space_protocol::service`]; the Rust SDK is `crates/space-plugin`.
 
 The Rust types in `space-protocol` are the only definition of Space's protocol. TypeScript
-plugins import bindings generated from them (`plugins/pi-agent/src/generated/protocol.ts`):
+plugins import bindings generated from them (`plugins/claude-agent/src/generated/protocol.ts`):
 `just protocol` rewrites the file, and `cargo test` fails while it is stale. Both kinds of
 plugin report `PROTOCOL_VERSION` when they start (agents in `initialize`'s
 `_meta["space/protocolVersion"]`; a plain ACP agent leaves it out), and a plugin built for
@@ -313,8 +318,8 @@ host's own records; never tool output).
   tests use their own). A plugin setting goes through `settings/validate` before it's stored.
 - **Testing.** `space-core` ships `space-stub-agent` (a scripted ACP agent) and `space-stub-guard` (a
   scripted service plugin); `crates/space-core/tests/` run the host against them. Plugins have
-  end-to-end tests with the real plugin: permissions against a stand-in for OpenAI, session-store,
-  titles, and terminal with real shells.
+  end-to-end tests with the real plugin: session-store, titles, trajectory, and terminal with real
+  shells.
 
 ## Repository layout
 
@@ -328,8 +333,7 @@ space/
 │  ├─ space-ui/         # components, tokens, gallery
 │  └─ space-app/        # GPUI binary `Space`
 ├─ plugins/
-│  ├─ pi-agent/         # TypeScript ACP agent on the pi SDK
-│  ├─ permissions/      # Rust service plugin: modes, sandbox, decision model
+│  ├─ claude-agent/     # TypeScript ACP agent on the Claude Agent SDK
 │  ├─ alerts/           # Rust service plugin: a notification or sound when a turn ends or pauses
 │  ├─ session-store/    # Rust service plugin: saved threads in ~/.space/threads
 │  ├─ titles/           # Rust service plugin: thread titles from the thread's agent model

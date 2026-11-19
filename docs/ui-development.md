@@ -106,7 +106,7 @@ each shows.
 **Adding a scenario:** in `crates/space-app/src/scenarios.rs`, append a `Scenario` to `all()`.
 Give it a name, a description and its threads. Each thread has a `prompt` and the `steps` the
 stub streams back (`thought`, `say`, `tool(...)`, `Step::Permission`, `context(...)`,
-`Step::Hold`, `Step::Fail`). Optionally set a `subdir`, a composer `draft` or a permission `mode` (with `permissions: true`). Prompts must be
+`Step::Hold`, `Step::Fail`). Optionally set a `subdir` or a composer `draft`. Prompts must be
 unique within a scenario (the stub matches on prompt text); a unit test checks this. The stub
 binary must be built (`cargo build --workspace` does it).
 
