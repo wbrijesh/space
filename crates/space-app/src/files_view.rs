@@ -498,13 +498,13 @@ impl SpaceApp {
         cx.notify();
     }
 
-    /// ⌘W in the Files view: close the shown file; from the tree, hide the pane.
+    /// ⌘W anywhere in the Files view (the tree too): close the shown file; with none open,
+    /// hide the pane.
     pub(crate) fn close_files_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected else { return };
-        let in_tree = self.files.focus.is_focused(window);
         match self.file_tabs.get(&key).and_then(|t| t.active) {
-            Some(ix) if !in_tree => self.close_file_tab(ix, window, cx),
-            _ => self.hide_terminal(window, cx),
+            Some(ix) => self.close_file_tab(ix, window, cx),
+            None => self.hide_terminal(window, cx),
         }
     }
 

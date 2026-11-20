@@ -183,7 +183,8 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-r", RenameThread, None),
             KeyBinding::new("cmd-alt-down", NextThread, None),
             KeyBinding::new("cmd-alt-up", PreviousThread, None),
-            // In the terminal, ⌘W closes the terminal tab instead.
+            // In the pane, ⌘W closes its terminal tab or open file, or with only one terminal
+            // or no file open, hides the pane.
             KeyBinding::new("cmd-w", CloseTerminal, Some("Terminal")),
             // ⌘W in the Files view, also from what's focused inside it (a binding without a
             // context matches at the focused element, so each needs its own).

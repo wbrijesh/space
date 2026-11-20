@@ -500,11 +500,13 @@ impl SpaceApp {
         .detach();
     }
 
-    /// ⌘W in the terminal.
+    /// ⌘W in the terminal: close its tab; the only one stays (its shell keeps running) and
+    /// the pane hides instead.
     pub(crate) fn close_current_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected else { return };
-        if let Some(ix) = self.terminals.panes.get(&key).map(|p| p.selected) {
-            self.close_terminal(ix, window, cx);
+        match self.terminals.panes.get(&key) {
+            Some(pane) if pane.tabs.len() > 1 => self.close_terminal(pane.selected, window, cx),
+            _ => self.hide_terminal(window, cx),
         }
     }
 
