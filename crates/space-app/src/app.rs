@@ -32,7 +32,7 @@ pub use space_ui::actions::{
     ScrollToBottom,
     ToggleSidebar,
     ShowChat, ShowTrajectory, CloseFile, OpenInLastApp,
-    CloseTerminal, MaximizeTerminal, NewTerminal, NextTerminal, PreviousTerminal, TerminalClear, TerminalCopy, TerminalPaste,
+    CloseTerminal, MaximizePane, NewTerminal, NextTerminal, PreviousTerminal, TerminalClear, TerminalCopy, TerminalPaste,
     ToggleRightPane, ShowTerminal, ShowFiles, OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
 };
 use space_ui::assets::SpaceAssets;
@@ -175,7 +175,9 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-j", ShowTerminal, None),
             KeyBinding::new("cmd-alt-b", ToggleRightPane, None),
             KeyBinding::new("cmd-p", ShowFiles, None),
-            KeyBinding::new("cmd-shift-enter", MaximizeTerminal, Some("Terminal")),
+            // Maximize the right pane, from anywhere (the terminal would take the key otherwise).
+            KeyBinding::new("cmd-shift-enter", MaximizePane, None),
+            KeyBinding::new("cmd-shift-enter", MaximizePane, Some("Terminal")),
             KeyBinding::new("cmd-t", NewTerminal, Some("Terminal")),
             KeyBinding::new("cmd-w", CloseThread, None),
             KeyBinding::new("cmd-r", RenameThread, None),

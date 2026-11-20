@@ -32,7 +32,7 @@ gpui::actions!(
         CloseTerminal,
         NextTerminal,
         PreviousTerminal,
-        MaximizeTerminal,
+        MaximizePane,
         TerminalCopy,
         TerminalPaste,
         TerminalClear,

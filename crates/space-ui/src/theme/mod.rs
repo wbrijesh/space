@@ -173,6 +173,8 @@ pub mod size {
     /// The bars along the top of a pane (Chat | Trajectory, the terminal's tabs), the same
     /// height so they line up side by side. Includes the bottom border.
     pub const PANE_BAR_H: Pixels = px(33.);
+    /// The folder tree's column beside open files in the right pane.
+    pub const PANE_TREE_W: Pixels = px(240.);
     pub const SIDEBAR_W: Pixels = px(316.);
     /// Width reserved for the macOS traffic lights (at x=18, ~52px wide) plus a gap before
     /// the first title-bar button.

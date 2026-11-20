@@ -33,7 +33,7 @@ use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
 
 use crate::app::{
-    CloseSettings, CloseTerminal, CloseThread, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizeTerminal, NewTerminal, NewThread,
+    CloseSettings, CloseTerminal, CloseThread, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizePane, NewTerminal, NewThread,
     NextTerminal, OpenSettings, PreviousTerminal, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleRightPane, ShowTerminal, ShowFiles, ShowChat, ShowTrajectory, CloseFile,
     OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
 };
@@ -151,7 +151,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &CloseTerminal, window, cx| this.close_current_terminal(window, cx)))
         .on_action(cx.listener(|this, _: &NextTerminal, window, cx| this.step_terminal(1, window, cx)))
         .on_action(cx.listener(|this, _: &PreviousTerminal, window, cx| this.step_terminal(-1, window, cx)))
-        .on_action(cx.listener(|this, _: &MaximizeTerminal, _, cx| this.toggle_terminal_maximized(cx)))
+        .on_action(cx.listener(|this, _: &MaximizePane, _, cx| this.toggle_pane_maximized(cx)))
         .on_action(cx.listener(|this, _: &Quit, window, cx| this.quit(window, cx)))
         .on_action(cx.listener(|this, _: &OpenFind, window, cx| this.open_find(window, cx)))
         .on_action(cx.listener(|this, _: &FindNext, window, cx| this.find_step(true, window, cx)))
@@ -384,45 +384,38 @@ fn with_terminal(
 /// The right pane: its header (view switch, the view's controls, hide), then the view, or the
 /// chooser when the thread hasn't picked one.
 fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
-    use space_ui::components::right_pane::{ViewHandler, chooser, header};
+    use space_ui::components::right_pane::{ViewHandler, chooser, header, sub_bar};
     let view = app.terminals.pane(key).and_then(|p| p.view);
     let on_view: ViewHandler = {
         let this = cx.entity().downgrade();
         Rc::new(move |v, w, cx| {
-            let _ = this.update(cx, |this, cx| this.show_pane_view(v, w, cx));
+            let _ = this.update(cx, |this, cx| this.switch_pane_view(v, w, cx));
         })
     };
-    let on_hide = handler(cx, |this, w, cx| this.hide_terminal(w, cx));
+    let on_maximize = handler(cx, |this, _, cx| this.toggle_pane_maximized(cx));
+    let maximized = app.terminals.pane(key).is_some_and(|p| p.maximized);
     let content = match view {
-        None => chooser(on_view, window).into_any_element(),
+        None => chooser(on_view.clone(), window).into_any_element(),
         Some(PaneView::Files) => app.files_content(key, cx),
-        Some(PaneView::Terminal) => terminal_content(app, key, window, cx),
+        Some(PaneView::Terminal) => div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(sub_bar(terminal_tabs(app, key, cx)))
+            .child(terminal_content(app, key, window, cx))
+            .into_any_element(),
     };
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .bg(color::bg())
-        .child(header(pane_tabs(app, key, view, cx), on_hide))
-        .child(content)
-        .into_any_element()
+    div().size_full().flex().flex_col().bg(color::bg()).child(header(view, maximized, on_view, on_maximize)).child(content).into_any_element()
 }
 
-/// The pane's one strip of tabs: the folder's tree, the terminals, the open files; then a new
-/// terminal, and maximize while a terminal shows.
-fn pane_tabs(app: &mut SpaceApp, key: u64, view: Option<PaneView>, cx: &mut Context<SpaceApp>) -> Div {
-    use space_ui::components::file_viewer::{file_tab, tree_tab};
-    use space_ui::components::terminal::{StripHandlers, maximize_button, new_terminal_button, terminal_tab};
-    let (tabs, selected, maximized) = match app.terminals.pane(key) {
-        Some(pane) => {
-            let tabs: Vec<_> = pane.tabs.iter().filter_map(|id| app.terminals.session(id)).map(|s| s.tab()).collect();
-            (tabs, pane.selected, pane.maximized)
-        }
-        None => (Vec::new(), 0, false),
+/// The Terminal mode's tabs: the terminals, then a new one.
+fn terminal_tabs(app: &SpaceApp, key: u64, cx: &mut Context<SpaceApp>) -> Div {
+    use space_ui::components::terminal::{StripHandlers, new_terminal_button, terminal_tab};
+    let (tabs, selected) = match app.terminals.pane(key) {
+        Some(pane) => (pane.tabs.iter().filter_map(|id| app.terminals.session(id)).map(|s| s.tab()).collect::<Vec<_>>(), pane.selected),
+        None => (Vec::new(), 0),
     };
-    let (files, active_file) = app.file_tab_names(key);
-    let terminal_shown = view == Some(PaneView::Terminal);
-    let files_shown = view == Some(PaneView::Files);
     let handlers = StripHandlers {
         on_select: {
             let this = cx.entity().downgrade();
@@ -437,40 +430,16 @@ fn pane_tabs(app: &mut SpaceApp, key: u64, view: Option<PaneView>, cx: &mut Cont
             })
         },
         on_new: handler(cx, |this, w, cx| this.new_terminal(w, cx)),
-        on_maximize: handler(cx, |this, _, cx| this.toggle_terminal_maximized(cx)),
     };
-    let select_file = |cx: &mut Context<SpaceApp>, ix: Option<usize>| -> Handler {
-        let this = cx.entity().downgrade();
-        Rc::new(move |w, cx| {
-            let _ = this.update(cx, |this, cx| this.select_file_tab(ix, w, cx));
-        })
-    };
-    let tree = tree_tab(files_shown && active_file.is_none(), select_file(cx, None));
-    let terminals: Vec<_> = tabs.iter().enumerate().map(|(ix, t)| terminal_tab(ix, t, terminal_shown && ix == selected, &handlers)).collect();
-    let file_tabs: Vec<_> = files
-        .iter()
-        .enumerate()
-        .map(|(ix, name)| {
-            let close = {
-                let this = cx.entity().downgrade();
-                Rc::new(move |w: &mut Window, cx: &mut App| {
-                    let _ = this.update(cx, |this, cx| this.close_file_tab(ix, w, cx));
-                }) as Rc<dyn Fn(&mut Window, &mut App)>
-            };
-            file_tab(ix, name, files_shown && active_file == Some(ix), select_file(cx, Some(ix)), close)
-        })
-        .collect();
+    let tabs = tabs.iter().enumerate().map(|(ix, t)| terminal_tab(ix, t, ix == selected, &handlers));
     div()
         .flex_1()
         .min_w_0()
         .flex()
         .items_center()
         .gap_1()
-        .child(
-            div().id("pane-tabs").flex_1().min_w_0().flex().items_center().gap_1().overflow_x_scroll().child(tree).children(terminals).children(file_tabs),
-        )
+        .child(div().id("terminal-tabs").flex_1().min_w_0().flex().items_center().gap_1().overflow_x_scroll().children(tabs))
         .when(app.host.has_terminal(), |d| d.child(new_terminal_button(&handlers)))
-        .when(terminal_shown, |d| d.child(maximize_button(maximized, &handlers)))
 }
 
 /// The Terminal view: the selected terminal, or why there's none.

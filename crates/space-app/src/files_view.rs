@@ -13,9 +13,10 @@ use gpui::*;
 use notify::Watcher as _;
 use space_ui::components::file_tree::{FileRow, GitMark, RowAction, TreeHandlers, TreeKey, file_tree, filter_field, notice};
 use space_ui::components::file_viewer::{FileHeader, ViewChoice, file_header, image_preview, loading, unpreviewable};
-use space_ui::components::right_pane::PaneView;
+use space_ui::components::file_viewer::file_tabs;
+use space_ui::components::right_pane::{PaneView, sub_bar};
 use space_ui::components::transcript::agent_message;
-use space_ui::theme::color;
+use space_ui::theme::{color, size};
 
 use crate::app::SpaceApp;
 use crate::diff::{self, Diff, Kind};
@@ -238,12 +239,40 @@ impl SpaceApp {
         }
     }
 
-    /// The Files view's content: the tree's page, or a file's preview. Its key context is
-    /// `Files` (⌘W closes the file, or from the tree hides the pane).
+    /// The Files view's content: the tree, filling the view while no file is open; else the
+    /// open files' tabs over the shown file, with the tree beside it unless it's hidden. Its key
+    /// context is `Files` (⌘W closes the shown file, or from the tree hides the pane).
     pub(crate) fn files_content(&mut self, key: u64, cx: &mut Context<Self>) -> AnyElement {
-        let content = match self.file_tabs.get(&key).and_then(|t| t.active) {
+        let (names, active) = self.file_tab_names(key);
+        let content = match active {
             None => self.files_page(key, cx),
-            Some(ix) => self.file_tab_view(key, ix, cx),
+            Some(ix) => {
+                let tree = !self.file_tabs.get(&key).is_some_and(|t| t.tree_hidden);
+                let on_select = {
+                    let this = cx.entity().downgrade();
+                    Rc::new(move |ix: usize, w: &mut Window, cx: &mut App| {
+                        let _ = this.update(cx, |this, cx| this.select_file_tab(ix, w, cx));
+                    })
+                };
+                let on_close = {
+                    let this = cx.entity().downgrade();
+                    Rc::new(move |ix: usize, w: &mut Window, cx: &mut App| {
+                        let _ = this.update(cx, |this, cx| this.close_file_tab(ix, w, cx));
+                    })
+                };
+                let on_tree = {
+                    let this = cx.entity().downgrade();
+                    Rc::new(move |w: &mut Window, cx: &mut App| {
+                        let _ = this.update(cx, |this, cx| this.toggle_file_tree(w, cx));
+                    })
+                };
+                let tabs = sub_bar(file_tabs(&names, Some(ix), tree, on_tree, on_select, on_close));
+                let tree_column = tree.then(|| {
+                    div().w(size::PANE_TREE_W).flex_none().min_h_0().flex().flex_col().border_r_1().border_color(color::border()).child(self.files_page(key, cx))
+                });
+                let file = div().flex_1().min_w_0().min_h_0().flex().flex_col().child(self.file_tab_view(key, ix, cx));
+                div().flex_1().min_h_0().flex().flex_col().child(tabs).child(div().flex_1().min_h_0().flex().children(tree_column).child(file)).into_any_element()
+            }
         };
         div().key_context("Files").flex_1().min_h_0().flex().flex_col().child(content).into_any_element()
     }
@@ -412,18 +441,35 @@ impl SpaceApp {
         cx.notify();
     }
 
-    pub(crate) fn select_file_tab(&mut self, ix: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+    /// Show open file `ix` (its tab was clicked).
+    pub(crate) fn select_file_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected else { return };
         self.terminals.panes.entry(key).or_default().view = Some(PaneView::Files);
         let tabs = self.file_tabs.entry(key).or_default();
-        tabs.active = ix.filter(|i| *i < tabs.tabs.len());
-        if let Some(path) = tabs.active.map(|i| tabs.tabs[i].path.clone())
-            && let Some(tree) = self.file_trees.get_mut(&key)
-        {
+        let Some(path) = tabs.tabs.get(ix).map(|t| t.path.clone()) else { return };
+        tabs.active = Some(ix);
+        if let Some(tree) = self.file_trees.get_mut(&key) {
             tree.selected = Some(path);
         }
-        let focus = if tabs.active.is_some() { &self.files.file_focus } else { &self.files.focus };
+        window.focus(&self.files.file_focus, cx);
+        cx.notify();
+    }
+
+    /// The tree's toggle beside the open files: hide it, or show it (and focus it).
+    pub(crate) fn toggle_file_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.selected else { return };
+        let tabs = self.file_tabs.entry(key).or_default();
+        tabs.tree_hidden = !tabs.tree_hidden;
+        let focus = if tabs.tree_hidden { &self.files.file_focus } else { &self.files.focus };
         window.focus(focus, cx);
+        cx.notify();
+    }
+
+    /// Show the tree (beside the open files, if it was hidden) and focus it.
+    pub(crate) fn reveal_file_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.selected else { return };
+        self.file_tabs.entry(key).or_default().tree_hidden = false;
+        window.focus(&self.files.focus, cx);
         cx.notify();
     }
 
@@ -443,8 +489,11 @@ impl SpaceApp {
             other => other,
         };
         if was_shown {
-            let active = tabs.active;
-            self.select_file_tab(active, window, cx);
+            match tabs.active {
+                Some(next) => self.select_file_tab(next, window, cx),
+                // The last one: the tree fills the view again.
+                None => window.focus(&self.files.focus, cx),
+            }
         }
         cx.notify();
     }
@@ -452,9 +501,10 @@ impl SpaceApp {
     /// ⌘W in the Files view: close the shown file; from the tree, hide the pane.
     pub(crate) fn close_files_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected else { return };
+        let in_tree = self.files.focus.is_focused(window);
         match self.file_tabs.get(&key).and_then(|t| t.active) {
-            Some(ix) => self.close_file_tab(ix, window, cx),
-            None => self.hide_terminal(window, cx),
+            Some(ix) if !in_tree => self.close_file_tab(ix, window, cx),
+            _ => self.hide_terminal(window, cx),
         }
     }
 
@@ -679,8 +729,10 @@ impl SpaceApp {
 #[derive(Default)]
 pub(crate) struct FileTabs {
     pub(crate) tabs: Vec<FileTab>,
-    /// The shown tab; `None`: the Files page.
+    /// The shown file; `None` only when none is open (the tree fills the view).
     pub(crate) active: Option<usize>,
+    /// The tree beside the open files is hidden.
+    pub(crate) tree_hidden: bool,
 }
 
 pub(crate) struct FileTab {

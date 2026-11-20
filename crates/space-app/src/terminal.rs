@@ -305,16 +305,22 @@ impl SpaceApp {
         }
         let Some(key) = self.selected else { return };
         let shown = self.terminals.panes.get(&key).is_some_and(|p| p.open && p.view == Some(view));
-        let tree_shown = self.file_tabs.get(&key).is_none_or(|t| t.active.is_none());
+        let tree_shown = self.file_tabs.get(&key).is_none_or(|t| t.active.is_none() || !t.tree_hidden);
         if shown && (if view == PaneView::Files { tree_shown } else { self.terminal_focused(key, window, cx) }) {
             self.hide_terminal(window, cx);
             return;
         }
         self.open_pane(key, Some(view), window, cx);
-        // Files opens on the tree, not on the file shown last.
+        // Files opens with the tree showing.
         if view == PaneView::Files {
-            self.select_file_tab(None, window, cx);
+            self.reveal_file_tree(window, cx);
         }
+    }
+
+    /// One of the pane's mode tabs (or the chooser): switch to that mode.
+    pub(crate) fn switch_pane_view(&mut self, view: PaneView, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.selected else { return };
+        self.open_pane(key, Some(view), window, cx);
     }
 
     /// Open thread `key`'s pane on `view` (`None`: the chooser). Terminal starts a shell the
@@ -324,10 +330,6 @@ impl SpaceApp {
         pane.open = true;
         if view.is_some() {
             pane.view = view;
-        }
-        // Only the terminal is maximized.
-        if pane.view != Some(PaneView::Terminal) {
-            pane.maximized = false;
         }
         if view == Some(PaneView::Files) {
             let focus = self.files.focus.clone();
@@ -564,9 +566,10 @@ impl SpaceApp {
         self.select_terminal(ix, window, cx);
     }
 
-    pub(crate) fn toggle_terminal_maximized(&mut self, cx: &mut Context<Self>) {
+    /// Maximize the open pane (it fills the window beside the sidebar), or restore it.
+    pub(crate) fn toggle_pane_maximized(&mut self, cx: &mut Context<Self>) {
         let Some(key) = self.selected else { return };
-        if let Some(pane) = self.terminals.panes.get_mut(&key).filter(|p| p.open && p.view == Some(PaneView::Terminal)) {
+        if let Some(pane) = self.terminals.panes.get_mut(&key).filter(|p| p.open) {
             pane.maximized = !pane.maximized;
             cx.notify();
         }

@@ -12,7 +12,7 @@ use space_terminal::{CursorShape, Frame, FrameCell};
 
 use super::tip::TipExt as _;
 use super::widgets::{icon_button, pill_button};
-use crate::actions::{MaximizeTerminal, NewTerminal};
+use crate::actions::NewTerminal;
 use crate::theme::{color, radius, size, text};
 
 /// The terminal's text size.
@@ -217,13 +217,12 @@ pub struct StripHandlers {
     pub on_select: IndexHandler,
     pub on_close: IndexHandler,
     pub on_new: Handler,
-    pub on_maximize: Handler,
 }
 
 impl Default for StripHandlers {
     fn default() -> Self {
         let noop: Handler = Rc::new(|_, _| {});
-        Self { on_select: Rc::new(|_, _, _| {}), on_close: Rc::new(|_, _, _| {}), on_new: noop.clone(), on_maximize: noop }
+        Self { on_select: Rc::new(|_, _, _| {}), on_close: Rc::new(|_, _, _| {}), on_new: noop }
     }
 }
 
@@ -277,15 +276,8 @@ pub fn new_terminal_button(h: &StripHandlers) -> Stateful<Div> {
     icon_button("terminal-new", Lucide::Plus, true, false).tip_action("New terminal", &NewTerminal).on_click(move |_, w, cx| new(w, cx))
 }
 
-pub fn maximize_button(maximized: bool, h: &StripHandlers) -> Stateful<Div> {
-    let maximize = h.on_maximize.clone();
-    icon_button("terminal-maximize", if maximized { Lucide::Minimize2 } else { Lucide::Maximize2 }, true, false)
-        .tip_action(if maximized { "Restore" } else { "Maximize" }, &MaximizeTerminal)
-        .on_click(move |_, w, cx| maximize(w, cx))
-}
-
-/// The terminals' tabs (`selected`: the one shown, if the terminal is), then new and maximize.
-pub fn tab_strip(tabs: &[TerminalTab], selected: Option<usize>, maximized: bool, h: &StripHandlers) -> Div {
+/// The terminals' tabs (`selected`: the one shown, if the terminal is), then a new one.
+pub fn tab_strip(tabs: &[TerminalTab], selected: Option<usize>, h: &StripHandlers) -> Div {
     div()
         .flex_1()
         .min_w_0()
@@ -296,7 +288,6 @@ pub fn tab_strip(tabs: &[TerminalTab], selected: Option<usize>, maximized: bool,
             tabs.iter().enumerate().map(|(ix, t)| terminal_tab(ix, t, selected == Some(ix), h)),
         ))
         .child(new_terminal_button(h))
-        .child(maximize_button(maximized, h))
 }
 
 /// Under a terminal whose shell ended.
@@ -352,11 +343,15 @@ pub fn sample_frame(cols: u16, rows: u16) -> Frame {
 
 #[cfg(feature = "dev")]
 pub fn previews() -> Vec<crate::preview::ComponentPreview> {
-    use super::right_pane::header;
+    use super::right_pane::{PaneView, header, sub_bar};
     use crate::preview::{Area, ComponentPreview, Example};
-    /// The pane's header around the terminals' tabs, as the app shows it.
+    /// The pane's header on Terminal, and the terminals' tabs under it, as the app shows them.
     fn strip(tabs: &[TerminalTab], selected: usize, maximized: bool) -> Div {
-        header(tab_strip(tabs, Some(selected), maximized, &StripHandlers::default()), Rc::new(|_, _| {}))
+        div()
+            .flex()
+            .flex_col()
+            .child(header(Some(PaneView::Terminal), maximized, Rc::new(|_, _, _| {}), Rc::new(|_, _| {})))
+            .child(sub_bar(tab_strip(tabs, Some(selected), &StripHandlers::default())))
     }
     let tabs = vec![
         TerminalTab { title: "zsh".into(), unread: false, ended: false },

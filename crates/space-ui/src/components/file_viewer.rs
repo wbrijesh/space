@@ -1,4 +1,4 @@
-//! The Files view's tabs and file preview: a strip with the Files page and one tab per open
+//! The Files view's tabs and file preview: a strip with the tree's toggle and one tab per open
 //! file; a file's header (its path, the viewer choice, wrap, Open in); and the states a
 //! preview can be in.
 
@@ -68,9 +68,10 @@ pub fn pane_tab(id: ElementId, label: Option<SharedString>, icon: Icon, on: bool
         .on_click(move |_, w, cx| select(w, cx))
 }
 
-/// The folder's tree: always first in the strip, just its icon.
-pub fn tree_tab(on: bool, select: Handler) -> Stateful<Div> {
-    pane_tab("files-page-tab".into(), None, Icon::new(Lucide::ListTree), on, None, select).tip("All files")
+/// Shows or hides the folder's tree beside the open files: first in the strip, just its icon.
+pub fn tree_toggle(shown: bool, toggle: Handler) -> Stateful<Div> {
+    pane_tab("files-tree-toggle".into(), None, Icon::new(Lucide::ListTree), shown, None, toggle)
+        .tip(if shown { "Hide the folder tree" } else { "Show the folder tree" })
 }
 
 /// An open file's tab: its icon and name.
@@ -78,16 +79,19 @@ pub fn file_tab(ix: usize, name: &SharedString, on: bool, select: Handler, close
     pane_tab(ElementId::NamedInteger("file-tab".into(), ix as u64), Some(name.clone()), Icon::new(file_icon(name)), on, Some(close), select)
 }
 
-/// The tree's tab, then the open files' (`active`: the shown file; `None`, the tree).
-pub fn file_tabs(names: &[SharedString], active: Option<usize>, on_select: TabHandler, on_close: IndexHandler) -> Stateful<Div> {
-    let page = {
-        let select = on_select.clone();
-        tree_tab(active.is_none(), Rc::new(move |w, cx| select(None, w, cx)))
-    };
-    div().id("file-tabs").flex_1().min_w_0().flex().items_center().gap_1().overflow_x_scroll().child(page).children(names.iter().enumerate().map(|(ix, name)| {
-        let (select, close) = (on_select.clone(), on_close.clone());
-        file_tab(ix, name, active == Some(ix), Rc::new(move |w, cx| select(Some(ix), w, cx)), Rc::new(move |w, cx| close(ix, w, cx)))
-    }))
+/// The tree's toggle (`tree`: it's shown), then the open files' tabs (`active`: the one shown).
+pub fn file_tabs(names: &[SharedString], active: Option<usize>, tree: bool, on_tree: Handler, on_select: IndexHandler, on_close: IndexHandler) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap_1()
+        .child(tree_toggle(tree, on_tree))
+        .child(div().id("file-tabs").flex_1().min_w_0().flex().items_center().gap_1().overflow_x_scroll().children(names.iter().enumerate().map(|(ix, name)| {
+            let (select, close) = (on_select.clone(), on_close.clone());
+            file_tab(ix, name, active == Some(ix), Rc::new(move |w, cx| select(ix, w, cx)), Rc::new(move |w, cx| close(ix, w, cx)))
+        })))
 }
 
 /// One of a file's views (Preview, Changes, Full file…): its label, shown or not, and picking it.
@@ -274,7 +278,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         Example::new("tabs", |_, _| {
             let names: Vec<SharedString> = vec!["files_view.rs".into(), "README.md".into(), "logo.png".into()];
             div().w(px(620.)).h(px(34.)).px_2().flex().items_center().bg(color::bg()).border_1().border_color(color::border())
-                .child(file_tabs(&names, Some(0), Rc::new(|_, _, _| {}), Rc::new(|_, _, _| {})))
+                .child(file_tabs(&names, Some(0), true, Rc::new(|_, _| {}), Rc::new(|_, _, _| {}), Rc::new(|_, _, _| {})))
                 .into_any_element()
         }),
         Example::new("header: a changed file", move |_, _| {

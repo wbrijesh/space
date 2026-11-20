@@ -1,6 +1,6 @@
-//! The right pane beside a thread: Terminal or Files. Its header (one strip of tabs: the
-//! folder's tree, the terminals, the open files; then hide), the chooser shown before a thread
-//! picks a view, and the Files view's placeholder.
+//! The right pane beside a thread, in two modes: Files and Terminal. Its header (the two modes,
+//! then maximize; the title bar's pane button hides it), the bar under it with the mode's own tabs, and the chooser shown before a thread
+//! picks a mode.
 
 use std::rc::Rc;
 
@@ -8,10 +8,11 @@ use gpui::assets::IconName as Lucide;
 use gpui::component::{Icon, IconName};
 use gpui::*;
 
+use super::file_viewer::pane_tab;
 use super::menu::shortcut_label;
 use super::tip::TipExt as _;
 use super::widgets::icon_button;
-use crate::actions::{ShowFiles, ShowTerminal, ToggleRightPane};
+use crate::actions::{MaximizePane, ShowFiles, ShowTerminal};
 use crate::theme::{color, radius, size, text};
 
 /// The pane's views.
@@ -49,20 +50,31 @@ impl PaneView {
 pub type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 pub type ViewHandler = Rc<dyn Fn(PaneView, &mut Window, &mut App)>;
 
-/// The pane's header: its tabs (the tree, the terminals, the open files) and what goes with
-/// them, then hide.
-pub fn header(tabs: Div, on_hide: Handler) -> Div {
-    div()
-        .h(size::PANE_BAR_H)
-        .flex_none()
-        .flex()
-        .items_center()
-        .gap_1()
-        .px_2()
-        .border_b_1()
-        .border_color(color::border())
-        .child(tabs)
-        .child(icon_button("pane-hide", Lucide::X, true, false).tip_action("Hide pane", &ToggleRightPane).on_click(move |_, w, cx| on_hide(w, cx)))
+/// The pane's header: its two modes (`view`: the one shown), then maximize (it fills the
+/// window beside the sidebar) or restore.
+pub fn header(view: Option<PaneView>, maximized: bool, on_view: ViewHandler, on_maximize: Handler) -> Div {
+    let modes = [PaneView::Files, PaneView::Terminal].map(|v| {
+        let pick = on_view.clone();
+        let id = ElementId::Name(format!("pane-mode-{}", v.label()).into());
+        pane_tab(id, Some(v.label().into()), v.icon(), view == Some(v), None, Rc::new(move |w, cx| pick(v, w, cx)))
+            .tip_action(v.label(), v.action().as_ref())
+    });
+    bar()
+        .child(div().flex_1().min_w_0().flex().items_center().gap_1().children(modes))
+        .child(
+            icon_button("pane-maximize", if maximized { Lucide::Minimize2 } else { Lucide::Maximize2 }, true, false)
+                .tip_action(if maximized { "Restore" } else { "Maximize" }, &MaximizePane)
+                .on_click(move |_, w, cx| on_maximize(w, cx)),
+        )
+}
+
+/// The bar under the header, with the shown mode's tabs (the open files, or the terminals).
+pub fn sub_bar(tabs: impl IntoElement) -> Div {
+    bar().child(tabs)
+}
+
+fn bar() -> Div {
+    div().h(size::PANE_BAR_H).flex_none().flex().items_center().gap_1().px_2().border_b_1().border_color(color::border())
 }
 
 /// Before a thread picks a view: two large rows, centred, each with its icon and shortcut.
@@ -92,44 +104,60 @@ pub fn chooser(on_view: ViewHandler, window: &Window) -> Div {
     )
 }
 
-/// The Files view (filled in later).
-pub fn files_placeholder() -> Div {
-    div().flex_1().min_h_0().flex().items_center().justify_center().text_size(text::SM).text_color(color::text_3()).child("Files")
-}
 
 #[cfg(feature = "dev")]
 pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     use std::sync::Arc;
 
+    use gpui::prelude::FluentBuilder as _;
+
+    use super::file_viewer::file_tabs;
     use super::terminal::{StripHandlers, TerminalTab, sample_frame, tab_strip, terminal_grid};
     use crate::preview::{Area, ComponentPreview, Example};
 
     fn pane(child: impl IntoElement) -> Div {
         div().w(px(560.)).h(px(320.)).flex().flex_col().bg(color::bg()).border_1().border_color(color::border()).child(child)
     }
-    let on_view: ViewHandler = Rc::new(|_, _, _| {});
-    let hide: Handler = Rc::new(|_, _| {});
-    let v1 = on_view;
-    let (h1, h2, h3) = (hide.clone(), hide.clone(), hide);
-    vec![ComponentPreview::new(Area::Shell, "Right pane", "Beside a thread: Terminal or Files, and the chooser before one is picked.").stacked().examples([
+    fn header_for(view: Option<PaneView>) -> Div {
+        header(view, false, Rc::new(|_, _, _| {}), Rc::new(|_, _| {}))
+    }
+    fn placeholder(label: &'static str) -> Div {
+        div().flex_1().min_h_0().flex().items_center().justify_center().text_size(text::SM).text_color(color::text_3()).child(label)
+    }
+    let names: Vec<SharedString> = vec!["main.rs".into(), "README.md".into()];
+    let files = move |tree: bool| {
+        let tabs = file_tabs(&names, Some(0), tree, Rc::new(|_, _| {}), Rc::new(|_, _, _| {}), Rc::new(|_, _, _| {}));
+        let body = div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .when(tree, |d| d.child(div().w(size::PANE_TREE_W).flex_none().border_r_1().border_color(color::border()).flex().child(placeholder("Folder tree"))))
+            .child(placeholder("main.rs"));
+        pane(div().size_full().flex().flex_col().child(header_for(Some(PaneView::Files))).child(sub_bar(tabs)).child(body)).into_any_element()
+    };
+    let (f1, f2) = (files.clone(), files);
+    vec![ComponentPreview::new(Area::Shell, "Right pane", "Beside a thread: Files or Terminal, each with its own tabs, and the chooser before one is picked.").stacked().examples([
         Example::new("chooser", move |window, _| {
-            pane(div().size_full().flex().flex_col().child(header(div().flex_1(), h1.clone())).child(chooser(v1.clone(), window))).into_any_element()
+            pane(div().size_full().flex().flex_col().child(header_for(None)).child(chooser(Rc::new(|_, _, _| {}), window))).into_any_element()
         }),
+        Example::new("files: the tree, no file open", move |_, _| {
+            pane(div().size_full().flex().flex_col().child(header_for(Some(PaneView::Files))).child(placeholder("Folder tree"))).into_any_element()
+        }),
+        Example::new("files: open files beside the tree", move |_, _| f1(true)),
+        Example::new("files: tree hidden", move |_, _| f2(false)),
         Example::new("terminal", move |_, _| {
             let tabs = vec![TerminalTab { title: "zsh".into(), unread: false, ended: false }, TerminalTab { title: "cargo".into(), unread: true, ended: false }];
-            let strip = tab_strip(&tabs, Some(0), false, &StripHandlers::default());
+            let strip = tab_strip(&tabs, Some(0), &StripHandlers::default());
             pane(
                 div()
                     .size_full()
                     .flex()
                     .flex_col()
-                    .child(header(strip, h2.clone()))
+                    .child(header_for(Some(PaneView::Terminal)))
+                    .child(sub_bar(strip))
                     .child(div().flex_1().child(terminal_grid(Arc::new(sample_frame(70, 12)), false, Rc::new(|_, _, _| {})))),
             )
             .into_any_element()
-        }),
-        Example::new("files", move |_, _| {
-            pane(div().size_full().flex().flex_col().child(header(div().flex_1(), h3.clone())).child(files_placeholder())).into_any_element()
         }),
     ])]
 }
