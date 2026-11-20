@@ -34,7 +34,7 @@ use space_ui::ClickHandler;
 
 use crate::app::{
     CloseSettings, CloseTerminal, CloseThread, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizePane, NewTerminal, NewThread,
-    NextTerminal, OpenSettings, PreviousTerminal, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleRightPane, ShowTerminal, ShowFiles, ShowChat, ShowTrajectory, CloseFile,
+    NextTerminal, OpenSettings, PreviousTerminal, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleRightPane, ShowTerminal, ShowFiles, ShowSideChat, ShowChat, ShowTrajectory, CloseFile,
     OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
 };
 use crate::settings::SaveKind;
@@ -147,6 +147,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &ToggleRightPane, window, cx| this.toggle_right_pane(window, cx)))
         .on_action(cx.listener(|this, _: &ShowTerminal, window, cx| this.show_pane_view(PaneView::Terminal, window, cx)))
         .on_action(cx.listener(|this, _: &ShowFiles, window, cx| this.show_pane_view(PaneView::Files, window, cx)))
+        .on_action(cx.listener(|this, _: &ShowSideChat, window, cx| this.show_pane_view(PaneView::SideChat, window, cx)))
         .on_action(cx.listener(|this, _: &NewTerminal, window, cx| this.new_terminal(window, cx)))
         .on_action(cx.listener(|this, _: &CloseTerminal, window, cx| this.close_current_terminal(window, cx)))
         .on_action(cx.listener(|this, _: &NextTerminal, window, cx| this.step_terminal(1, window, cx)))
@@ -184,7 +185,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         }))
         // Two-finger swipes show and hide a pane (Settings ▸ Trackpad).
         .on_scroll(cx.listener(|this, e: &ScrollEvent, window, cx| this.scrolled(e, window, cx)))
-        // Esc in the composer closes the `/` menu, then the side question, then stops the agent
+        // Esc in the composer closes the `/` menu, then stops the agent
         // while it works (open panels and menus close first).
         .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
             if e.keystroke.key != "escape"
@@ -194,7 +195,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
             {
                 return;
             }
-            if this.close_command_menu(cx) || this.close_side(cx) {
+            if this.close_command_menu(cx) {
                 cx.stop_propagation();
             } else if this.current().is_some_and(|t| t.state.running) {
                 this.cancel(cx);
@@ -405,6 +406,7 @@ fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Con
             .child(sub_bar(terminal_tabs(app, key, cx)))
             .child(terminal_content(app, key, window, cx))
             .into_any_element(),
+        Some(PaneView::SideChat) => crate::side_chat::side_chat_content(app, key, window, cx),
     };
     div().size_full().flex().flex_col().bg(color::bg()).child(header(view, maximized, on_view, on_maximize)).child(content).into_any_element()
 }
@@ -1173,9 +1175,6 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         on_close_commands: handler(cx, |this, _, cx| {
             this.close_command_menu(cx);
         }),
-        on_close_side: handler(cx, |this, _, cx| {
-            this.close_side(cx);
-        }),
     };
     // A new thread with nothing typed offers this folder's closed threads.
     let untouched = thread.is_empty()
@@ -1217,7 +1216,6 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         .collect();
     Composer::new("composer", &app.input)
         .commands(app.command_menu(cx))
-        .side(app.side_view())
         .running(thread.state.running)
         .queued(thread.queued.is_some())
         .queued_messages(queued_messages)

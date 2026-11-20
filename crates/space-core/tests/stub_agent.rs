@@ -61,6 +61,11 @@ async fn until(
     .expect("timed out waiting for event");
 }
 
+/// What the agent said, all of it.
+fn agent_text(state: &SessionState) -> String {
+    state.items.iter().filter_map(|i| if let TranscriptItem::Agent(t) = i { Some(t.as_str()) } else { None }).collect()
+}
+
 fn turn_ended(e: &HostEvent) -> bool {
     matches!(e, HostEvent::Session { event: SessionEvent::TurnEnded { .. }, .. })
 }
@@ -263,32 +268,32 @@ async fn configure_switches_model_and_thinking() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn side_questions_are_answered_beside_the_conversation() {
+async fn a_side_chat_is_a_session_beside_another() {
     let root = stub_root();
     let (host, mut events) = host(root.path());
     let agent = host.start_agent("stub").await.unwrap();
-    let session = agent.new_session(root.path()).await.unwrap();
-    let mut state = SessionState::new(session.id());
+    let main = agent.new_session(root.path()).await.unwrap();
+    let mut state = SessionState::new(main.id());
     let mut seen = Vec::new();
-    // The status lists the agent's slash commands.
+    // The status lists the agent's slash commands, `/btw` marked as the side chat's.
     until(&mut events, &mut state, &mut seen, |e| matches!(e, HostEvent::Session { event: SessionEvent::Status(_), .. })).await;
     let commands = state.status.commands.clone().unwrap_or_default();
     assert!(commands.iter().any(|c| c.name == "btw" && c.side), "{commands:?}");
 
-    assert_eq!(session.ask_aside("why?".into()).await.unwrap(), "Side answer to: why?");
-    until(&mut events, &mut state, &mut seen, |e| matches!(e, HostEvent::Session { event: SessionEvent::SideAnswer { .. }, .. })).await;
-    let side = state.side().cloned().unwrap();
-    assert_eq!((side.question.as_str(), side.answer.as_deref(), side.error), ("why?", Some("Side answer to: why?"), None));
-    // Not part of the transcript.
-    assert!(state.items.is_empty(), "{:?}", state.items);
+    // The agent is told which session it's beside, on `session/new` and on `session/load`.
+    let data = root.path().join("side-data");
+    let side = agent.new_side_session(main.id(), root.path(), Some(data.clone()), Some("t1")).await.unwrap();
+    assert_ne!(side.id(), main.id());
+    let mut side_state = SessionState::new(side.id());
+    assert_eq!(side.prompt("hi").await.unwrap(), "end_turn");
+    until(&mut events, &mut side_state, &mut seen, turn_ended).await;
+    assert!(agent_text(&side_state).starts_with(&format!("Side chat of {}: Hello", main.id())), "{side_state:?}");
 
-    let err = session.ask_aside("btwfail".into()).await.unwrap_err();
-    assert!(format!("{err:#}").contains("no side answers today"), "{err:#}");
-    until(&mut events, &mut state, &mut seen, |e| matches!(e, HostEvent::Session { event: SessionEvent::SideAnswer { .. }, .. })).await;
-    assert!(state.side().and_then(|s| s.error.as_deref()).is_some_and(|e| e.contains("no side answers today")));
-    state.dismiss_side(true);
-    assert!(state.side().is_none());
-    assert_eq!(state.sides.len(), 2);
+    let side = agent.load_side_session(side.id(), main.id(), root.path(), Some(data), Some("t1")).await.unwrap();
+    let mut side_state = SessionState::new(side.id());
+    assert_eq!(side.prompt("again").await.unwrap(), "end_turn");
+    until(&mut events, &mut side_state, &mut seen, turn_ended).await;
+    assert!(agent_text(&side_state).contains(&format!("Side chat of {}: Hello", main.id())), "{side_state:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

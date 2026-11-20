@@ -8,7 +8,7 @@
 // does (`sandbox-exec`, no writes outside the temp folder) in the session that checks it.
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Readable, Writable } from "node:stream";
@@ -105,8 +105,9 @@ async function prompt(ctx: acp.ClientContext, sessionId: string, text: string, m
 	return { res, from, text: textSince(from, sessionId) };
 }
 
-async function newSession(ctx: acp.ClientContext): Promise<string> {
-	const { sessionId } = await ctx.request(acp.methods.agent.session.new, { cwd: project, mcpServers: [] });
+/** A new session (`sideOf`: a side chat of that one) on the smoke test's model. */
+async function newSession(ctx: acp.ClientContext, sideOf?: string): Promise<string> {
+	const { sessionId } = await ctx.request(acp.methods.agent.session.new, { cwd: project, mcpServers: [], ...(sideOf ? { _meta: { "space/sideOf": sideOf } } : {}) });
 	await new Promise((r) => setTimeout(r, 200));
 	await ctx.request<SpaceStatus>("_space/session/configure", { sessionId, model: MODEL, thinkingLevel: "low" });
 	return sessionId;
@@ -114,6 +115,7 @@ async function newSession(ctx: acp.ClientContext): Promise<string> {
 
 const first = spawnAgent();
 let kept = "";
+let sideKept = "";
 await first.client.connectWith(first.stream, async (ctx) => {
 	const init = await ctx.request(acp.methods.agent.initialize, { protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {}, clientInfo: { name: "space-smoke", version: "0" } });
 	check(init.protocolVersion === acp.PROTOCOL_VERSION && init._meta?.["space/steer"] === true, "initialize: ACP version, steering offered");
@@ -169,13 +171,23 @@ await first.client.connectWith(first.stream, async (ctx) => {
 	check(steered.includes("steer-1"), "_space/steered: the steered message was read");
 	check(/FLAMINGO/i.test(steer.text), "Claude followed the steered message");
 
-	// A side question: answered from the conversation, never part of it.
-	const side = await ctx.request<{ text: string }>("_space/session/btw", { sessionId, question: "What codeword was in your context earlier? One word." });
-	check(/HERON/i.test(side.text), `/btw answered from the conversation (${JSON.stringify(side.text.trim())})`);
-	const side2 = await ctx.request<{ text: string }>("_space/session/btw", { sessionId, question: "Reply with the word ZEBRA-SEVEN and nothing else." });
-	check(/ZEBRA/i.test(side2.text), "a second side question answered");
+	// A side chat: a copy of this conversation that can only read, told what the thread adds.
+	sideKept = await newSession(ctx, sessionId);
+	const sideId = sideKept;
+	const s1 = await prompt(ctx, sideId, "What codeword was in your context earlier? One word.");
+	check(/HERON/i.test(s1.text), `the side chat started as a copy of the conversation (${JSON.stringify(s1.text.trim())})`);
+	const sideInit = recorded(sideId).find((m) => m.type === "system" && m.subtype === "init") as { tools?: string[] } | undefined;
+	check(JSON.stringify([...(sideInit?.tools ?? [])].sort()) === JSON.stringify(["Glob", "Grep", "Read", "WebFetch", "WebSearch"]), `the side chat can only read (${sideInit?.tools?.join(", ")})`);
+	await prompt(ctx, sideId, "Create a file named side-wrote.txt in the current folder containing hi. If you can't, reply CANNOT.");
+	check(!existsSync(join(project, "side-wrote.txt")), "the side chat couldn't write a file");
+	await prompt(ctx, sessionId, "Remember a second codeword: KESTREL. Reply only with: ok");
+	const s2 = await prompt(ctx, sideId, "Which second codeword has the main thread been given since? One word.");
+	check(/KESTREL/i.test(s2.text), `the side chat was told what the main thread added (${JSON.stringify(s2.text.trim())})`);
+	const caught = updates.slice(s2.from).find((n) => n.sessionId === sideId && n.update.sessionUpdate === "tool_call")?.update;
+	check(caught?.sessionUpdate === "tool_call" && caught.title.startsWith("Caught up with the main thread"), "the catch-up was shown");
+	await prompt(ctx, sideId, "Reply with the word ZEBRA-SEVEN and nothing else.");
 	const asked = await prompt(ctx, sessionId, "Has the word ZEBRA appeared anywhere in this conversation? Answer only yes or no.");
-	check(/\bno\b/i.test(asked.text), `the side questions aren't part of the conversation (${JSON.stringify(asked.text.trim())})`);
+	check(/\bno\b/i.test(asked.text), `the side chat isn't part of the main conversation (${JSON.stringify(asked.text.trim())})`);
 
 	// Slash commands.
 	const context = await prompt(ctx, sessionId, "/context");
@@ -203,18 +215,17 @@ await first.client.connectWith(first.stream, async (ctx) => {
 	check(preExecutes.slice(before).some((p) => p.tool === "Bash"), "the subagent's Bash call went to the host first");
 	check(/from-subagent/.test(sub.text), "Claude reported the subagent's result");
 
-	// A side question while a turn runs.
-	let sideMidTurn: Promise<{ text: string }> | undefined;
+	// The side chat while a main turn runs: it's told about the running turn too.
+	let sideMidTurn: ReturnType<typeof prompt> | undefined;
 	onUpdate = (n) => {
 		if (!sideMidTurn && n.sessionId === sessionId && n.update.sessionUpdate === "tool_call") {
-			// The fork has the conversation up to now: the running task included.
-			sideMidTurn = ctx.request<{ text: string }>("_space/session/btw", { sessionId, question: "Which single word were you asked to reply with once the current command is done? Just that word." });
+			sideMidTurn = prompt(ctx, sideId, "Which single word was the main thread asked to reply with once its current command is done? Just that word.");
 		}
 	};
 	const busy = await prompt(ctx, sessionId, "Use the Bash tool to run exactly: for i in 1 2 3 4 5 6; do echo $i; sleep 1; done — then reply with: counted");
 	onUpdate = undefined;
 	const midAnswer = await sideMidTurn;
-	check(!!midAnswer && /counted/i.test(midAnswer.text) && busy.res.stopReason === "end_turn" && /counted/i.test(busy.text), `/btw answered from the running turn while it ran (${JSON.stringify(midAnswer?.text.trim())})`);
+	check(!!midAnswer && /counted/i.test(midAnswer.text) && busy.res.stopReason === "end_turn" && /counted/i.test(busy.text), `the side chat answered about the running turn while it ran (${JSON.stringify(midAnswer?.text.trim())})`);
 
 	// Stopping a /goal stops the goal: the next prompt isn't carried on with it.
 	const goalSession = await newSession(ctx);
@@ -275,6 +286,14 @@ if (kept) {
 		await ctx.request<SpaceStatus>("_space/session/configure", { sessionId: kept, model: MODEL, thinkingLevel: "low" });
 		const recall = await prompt(ctx, kept, "Which word did I ask you to end a reply with earlier? One word.");
 		check(/FLAMINGO/i.test(recall.text), "session/load continued the conversation");
+		// The side chat loads too, and still follows the main thread from where it left off.
+		await ctx.request(acp.methods.agent.session.load, { sessionId: sideKept, cwd: project, mcpServers: [], _meta: { "space/sideOf": kept } });
+		await ctx.request<SpaceStatus>("_space/session/configure", { sessionId: sideKept, model: MODEL, thinkingLevel: "low" });
+		const sideRecall = await prompt(ctx, sideKept, "What did the main thread's latest message ask Claude about? Answer in a few words.");
+		check(/FLAMINGO|end a reply|word/i.test(sideRecall.text), `the loaded side chat caught up with the main thread (${JSON.stringify(sideRecall.text.trim())})`);
+		const caughtUp = updates.slice(sideRecall.from).find((n) => n.sessionId === sideKept && n.update.sessionUpdate === "tool_call")?.update;
+		const note = caughtUp?.sessionUpdate === "tool_call" ? JSON.stringify(caughtUp.content ?? []) : "";
+		check(note.includes("Which word did I ask you to end a reply with") && !note.includes("KESTREL") && !note.includes("compacted or started over"), "after loading, it was told only what's new since it left off");
 	});
 	second.child.stdin.end();
 	await new Promise((r) => second.child.on("exit", r));

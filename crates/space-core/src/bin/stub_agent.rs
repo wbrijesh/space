@@ -27,6 +27,9 @@
 //! Given a data folder (`_meta["space/dataDir"]`), a session keeps its prompts there and can be
 //! loaded again (`session/load`, which first replays a chunk, as agents replay history).
 //!
+//! A side chat (`_meta["space/sideOf"]` on `session/new` or `session/load`) answers
+//! "Side chat of <main session>: Hello from the stub agent." `/btw` is offered as the side command.
+//!
 //! With `SPACE_STUB_SCRIPT=<file>` (see `space_core::stub_script`), a prompt matching a
 //! scripted turn plays that turn's steps instead, which can hold a turn open indefinitely
 //! (thinking, running a tool, waiting for permission). The app's dev scenarios use this.
@@ -50,9 +53,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use space_core::stub_script::{SCRIPT_ENV, Step, StubScript};
-use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY, STEER_META_KEY, USAGE_META_KEY};
+use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY, SIDE_OF_META_KEY, STEER_META_KEY, USAGE_META_KEY};
 use space_protocol::{
-    CommandInfo, Complete, CompleteResult, Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, Retry, RetryKind, RetryState, SideAnswer, SideQuestion, SpaceStatus,
+    CommandInfo, Complete, CompleteResult, Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, Retry, RetryKind, RetryState, SpaceStatus,
     SteerResult, SteerSession, Steered,
     UnsteerResult, UnsteerSession, Verdict,
 };
@@ -116,6 +119,8 @@ struct StubSession {
     context_tokens: u64,
     /// Where the session's prompts are kept (in its data folder).
     history: Option<std::path::PathBuf>,
+    /// A side chat: the session it's beside.
+    side_of: Option<String>,
     /// Trace numbering: turns and requests so far, and whether the header went out.
     turns: u32,
     requests: u32,
@@ -130,6 +135,7 @@ impl StubSession {
             thinking: "low".into(),
             context_tokens: 0,
             history: dir.map(|d| d.join("history.txt")),
+            side_of: meta.and_then(|m| m.get(SIDE_OF_META_KEY)).and_then(|d| d.as_str()).map(str::to_string),
             turns: 0,
             requests: 0,
             header_sent: false,
@@ -163,7 +169,7 @@ impl State {
             // A harmless stand-in for "Continue in Claude Code".
             continue_in: Some(space_protocol::ContinueIn { app: "Stub".into(), command: format!("echo continue {session_id}") }),
             commands: Some(vec![
-                CommandInfo { name: "btw".into(), description: "Ask a side question".into(), hint: Some("<question>".into()), side: true },
+                CommandInfo { name: "btw".into(), description: "Open the side chat".into(), hint: Some("<question>".into()), side: true },
                 CommandInfo { name: "compact".into(), description: "Summarize the conversation".into(), hint: Some("<instructions>".into()), side: false },
             ]),
         }
@@ -301,17 +307,6 @@ async fn main() -> acp::Result<()> {
                         responder.respond(CompleteResult { text: format!("\"Title by {model}.\"\n") })
                     })
                 }
-            },
-            acp::on_receive_request!(),
-        )
-        // `/btw`: answered at once (a question with "btwfail" fails).
-        .on_receive_request(
-            async move |req: SideQuestion, responder: Responder<SideAnswer, acp::V1>, _cx: Conn| {
-                eprintln!("space-stub-agent: btw {req:?}");
-                if req.question.contains("btwfail") {
-                    return responder.respond_with_error(acp::Error::new(-32603, "no side answers today"));
-                }
-                responder.respond(SideAnswer { text: format!("Side answer to: {}", req.question) })
             },
             acp::on_receive_request!(),
         )
@@ -559,7 +554,12 @@ async fn run_turn(
     } else if text.contains("slow") {
         (1..=50).map(|i| format!("{i} ")).collect()
     } else {
-        ["Hello ", "from ", "the ", "stub ", "agent."].map(String::from).to_vec()
+        let side_of = state.sessions.lock().unwrap().get(&*sid.0).and_then(|s| s.side_of.clone());
+        let mut words = ["Hello ", "from ", "the ", "stub ", "agent."].map(String::from).to_vec();
+        if let Some(main) = side_of {
+            words.insert(0, format!("Side chat of {main}: "));
+        }
+        words
     };
     let reply: String = words.concat();
     for (i, w) in words.into_iter().enumerate() {

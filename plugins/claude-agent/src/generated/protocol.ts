@@ -1,6 +1,6 @@
 // Generated from crates/space-protocol by `just protocol`. Do not edit: change the Rust types.
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 export const PROTOCOL_VERSION_META_KEY = "space/protocolVersion";
 export const STATUS_METHOD = "_space/status";
 export const CONFIGURE_METHOD = "_space/session/configure";
@@ -11,10 +11,10 @@ export const STEER_METHOD = "_space/session/steer";
 export const UNSTEER_METHOD = "_space/session/unsteer";
 export const STEERED_METHOD = "_space/steered";
 export const RETRY_METHOD = "_space/retry";
-export const SIDE_QUESTION_METHOD = "_space/session/btw";
 export const STEER_META_KEY = "space/steer";
 export const CONTEXT_META_KEY = "space/context";
 export const DATA_DIR_META_KEY = "space/dataDir";
+export const SIDE_OF_META_KEY = "space/sideOf";
 export const USAGE_META_KEY = "space/usage";
 export const TRACE_METHOD = "_space/trace";
 
@@ -88,8 +88,8 @@ name: string, description: string,
  */
 hint?: string, 
 /**
- * Answered on the side: the client sends the arguments with [`SideQuestion`] (which works
- * while a turn runs and never joins the conversation) instead of as a prompt.
+ * Not a prompt: it opens the client's side chat (a session made with [`SIDE_OF_META_KEY`])
+ * and the arguments go there.
  */
 side?: boolean, };
 
@@ -156,18 +156,6 @@ export type Complete = { sessionId: string, prompt: string, provider?: string, m
  * The answer to [`Complete`]: the model's reply as plain text.
  */
 export type CompleteResult = { text: string, };
-
-/**
- * `_space/session/btw` (client → agent request): a side question about session `session_id`,
- * answered by its model from the conversation so far, without tools. Neither the question nor
- * the answer joins the conversation, and it can be asked while a turn runs.
- */
-export type SideQuestion = { sessionId: string, question: string, };
-
-/**
- * The answer to [`SideQuestion`], as markdown.
- */
-export type SideAnswer = { text: string, };
 
 /**
  * An image in a [`SteerSession`]: the saved file's bytes and where it is.

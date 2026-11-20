@@ -56,7 +56,7 @@ impl SpaceApp {
     /// you or the guardrail). Plugin reload (`just run`) waits for it before restarting the agent.
     #[cfg(feature = "dev")]
     pub(crate) fn agent_busy(&self) -> bool {
-        self.threads.iter().any(|t| {
+        self.threads.iter().chain(self.side_chats.values().map(|s| &s.thread)).any(|t| {
             ThreadActivity {
                 running: t.state.running,
                 queued: t.queued.is_some() || !t.pending.is_empty(),
@@ -84,7 +84,7 @@ impl SpaceApp {
         if !self.agent_running() {
             return;
         }
-        let threads = self.threads.iter().map(|t| ThreadActivity {
+        let threads = self.threads.iter().chain(self.side_chats.values().map(|s| &s.thread)).map(|t| ThreadActivity {
             running: t.state.running,
             queued: t.queued.is_some(),
             creating: t.creating,
@@ -99,7 +99,7 @@ impl SpaceApp {
     pub(crate) fn sleep_agent(&mut self, cx: &mut Context<Self>) {
         let Some(agent) = self.agent.take() else { return };
         tracing::info!("the agent was idle for {:?}: stopping it", idle_limit());
-        for t in &mut self.threads {
+        for t in self.threads.iter_mut().chain(self.side_chats.values_mut().map(|s| &mut s.thread)) {
             if let Some(old) = t.session.take() {
                 t.resume = Some((old.agent().plugin_id().to_string(), old.id().to_string()));
             }

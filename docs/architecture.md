@@ -121,7 +121,7 @@ The harness is the ACP **client**; agent plugins are ACP **agents**.
 | Direction | Method | Notes |
 |---|---|---|
 | client → agent | `initialize` | Protocol version and capabilities; `_meta["space/steer"]: true` from agents that take steering |
-| client → agent | `session/new` | `cwd` = the thread's folder; `_meta["space/dataDir"]` = a folder for the session's own files, when a session store is installed |
+| client → agent | `session/new` | `cwd` = the thread's folder; `_meta["space/dataDir"]` = a folder for the session's own files, when a session store is installed; `_meta["space/sideOf"]` = a session this one is a side chat of (below) |
 | client → agent | `session/load` | Continue a saved thread's session (agents with `loadSession`), same `_meta`; what the agent replays meanwhile isn't shown (the thread already is) |
 | client → agent | `session/prompt` | Image blocks (base64 bytes plus the saved file's `file://` uri; only to agents with `promptCapabilities.image`), long pastes as text `resource` blocks (`text/plain`, the saved file's `file://` uri; a `resource_link` to that file for agents without `promptCapabilities.embeddedContext`), then text (a quoted selection first, as a markdown blockquote) and `resource_link` blocks; `_meta["space/context"]` carries hidden context sections |
 | client → agent | `session/cancel` (notification) | Abort the running turn |
@@ -136,7 +136,6 @@ Space extensions:
 | client → agent | `_space/session/configure` | `{ sessionId, provider?, model?, thinkingLevel? }` → the full `SpaceStatus` |
 | agent → client | `_space/tools/preExecute` | `{ sessionId, toolCallId, tool, kind, args, cwd? }` → `{ decision: allow \| deny, reason? }`, after the host's pipeline (may take as long as the call is held) |
 | agent → client | `_space/sandbox/confine` | `{ sessionId, argv, cwd }` → `{ argv }` to spawn instead (unchanged without a `sandbox` provider) |
-| client → agent | `_space/session/btw` | `{ sessionId, question }` → `{ text }`: a side question about the conversation so far, answered by the session's model without tools; neither joins the conversation, and it can be asked while a turn runs. The host emits it and its answer as `SideQuestion` / `SideAnswer` session events (live only, not saved), shown above the composer |
 | client → agent | `_space/complete` | `{ sessionId, prompt, provider?, model? }` → `{ text }`: one short, tool-free completion by the session's model (or the one named), outside the conversation. The host forwards plugins' `agent/complete` here |
 | client → agent | `_space/session/steer` | `{ sessionId, id, text, images?, texts?, attachments? }`: a message for the running turn, delivered after the current step |
 | client → agent | `_space/session/unsteer` | `{ sessionId }` → `{ ids }`: take back the undelivered ones (the turn was stopped) |
@@ -151,14 +150,20 @@ Space extensions:
   "availableModels": [{ "provider": "claude-cli", "id": "claude-opus-5-5", "name": "Claude Opus 5.5" }],
   "thinkingLevels": ["low", "medium", "high", "xhigh", "max"], "contextTokens": 18234, "contextWindow": 1000000,
   "continueIn": { "app": "Claude Code", "command": "cd … && claude --resume 4eee6f75-… --fork-session" },
-  "commands": [{ "name": "btw", "description": "Ask a side question…", "hint": "<question>", "side": true },
+  "commands": [{ "name": "btw", "description": "Talk about this thread in a side chat…", "hint": "<question>", "side": true },
                { "name": "compact", "description": "Free up context by summarizing the conversation so far" }] }
 ```
 
 `continueIn` (optional) is how to carry the session on outside Space; the Trajectory page offers
 it as "Continue in <app>" and copies the command. `commands` (optional) are the agent's slash
 commands for the composer's `/` menu: a prompt that is exactly `/<name>` or `/<name> <arguments>`
-runs the command; one marked `side` is sent with `_space/session/btw` instead of as a prompt.
+runs the command; one marked `side` isn't sent: it opens the side chat.
+
+A **side chat** is a session made with `_meta["space/sideOf"]` naming another session (on
+`session/new`, and again on `session/load`). The agent starts it as a copy of that conversation,
+lets it only read, and before each of its prompts tells it what the other session added since it
+last looked. Space keeps it as a thread of its own, off the sidebar, its saved summary naming the
+thread it's beside (`sideOf`).
 
 ## Service protocol
 

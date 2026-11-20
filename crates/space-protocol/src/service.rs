@@ -584,6 +584,10 @@ pub struct ThreadMeta {
     /// Kept while it's closed. `None`: not pinned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_ms: Option<u64>,
+    /// A side chat: the id of the thread it's beside. It isn't listed on its own; it opens in
+    /// that thread's right pane, and goes when that thread is deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side_of: Option<String>,
 }
 
 /// `title/generate` params: the thread's first message.

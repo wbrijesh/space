@@ -10,11 +10,11 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use space_protocol::acp::{self, Agent, ByteStreams, Client};
 use space_protocol::acp_schema as schema;
-use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY, STEER_META_KEY, USAGE_META_KEY};
+use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, SIDE_OF_META_KEY, PROTOCOL_VERSION_META_KEY, STEER_META_KEY, USAGE_META_KEY};
 use space_protocol::service::HistoryItem;
 use space_protocol::trace::{ContextFact, TraceBatch, TraceEvent};
 use space_protocol::{
-    Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SideQuestion, SpaceStatus, SteerImage, SteerSession,
+    Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SpaceStatus, SteerImage, SteerSession,
     SteerText, Retry, Steered, UnsteerSession,
 };
 use tokio::sync::oneshot;
@@ -376,11 +376,17 @@ fn text_block(t: &TextRef, embedded: bool) -> Result<schema::ContentBlock> {
     Ok(schema::ContentBlock::Resource(schema::EmbeddedResource::new(schema::EmbeddedResourceResource::TextResourceContents(contents))))
 }
 
-fn data_dir_meta(data_dir: Option<&std::path::Path>) -> Option<schema::Meta> {
-    let dir = data_dir?;
+/// `_meta` of `session/new` and `session/load`: the session's data folder, and the session it's
+/// a side chat of.
+fn session_meta(data_dir: Option<&std::path::Path>, side_of: Option<&str>) -> Option<schema::Meta> {
     let mut meta = schema::Meta::new();
-    meta.insert(DATA_DIR_META_KEY.into(), dir.display().to_string().into());
-    Some(meta)
+    if let Some(dir) = data_dir {
+        meta.insert(DATA_DIR_META_KEY.into(), dir.display().to_string().into());
+    }
+    if let Some(main) = side_of {
+        meta.insert(SIDE_OF_META_KEY.into(), main.into());
+    }
+    (!meta.is_empty()).then_some(meta)
 }
 
 fn acp_error(what: &str, e: acp::Error, process: &PluginProcess) -> anyhow::Error {
@@ -447,10 +453,19 @@ impl AgentHandle {
     /// files in (to load it again later). `thread_id`: the thread the session belongs to (its
     /// traces are filed under it).
     pub async fn new_session_in(&self, cwd: impl Into<PathBuf>, data_dir: Option<PathBuf>, thread_id: Option<&str>) -> Result<Session> {
-        let cwd = cwd.into();
+        self.create_session(cwd.into(), data_dir, thread_id, None).await
+    }
+
+    /// `session/new` for a side chat of session `side_of` (see [`SIDE_OF_META_KEY`]); otherwise as
+    /// [`AgentHandle::new_session_in`].
+    pub async fn new_side_session(&self, side_of: &str, cwd: impl Into<PathBuf>, data_dir: Option<PathBuf>, thread_id: Option<&str>) -> Result<Session> {
+        self.create_session(cwd.into(), data_dir, thread_id, Some(side_of)).await
+    }
+
+    async fn create_session(&self, cwd: PathBuf, data_dir: Option<PathBuf>, thread_id: Option<&str>, side_of: Option<&str>) -> Result<Session> {
         let this = self.clone();
         let host = self.inner.shared.host.clone();
-        let request = schema::NewSessionRequest::new(cwd.clone()).meta(data_dir_meta(data_dir.as_deref()));
+        let request = schema::NewSessionRequest::new(cwd.clone()).meta(session_meta(data_dir.as_deref(), side_of));
         let response = host
             .rt
             .spawn(async move {
@@ -497,13 +512,36 @@ impl AgentHandle {
         data_dir: Option<PathBuf>,
         thread_id: Option<&str>,
     ) -> Result<Session> {
+        self.reopen_session(session_id, cwd.into(), data_dir, thread_id, None).await
+    }
+
+    /// `session/load` of side chat `session_id`, still a side chat of session `side_of` (which
+    /// may have been loaded under a new id since); otherwise as [`AgentHandle::load_session`].
+    pub async fn load_side_session(
+        &self,
+        session_id: &str,
+        side_of: &str,
+        cwd: impl Into<PathBuf>,
+        data_dir: Option<PathBuf>,
+        thread_id: Option<&str>,
+    ) -> Result<Session> {
+        self.reopen_session(session_id, cwd.into(), data_dir, thread_id, Some(side_of)).await
+    }
+
+    async fn reopen_session(
+        &self,
+        session_id: &str,
+        cwd: PathBuf,
+        data_dir: Option<PathBuf>,
+        thread_id: Option<&str>,
+        side_of: Option<&str>,
+    ) -> Result<Session> {
         if !self.inner.can_load {
             bail!("{} can't load a saved session", self.agent_name().unwrap_or(&self.inner.plugin_id));
         }
-        let cwd = cwd.into();
         let (this, id) = (self.clone(), session_id.to_string());
         let host = self.inner.shared.host.clone();
-        let request = schema::LoadSessionRequest::new(id.clone(), cwd.clone()).meta(data_dir_meta(data_dir.as_deref()));
+        let request = schema::LoadSessionRequest::new(id.clone(), cwd.clone()).meta(session_meta(data_dir.as_deref(), side_of));
         self.inner.shared.loading.lock().unwrap().insert(id.clone());
         let response = host
             .rt
@@ -825,29 +863,4 @@ impl Session {
         Ok(status)
     }
 
-    /// `_space/session/btw`: a side question about the conversation so far. The question and
-    /// its answer go out as [`SessionEvent::SideQuestion`] and [`SessionEvent::SideAnswer`];
-    /// neither joins the conversation. It can be asked while a turn runs.
-    pub async fn ask_aside(&self, question: String) -> Result<String> {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        let id = format!("btw-{}", NEXT.fetch_add(1, Ordering::Relaxed));
-        let agent = self.inner.agent.clone();
-        let host = agent.inner.shared.host.clone();
-        host.emit_session(&self.inner.id, SessionEvent::SideQuestion { id: id.clone(), question: question.clone() });
-        let request = SideQuestion { session_id: self.inner.id.clone(), question };
-        let result = host
-            .rt
-            .spawn(async move {
-                agent.inner.conn.send_request(request).block_task().await.map_err(|e| acp_error("_space/session/btw", e, &agent.inner.process))
-            })
-            .await
-            .map_err(|e| anyhow!("side question task failed: {e}"))
-            .and_then(|r| r);
-        let answer = match &result {
-            Ok(answer) => SessionEvent::SideAnswer { id, text: Some(answer.text.clone()), error: None },
-            Err(e) => SessionEvent::SideAnswer { id, text: None, error: Some(format!("{e:#}")) },
-        };
-        host.emit_session(&self.inner.id, answer);
-        result.map(|a| a.text)
-    }
 }

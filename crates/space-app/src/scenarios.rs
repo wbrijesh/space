@@ -32,6 +32,9 @@ pub struct Scenario {
     /// Also run the real terminal plugin (with a scripted shell: a colour test, then `sh`), and
     /// open the selected thread's terminal pane.
     pub terminal: bool,
+    /// Also run the real session store, keeping threads in a temp folder of the scenario's own
+    /// that outlives the run: launch it again to see what was saved.
+    pub store: bool,
 }
 
 #[derive(Default)]
@@ -353,6 +356,14 @@ pub fn all() -> Vec<Scenario> {
             ..Default::default()
         },
         Scenario {
+            name: "side-chat",
+            description: "A finished thread to open the side chat beside (⌘⇧L, or /btw and a space). Threads are \
+                          saved in a temp folder kept between launches, so a side chat is there again next time.",
+            threads: vec![explain_thread()],
+            store: true,
+            ..Default::default()
+        },
+        Scenario {
             name: "settings",
             description: "The Settings page (⌘,) with the stub's models and a saved default.",
             threads: vec![explain_thread()],
@@ -469,6 +480,14 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         manifest.push_str(&format!("\n[run.env]\nSPACE_TERMINAL_SHELL = {:?}\n", shell.display().to_string()));
         std::fs::write(terminal.join("space-plugin.toml"), manifest)?;
     }
+    let store = root.join("session-store");
+    let _ = std::fs::remove_dir_all(&store);
+    if scenario.store {
+        let repo = space_core::discovery::find_repo_root(&Path::new(env!("CARGO_MANIFEST_DIR")).join("x"))
+            .context("the session store lives in the repo; run scenarios from a checkout")?;
+        std::fs::create_dir_all(&store)?;
+        std::fs::copy(repo.join("plugins/session-store/space-plugin.toml"), store.join("space-plugin.toml"))?;
+    }
     // Scenario-only Keychain items.
     let secrets = space_core::Secrets::new("dev.brijesh.space.scenario");
     let settings_path = root.join("settings.json");
@@ -484,7 +503,8 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         discovery: DiscoveryOptions { bundled_roots: vec![root], user_root: None, project_root: None },
         secrets,
         held_recheck: space_core::HELD_RECHECK,
-        space_dir: None,
+        // The store's threads: never `~/.space`.
+        space_dir: scenario.store.then(|| std::env::temp_dir().join(format!("space-scenario-store-{}", scenario.name))),
     };
     let repo = space_core::discovery::find_repo_root(&Path::new(env!("CARGO_MANIFEST_DIR")).join("x")).unwrap_or_default();
     let seed = scenario

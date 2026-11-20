@@ -1,10 +1,13 @@
 // One Space session: a Claude Code process (claude.ts) and what Space sees of it. Prompts,
-// steering, configuration and side questions go in; ACP updates, `_space/*` notifications and
+// steering and configuration go in; ACP updates, `_space/*` notifications and
 // trace batches come out, in the order Claude Code produced them.
 //
 // A turn is one `session/prompt`. It ends when Claude Code reports the session idle after
 // having run it: that covers every model request of the turn, a /goal's continuations, and a
 // steered message that arrived as the turn ended (Claude reads it as one more step).
+//
+// A side chat (side.ts) is a session too: a copy of another session's conversation that can only
+// read, told before each prompt what the other one added since.
 
 import { randomUUID } from "node:crypto";
 import type { ContentBlock, SessionUpdate, StopReason } from "@agentclientprotocol/sdk";
@@ -26,6 +29,7 @@ import {
 	STEERED_METHOD,
 	type TurnUsage,
 } from "./generated/protocol.js";
+import { leftOff, mainUpdate, type SavedMessage, SIDE_NOTE, SIDE_TOOLS } from "./side.js";
 import { type TraceRecorder } from "./trace.js";
 import {
 	type AnthropicUsage,
@@ -44,10 +48,10 @@ import {
 /** The commands Space offers from Claude Code's own (the rest need its terminal UI or overlap with Space's). */
 export const COMMANDS = ["compact", "context", "goal"];
 
-/** `/btw`: answered by {@link Session.askAside}, never sent as a prompt. */
+/** `/btw`: Space opens the side chat with it (a session made with `sideOf`); it's never sent as a prompt. */
 export const SIDE_COMMAND: CommandInfo = {
 	name: "btw",
-	description: "Ask a side question about the conversation without adding to it",
+	description: "Talk about this thread in a side chat, without adding to it",
 	hint: "<question>",
 	side: true,
 };
@@ -91,6 +95,10 @@ export interface SessionOptions {
 	output: Output;
 	trace: TraceRecorder;
 	start: StartEngine;
+	/** A side chat of this session (side.ts). */
+	sideOf?: string;
+	/** A session's saved messages, in order (claude.ts's `savedMessages`; tests fake it). */
+	read: (sessionId: string, cwd: string) => Promise<SavedMessage[]>;
 }
 
 /** How a turn ended. */
@@ -310,6 +318,12 @@ export class Session {
 	private compacted = false;
 	/** A `/goal` may be set: stopping a turn clears it, or the next prompt would carry on with it. */
 	private goal = false;
+	/** The tools Claude may use. */
+	private readonly tools: string[];
+	/** A side chat: the last main-thread message it was told about (or copied with). */
+	private through: string | undefined;
+	/** A side chat before its first prompt: the session it starts as a copy of. */
+	private forkFrom: string | undefined;
 
 	private constructor(options: SessionOptions) {
 		this.options = options;
@@ -318,6 +332,7 @@ export class Session {
 		this.output = options.output;
 		this.trace = options.trace;
 		this.conversation = options.resume;
+		this.tools = options.sideOf ? SIDE_TOOLS : TOOLS;
 	}
 
 	/** Start (or resume) the session's Claude Code. Throws a readable error. */
@@ -359,8 +374,20 @@ export class Session {
 	}
 
 	private async startEngine(): Promise<void> {
+		if (this.options.sideOf) await this.prepareSide(this.options.sideOf);
 		const engine = this.options.start(
-			{ cli: this.options.cli, cwd: this.cwd, sessionId: this.id, resume: this.conversation, ...(this.model ? { model: this.model } : {}), effort: this.effort, hooks: this.hooks() },
+			{
+				cli: this.options.cli,
+				cwd: this.cwd,
+				sessionId: this.id,
+				resume: this.conversation,
+				...(this.forkFrom && !this.conversation ? { forkFrom: this.forkFrom } : {}),
+				tools: this.tools,
+				...(this.options.sideOf ? { appendSystemPrompt: SIDE_NOTE } : {}),
+				...(this.model ? { model: this.model } : {}),
+				effort: this.effort,
+				hooks: this.hooks(),
+			},
 			(message) => {
 				if (this.engine === engine) this.onMessage(message);
 			},
@@ -387,8 +414,34 @@ export class Session {
 		}
 	}
 
+	/**
+	 * A side chat starting Claude Code. Before its first prompt it's a fresh copy of the main
+	 * conversation as it is now (none while that has no messages yet); after, it continues its
+	 * own, from where its transcript says it left off in the main thread.
+	 */
+	private async prepareSide(main: string): Promise<void> {
+		if (!this.conversation) {
+			const messages = await this.readSafely(main);
+			this.forkFrom = messages.length > 0 ? main : undefined;
+			this.through = messages.at(-1)?.uuid;
+		} else if (this.through === undefined) {
+			const [side, mainMessages] = await Promise.all([this.readSafely(this.id), this.readSafely(main)]);
+			this.through = leftOff(side, mainMessages);
+		}
+	}
+
+	/** A session's saved messages; none when they can't be read (the side chat goes on without). */
+	private async readSafely(sessionId: string): Promise<SavedMessage[]> {
+		try {
+			return await this.options.read(sessionId, this.cwd);
+		} catch (error) {
+			log(`${this.id}: couldn't read session ${sessionId}: ${errorText(error)}`);
+			return [];
+		}
+	}
+
 	private setHeader(): void {
-		this.trace.setHeader({ tools: TOOLS, options: { provider: PROVIDER, model: this.model ?? "", effort: this.effort, thinking: { type: "adaptive" } as JsonValue } });
+		this.trace.setHeader({ tools: this.tools, options: { provider: PROVIDER, model: this.model ?? "", effort: this.effort, thinking: { type: "adaptive" } as JsonValue } });
 	}
 
 	private hooks(): SessionHooks {
@@ -438,7 +491,15 @@ export class Session {
 		const engine = await this.ensureEngine();
 		if (this.turn) throw new Error("A prompt is already running for this session");
 		const command = commandOf(blocks, COMMANDS);
-		const content: string | UserContent[] = command ? command.text : promptContent(blocks);
+		let content: string | UserContent[] = command ? command.text : promptContent(blocks);
+		// A side chat is told what the main thread added since it last looked.
+		const sideOf = this.options.sideOf;
+		const update = sideOf && !command ? mainUpdate(await this.readSafely(sideOf), this.through) : undefined;
+		if (this.turn) throw new Error("A prompt is already running for this session");
+		if (sideOf && !command && Array.isArray(content)) {
+			const note = [`<side-chat>${SIDE_NOTE}</side-chat>`, ...(update ? [update.text] : [])].join("\n\n");
+			content = [{ type: "text", text: note }, ...content];
+		}
 		if (command?.name === "goal") {
 			const condition = command.text.slice("/goal".length).trim();
 			if (condition === "clear") this.goal = false;
@@ -457,9 +518,14 @@ export class Session {
 		this.turn = turn;
 		this.trace.turnStart();
 		if (!command) this.trace.userMessage(content);
+		if (update) {
+			const steps = `${update.steps} new ${update.steps === 1 ? "step" : "steps"}`;
+			this.output.update({ sessionUpdate: "tool_call", toolCallId: `catch-up-${randomUUID()}`, title: `Caught up with the main thread: ${steps}`, kind: "read", status: "completed", content: textToolContent(update.text) });
+		}
 		this.conversation = true;
 		try {
 			engine.send(userMessage(content, randomUUID(), { command: !!command }));
+			if (update) this.through = update.through;
 		} catch (error) {
 			turn.exit = errorText(error);
 			this.finish();
@@ -576,7 +642,7 @@ export class Session {
 		this.setHeader();
 	}
 
-	/** The model and effort a side question or completion uses. */
+	/** The model and effort a completion uses. */
 	get settings(): { model: string | undefined; effort: Effort; conversation: boolean } {
 		return { model: this.model, effort: this.effort, conversation: this.conversation };
 	}

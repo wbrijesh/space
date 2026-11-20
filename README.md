@@ -24,7 +24,7 @@ cask clears macOS's download mark so it opens normally.
 | **Composer** | ⏎ send · ⇧⏎ newline · ↑ / ↓ your earlier messages · `/` the agent's commands (↑ / ↓ pick, Tab completes, ⏎ runs, Esc closes) · ⌘L focus · Esc stops the agent · a paste over 4,096 characters becomes a "Pasted text" attachment (click to read it) · a quote from the transcript sits above the input (× removes it) |
 | **While the agent works** | ⏎ queues a message for when it's done · ⌘⏎ sends it into the running turn, after the current step |
 | **Transcript** | ⌘F find · ⌘G / ⇧⌘G next / previous · ⌘↓ scroll to the bottom · ⇧⌘C Chat · ⇧⌘T Trajectory · select text in a message, then **Quote** to answer it (the agent gets it as a blockquote) |
-| **Right pane** | ⌘⌥B (or the title bar's pane button) show / hide, on the tab used last · ⌘J (or ⌃\`) Terminal, from it hide · ⌘P Files with its tree, from the tree hide · ⌘W closes the shown file or terminal tab; with no file open, or one terminal, it hides the pane · ⇧⌘⏎ (or the pane's expand button) maximize / restore it · in a terminal, ⌘T new tab · ⌃Tab next tab · ⌘K clear |
+| **Right pane** | ⌘⌥B (or the title bar's pane button) show / hide, on the tab used last · ⌘J (or ⌃\`) Terminal, from it hide · ⌘P Files with its tree, from the tree hide · ⇧⌘L Side chat, from it hide · ⌘W closes the shown file or terminal tab; with no file open, one terminal, or in the side chat, it hides the pane · ⇧⌘⏎ (or the pane's expand button) maximize / restore it · in a terminal, ⌘T new tab · ⌃Tab next tab · ⌘K clear |
 | **Trackpad** | two-finger swipe left shows the right pane, right hides it, wherever the pointer is (Settings ▸ Trackpad: the sidebar instead, the other way round, or off) |
 | **App** | ⌘, Settings · ⌘Q quit (always asks, and says if threads are working or terminals run something) |
 
@@ -44,9 +44,10 @@ cask clears macOS's download mark so it opens normally.
   Opened from Spotlight or the Dock, Space starts where you worked last.
 - **Open in** (title bar, right): opens the thread's folder in the app you used last; the chevron
   lists the editors, Finder and terminals installed, and Copy Path.
-- **The right pane** has two modes, **Files** and **Terminal** (tabs at its top), each with its own
-  tabs under them: the open files (with a toggle for the tree beside them), or the terminals.
-  A thread's first opening offers Terminal or Files; then it reopens on the tab used last.
+- **The right pane** has three modes, **Files**, **Terminal** and **Side chat** (tabs at its top),
+  each with its own bar under them: the open files (with a toggle for the tree beside them), the
+  terminals, or the side chat's. A thread's first opening offers the three; then it reopens on
+  the tab used last.
 - **Files** is the thread's folder as a tree: `.gitignore`d files are left out, git changes are
   colored (M, A, D, R, U) and folders with changes get a dot, a folder holding only a folder
   shows as one row, and it updates as files change. Type in the filter to search every path.
@@ -56,10 +57,13 @@ cask clears macOS's download mark so it opens normally.
   commit: old and new line numbers, added lines green, removed red, changed words brighter);
   **Full file** shows the whole file with the changes in place. Open files reload when they change. Arrows move in the tree; right-click for Open in, Reveal in Finder and Copy Path.
 - **Terminals** belong to a thread and start in its folder; they keep running while hidden.
+- **Side chat** (⇧⌘L, or `/btw` and a space in the composer) is a conversation about the thread
+  beside it: it starts from a copy of the thread, is told what the thread adds as it goes on
+  (each message you send carries what's new; "Caught up with the main thread" shows it), and can
+  only read (files and the web), never change anything. `/btw` opens it focused at once, and
+  what you type after goes there, however fast. ↺ starts it over; it's saved with the thread.
 - **Slash commands**: `/compact` (optionally with what to keep), `/context`, `/goal <condition>`
-  (Claude keeps working until it holds) and `/btw <question>`: a side question about the
-  conversation, answered above the composer (also while the agent works) without joining the
-  conversation; `/btw` alone shows the last answer again, Esc or × closes it.
+  (Claude keeps working until it holds) and `/btw`, which opens the side chat.
 - **Trajectory** shows every model request and tool call of a thread
   ([plugins/trajectory](plugins/trajectory/README.md)). **Continue in Claude Code** (left of its
   search) copies a command that continues the thread in the Claude CLI as a fork

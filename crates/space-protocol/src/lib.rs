@@ -22,7 +22,7 @@ mod typescript;
 /// Version of Space's own protocol: the `_space/*` ACP extensions and the service-plugin
 /// protocol. Plugins report the version they were built for when they start, and a plugin on
 /// another version is refused. Bump it on any incompatible change to either.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Re-export of the Agent Client Protocol SDK.
 pub use agent_client_protocol as acp;
@@ -30,7 +30,7 @@ pub use agent_client_protocol as acp;
 pub use agent_client_protocol::v1::schema as acp_schema;
 
 pub use ext::{
-    CommandInfo, Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, ContextSection, ContinueIn, ModelInfo, PreExecute, PreExecuteResult, Retry, RetryKind, RetryState, SideAnswer, SideQuestion, SpaceStatus,
+    CommandInfo, Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, ContextSection, ContinueIn, ModelInfo, PreExecute, PreExecuteResult, Retry, RetryKind, RetryState, SpaceStatus,
     SteerImage, SteerResult, SteerSession, SteerText, Steered, TurnUsage, UnsteerResult, UnsteerSession, Verdict,
 };
 pub use manifest::{

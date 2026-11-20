@@ -10,6 +10,9 @@
 //! At launch the sidebar lists the saved threads; a thread's events are read when it's opened
 //! and replayed through the same reducer that shows live ones. Writing in it loads the agent's
 //! session again (ACP `session/load`) when the agent can, else starts a new one.
+//!
+//! A side chat is saved the same way, its summary naming the thread it's beside (`side_of`): it
+//! isn't listed, opens with that thread, and is deleted with it.
 
 use std::hash::{BuildHasher as _, Hasher as _};
 use std::path::{Path, PathBuf};
@@ -35,7 +38,7 @@ pub(crate) fn new_thread_id() -> String {
 /// Add `event` to the events waiting to be saved, merging streamed chunks.
 pub(crate) fn record(unsaved: &mut Vec<SessionEvent>, event: &SessionEvent) {
     match (unsaved.last_mut(), event) {
-        (_, SessionEvent::Created { .. } | SessionEvent::ToolCallHeld { .. } | SessionEvent::Retry(_) | SessionEvent::SideQuestion { .. } | SessionEvent::SideAnswer { .. }) => {}
+        (_, SessionEvent::Created { .. } | SessionEvent::ToolCallHeld { .. } | SessionEvent::Retry(_)) => {}
         (Some(SessionEvent::AgentText { text: buf }), SessionEvent::AgentText { text })
         | (Some(SessionEvent::AgentThought { text: buf }), SessionEvent::AgentThought { text }) => buf.push_str(text),
         (Some(SessionEvent::Status(last)), SessionEvent::Status(status)) => last.merge(status),
@@ -49,7 +52,7 @@ impl SpaceApp {
         self.host.has_session_store()
     }
 
-    fn thread_meta(&self, thread: &Thread) -> ThreadMeta {
+    pub(crate) fn thread_meta(&self, thread: &Thread) -> ThreadMeta {
         let state = &thread.state;
         let session_id = thread.session.as_ref().map(|s| s.id().to_string());
         ThreadMeta {
@@ -67,6 +70,7 @@ impl SpaceApp {
             renamed: thread.renamed,
             closed_ms: None,
             pinned_ms: thread.pinned_ms,
+            side_of: thread.side_of.and_then(|main| self.thread(main)).map(|t| t.id.clone()),
         }
     }
 
@@ -127,6 +131,7 @@ impl SpaceApp {
         let saves: Vec<_> = self
             .threads
             .iter()
+            .chain(self.side_chats.values().map(|s| &s.thread))
             .filter(|t| !t.unloaded && !t.loading && !t.state.items.is_empty())
             .filter(|t| t.saving || !t.unsaved.is_empty() || t.meta.is_none())
             .map(|t| ThreadSave {
@@ -157,6 +162,9 @@ impl SpaceApp {
                 if std::mem::take(&mut this.last_folder) {
                     this.use_last_folder(&saved, cx);
                 }
+                // Side chats wait for their thread to open them.
+                let (sides, saved): (Vec<_>, Vec<_>) = saved.into_iter().partition(|m| m.side_of.is_some());
+                this.saved_sides = sides.into_iter().filter_map(|m| Some((m.side_of.clone()?, m))).collect();
                 let (closed, open): (Vec<_>, Vec<_>) = saved.into_iter().partition(|m| m.closed_ms.is_some());
                 this.closed_threads = closed;
                 this.purge_closed_threads(cx);
@@ -306,6 +314,9 @@ impl SpaceApp {
     /// Take a thread off the list: stop its turn (answering any open permission card) and its
     /// terminals, and forget it.
     pub(crate) fn drop_thread(&mut self, key: u64, cx: &mut Context<Self>) -> Option<Thread> {
+        let id = self.threads.iter().find(|t| t.key == key)?.id.clone();
+        // While the thread is still there: the side chat's summary names it.
+        self.put_away_side_chat(key, &id, cx);
         let ix = self.threads.iter().position(|t| t.key == key)?;
         let thread = self.threads.remove(ix);
         self.close_thread_terminals(key, cx);
@@ -362,7 +373,7 @@ impl SpaceApp {
     }
 
     /// A thread for a saved summary, its events read when it's opened.
-    fn saved_thread(&mut self, meta: ThreadMeta) -> Thread {
+    pub(crate) fn saved_thread(&mut self, meta: ThreadMeta) -> Thread {
         let key = self.next_key;
         self.next_key += 1;
         let mut thread = Thread::new(key, PathBuf::from(&meta.project));
@@ -403,8 +414,11 @@ fn expired(meta: &ThreadMeta, cutoff: u64) -> bool {
 }
 
 impl SpaceApp {
-    /// Delete what was saved of thread `id`.
-    fn remove_saved(&mut self, id: String, cx: &mut Context<Self>) {
+    /// Delete what was saved of thread `id`, and of its side chat.
+    pub(crate) fn remove_saved(&mut self, id: String, cx: &mut Context<Self>) {
+        if let Some(side) = self.saved_sides.remove(&id) {
+            self.remove_saved(side.id, cx);
+        }
         let host = self.host.clone();
         cx.spawn(async move |this, cx| {
             if let Err(e) = host.delete_thread(&id).await {

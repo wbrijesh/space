@@ -1,6 +1,7 @@
-//! The right pane beside a thread, in two modes: Files and Terminal. Its header (the two modes,
-//! then maximize; the title bar's pane button hides it), the bar under it with the mode's own tabs, and the chooser shown before a thread
-//! picks a mode.
+//! The right pane beside a thread, in three modes: Files, Terminal and the side chat. Its header
+//! (the modes, then maximize; the title bar's pane button hides it), the bar under it with the
+//! mode's own tabs (the side chat's: what it is, and starting it over), and the chooser shown
+//! before a thread picks a mode.
 
 use std::rc::Rc;
 
@@ -12,7 +13,7 @@ use super::file_viewer::pane_tab;
 use super::menu::shortcut_label;
 use super::tip::TipExt as _;
 use super::widgets::icon_button;
-use crate::actions::{MaximizePane, ShowFiles, ShowTerminal};
+use crate::actions::{MaximizePane, ShowFiles, ShowSideChat, ShowTerminal};
 use crate::theme::{color, radius, size, text};
 
 /// The pane's views.
@@ -20,15 +21,19 @@ use crate::theme::{color, radius, size, text};
 pub enum PaneView {
     Terminal,
     Files,
+    /// A side chat about the thread: it reads along and can't change anything.
+    SideChat,
 }
 
 impl PaneView {
-    pub const ALL: [PaneView; 2] = [PaneView::Terminal, PaneView::Files];
+    /// In the header's order.
+    pub const ALL: [PaneView; 3] = [PaneView::Files, PaneView::Terminal, PaneView::SideChat];
 
     pub fn label(self) -> &'static str {
         match self {
             PaneView::Terminal => "Terminal",
             PaneView::Files => "Files",
+            PaneView::SideChat => "Side chat",
         }
     }
 
@@ -36,6 +41,7 @@ impl PaneView {
         match self {
             PaneView::Terminal => Icon::new(Lucide::SquareTerminal),
             PaneView::Files => Icon::new(IconName::Folder),
+            PaneView::SideChat => Icon::new(Lucide::MessagesSquare),
         }
     }
 
@@ -43,6 +49,7 @@ impl PaneView {
         match self {
             PaneView::Terminal => Box::new(ShowTerminal),
             PaneView::Files => Box::new(ShowFiles),
+            PaneView::SideChat => Box::new(ShowSideChat),
         }
     }
 }
@@ -50,10 +57,10 @@ impl PaneView {
 pub type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 pub type ViewHandler = Rc<dyn Fn(PaneView, &mut Window, &mut App)>;
 
-/// The pane's header: its two modes (`view`: the one shown), then maximize (it fills the
-/// window beside the sidebar) or restore.
+/// The pane's header: its modes (`view`: the one shown), then maximize (it fills the window
+/// beside the sidebar) or restore.
 pub fn header(view: Option<PaneView>, maximized: bool, on_view: ViewHandler, on_maximize: Handler) -> Div {
-    let modes = [PaneView::Files, PaneView::Terminal].map(|v| {
+    let modes = PaneView::ALL.map(|v| {
         let pick = on_view.clone();
         let id = ElementId::Name(format!("pane-mode-{}", v.label()).into());
         pane_tab(id, Some(v.label().into()), v.icon(), view == Some(v), None, Rc::new(move |w, cx| pick(v, w, cx)))
@@ -71,6 +78,40 @@ pub fn header(view: Option<PaneView>, maximized: bool, on_view: ViewHandler, on_
 /// The bar under the header, with the shown mode's tabs (the open files, or the terminals).
 pub fn sub_bar(tabs: impl IntoElement) -> Div {
     bar().child(tabs)
+}
+
+/// The side chat's bar: what it is, and ↺ to start it over from the thread as it is now.
+pub fn side_chat_bar(on_new: Option<Handler>) -> Div {
+    bar()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .px_1()
+                .text_size(text::SM)
+                .text_color(color::text_3())
+                .child("Read-only · follows this thread"),
+        )
+        .children(on_new.map(|on_new| {
+            icon_button("side-chat-new", Lucide::RotateCw, true, false).tip("New side chat").on_click(move |_, w, cx| on_new(w, cx))
+        }))
+}
+
+/// The side chat before anything's asked.
+pub fn side_chat_empty() -> Div {
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_1()
+        .px_6()
+        .text_center()
+        .child(div().text_size(text::MD).text_color(color::text_2()).child("Ask anything about this thread."))
+        .child(div().text_size(text::SM).text_color(color::text_3()).child("It reads along as the thread goes on, and can't change anything."))
 }
 
 fn bar() -> Div {
@@ -136,7 +177,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         pane(div().size_full().flex().flex_col().child(header_for(Some(PaneView::Files))).child(sub_bar(tabs)).child(body)).into_any_element()
     };
     let (f1, f2) = (files.clone(), files);
-    vec![ComponentPreview::new(Area::Shell, "Right pane", "Beside a thread: Files or Terminal, each with its own tabs, and the chooser before one is picked.").stacked().examples([
+    vec![ComponentPreview::new(Area::Shell, "Right pane", "Beside a thread: Files, Terminal or the side chat, each with its own bar, and the chooser before one is picked.").stacked().examples([
         Example::new("chooser", move |window, _| {
             pane(div().size_full().flex().flex_col().child(header_for(None)).child(chooser(Rc::new(|_, _, _| {}), window))).into_any_element()
         }),
@@ -156,6 +197,23 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                     .child(header_for(Some(PaneView::Terminal)))
                     .child(sub_bar(strip))
                     .child(div().flex_1().child(terminal_grid(Arc::new(sample_frame(70, 12)), false, Rc::new(|_, _, _| {})))),
+            )
+            .into_any_element()
+        }),
+        Example::new("side chat: nothing asked yet", move |_, _| {
+            pane(div().size_full().flex().flex_col().child(header_for(Some(PaneView::SideChat))).child(side_chat_bar(None)).child(side_chat_empty()))
+                .into_any_element()
+        }),
+        Example::new("side chat", move |_, _| {
+            pane(
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(header_for(Some(PaneView::SideChat)))
+                    .child(side_chat_bar(Some(Rc::new(|_, _| {}))))
+                    .child(placeholder("The side chat's transcript"))
+                    .child(div().h(px(64.)).m_2().rounded(radius::XL).border_1().border_color(color::border()).bg(color::surface())),
             )
             .into_any_element()
         }),

@@ -28,6 +28,7 @@
 //! rename some name    rename the selected thread as the Rename sheet would (then print its title)
 //! title               print the selected thread's title
 //! editmenu            print the Edit menu's items: AppKit action and key equivalent
+//! sidechat            print the selected thread's side chat: focused, its input, the composer's, items, running
 //! terminals           print the selected thread's right pane: open, its view, tabs, shells starting, how far it's shown
 //! open src/main.rs    show a file (relative to the thread's folder) in the Files view, as a click on its row would
 //! shot name           capture this window to `$SPACE_SHOT_DIR/name.png` (or run `$SPACE_SHOT_CMD name`)
@@ -332,6 +333,27 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                     });
                 }
                 "editmenu" => print_edit_menu(),
+                "sidechat" => {
+                    let _ = window.update(cx, |root, window, cx| {
+                        let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
+                        if let Some(app) = app {
+                            let app = app.read(cx);
+                            let Some(key) = app.selected else { return };
+                            let composer = app.input.read(cx).value().to_string();
+                            match app.side_chats.get(&key) {
+                                Some(side) => eprintln!(
+                                    "script: sidechat focused={} input={:?} composer={composer:?} items={} running={} error={:?}",
+                                    app.side_chat_focused(key, window, cx),
+                                    side.input.read(cx).value().to_string(),
+                                    side.thread.state.items.len(),
+                                    side.thread.state.running,
+                                    side.thread.error,
+                                ),
+                                None => eprintln!("script: sidechat none composer={composer:?}"),
+                            }
+                        }
+                    });
+                }
                 "terminals" => {
                     let _ = window.update(cx, |root, _, cx| {
                         let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());

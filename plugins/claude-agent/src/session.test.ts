@@ -9,6 +9,7 @@ import type { HookJSONOutput, PreToolUseHookInput } from "@anthropic-ai/claude-a
 import type { EngineOptions, ModelInfo, SDKMessage, SlashCommand, userMessage } from "./claude.js";
 import type { ConfineResult, PreExecute, PreExecuteResult, TraceEvent } from "./generated/protocol.js";
 import { availableModels, clampEffort, type EngineLike, menuCommands, Session } from "./session.js";
+import { type SavedMessage, SIDE_TOOLS } from "./side.js";
 import { TraceRecorder } from "./trace.js";
 
 type Sent = ReturnType<typeof userMessage>;
@@ -120,6 +121,10 @@ interface Options {
 	confine?: (p: { argv: string[] }) => Promise<ConfineResult>;
 	account?: FakeEngine["account"];
 	resume?: boolean;
+	/** A side chat of this session. */
+	sideOf?: string;
+	/** Sessions' saved messages, by id (changed by tests as the main thread goes on). */
+	saved?: Record<string, SavedMessage[]>;
 }
 
 async function harness(options: Options = {}) {
@@ -150,6 +155,8 @@ async function harness(options: Options = {}) {
 			engines.push(engine);
 			return engine;
 		},
+		read: async (id) => options.saved?.[id] ?? [],
+		...(options.sideOf ? { sideOf: options.sideOf } : {}),
 	});
 	const engine = () => {
 		const e = engines.at(-1);
@@ -470,4 +477,90 @@ test("a loaded session resumes Claude Code's conversation", async () => {
 	const h = await harness({ resume: true });
 	expect(h.engine().options.resume).toBe(true);
 	expect(h.session.status().continueIn).toBeDefined();
+});
+
+/** A saved message: `User: text` from the user, anything else from Claude. */
+function saved(uuid: string, text: string): SavedMessage {
+	const user = text.startsWith("User: ");
+	const body = user ? text.slice(6) : text;
+	return { type: user ? "user" : "assistant", uuid, parent_tool_use_id: null, message: { role: user ? "user" : "assistant", content: [{ type: "text", text: body }] } };
+}
+
+const MAIN = "11111111-2222-4333-8444-555566667777";
+
+/** The text Claude was sent with the `n`th prompt. */
+function sentText(engine: FakeEngine, n: number): string {
+	const content = engine.sent[n]?.message.content;
+	return Array.isArray(content) ? content.map((b) => (b.type === "text" ? b.text : "")).join("\n") : String(content);
+}
+
+describe("side chats", () => {
+	test("start as a copy of the main thread that can only read", async () => {
+		const store = { [MAIN]: [saved("m1", "User: fix the tree"), saved("m2", "Done.")] };
+		const h = await harness({ sideOf: MAIN, saved: store });
+		const options = h.engine().options;
+		expect(options.forkFrom).toBe(MAIN);
+		expect(options.resume).toBe(false);
+		expect(options.tools).toEqual(SIDE_TOOLS);
+		expect(options.tools).not.toContain("Bash");
+		expect(options.appendSystemPrompt).toContain("side chat");
+		// Nothing new in the main thread yet: only the side-chat reminder goes with the prompt.
+		await h.prompt("why a Vec?", fixture("plain"));
+		const first = sentText(h.engine(), 0);
+		expect(first).toContain("<side-chat>");
+		expect(first).not.toContain("<main-thread-update through");
+		expect(first.endsWith("why a Vec?")).toBe(true);
+		expect(h.updates.some((u) => u.sessionUpdate === "tool_call")).toBe(false);
+	});
+
+	test("each prompt is told what the main thread added since the last one", async () => {
+		const store = { [MAIN]: [saved("m1", "User: fix the tree"), saved("m2", "Done.")] };
+		const h = await harness({ sideOf: MAIN, saved: store });
+		store[MAIN].push(saved("m3", "User: and the tabs"), saved("m4", "Tabs fixed; tests pass."));
+		await h.prompt("is it done?", fixture("plain"));
+		const sent = sentText(h.engine(), 0);
+		expect(sent).toContain('<main-thread-update through="m4">');
+		expect(sent).toContain("User: and the tabs");
+		expect(sent).toContain("Claude: Tabs fixed; tests pass.");
+		expect(sent).not.toContain("fix the tree");
+		const catchUp = h.updates.find((u) => u.sessionUpdate === "tool_call");
+		expect(catchUp).toMatchObject({ title: "Caught up with the main thread: 2 new steps", kind: "read", status: "completed" });
+		// Nothing more since: no update.
+		await h.prompt("thanks", fixture("plain"));
+		expect(sentText(h.engine(), 1)).not.toContain("<main-thread-update through");
+		store[MAIN].push(saved("m5", "User: now the docs"));
+		await h.prompt("and now?", fixture("plain"));
+		expect(sentText(h.engine(), 2)).toContain('<main-thread-update through="m5">\nUser: now the docs\n</main-thread-update>');
+	});
+
+	test("of a thread with nothing in it yet: a new conversation, told everything later", async () => {
+		const store: Record<string, SavedMessage[]> = {};
+		const h = await harness({ sideOf: MAIN, saved: store });
+		expect(h.engine().options.forkFrom).toBeUndefined();
+		store[MAIN] = [saved("m1", "User: hello")];
+		await h.prompt("what's going on?", fixture("plain"));
+		expect(sentText(h.engine(), 0)).toContain('<main-thread-update through="m1">\nUser: hello');
+	});
+
+	test("loaded again, one goes on from where its transcript says it left off", async () => {
+		const side = "0b9a2c1e-1111-4222-8333-444455556666";
+		const store = {
+			[MAIN]: [saved("m1", "User: a"), saved("m2", "b"), saved("m3", "User: c"), saved("m4", "d")],
+			[side]: [saved("m1", "User: a"), saved("s1", 'User: <main-thread-update through="m2">\n…</main-thread-update> q'), saved("s2", "answer")],
+		};
+		const h = await harness({ sideOf: MAIN, saved: store, resume: true });
+		expect(h.engine().options.resume).toBe(true);
+		expect(h.engine().options.forkFrom).toBeUndefined();
+		await h.prompt("more?", fixture("plain"));
+		const sent = sentText(h.engine(), 0);
+		expect(sent).toContain('<main-thread-update through="m4">');
+		expect(sent).toContain("User: c");
+		expect(sent).not.toContain("User: a");
+	});
+
+	test("a command isn't wrapped", async () => {
+		const h = await harness({ sideOf: MAIN, saved: { [MAIN]: [saved("m1", "User: x")] } });
+		await h.prompt("/compact", fixture("plain"));
+		expect(h.engine().sent[0]?.message.content).toBe("/compact");
+	});
 });

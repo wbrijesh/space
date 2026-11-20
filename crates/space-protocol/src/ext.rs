@@ -25,8 +25,6 @@ pub const UNSTEER_METHOD: &str = "_space/session/unsteer";
 pub const STEERED_METHOD: &str = "_space/steered";
 /// Method name of the [`Retry`] notification (agent → client).
 pub const RETRY_METHOD: &str = "_space/retry";
-/// Method name of the [`SideQuestion`] request (client → agent).
-pub const SIDE_QUESTION_METHOD: &str = "_space/session/btw";
 /// `_meta` key of the ACP `initialize` response: `true` when the agent takes
 /// [`SteerSession`] (messages delivered between the steps of a running turn).
 pub const STEER_META_KEY: &str = "space/steer";
@@ -36,6 +34,10 @@ pub const CONTEXT_META_KEY: &str = "space/context";
 /// session's own files in (to load it again later). It belongs to the thread and is deleted
 /// with it; the agent may not have been given one (then it keeps the session in memory).
 pub const DATA_DIR_META_KEY: &str = "space/dataDir";
+/// `_meta` key of ACP `session/new` and `session/load` making the session a side chat of the
+/// session it names: it starts from a copy of that conversation, follows what's added to it
+/// after (each prompt is told what's new there), and can only read, never change anything.
+pub const SIDE_OF_META_KEY: &str = "space/sideOf";
 /// `_meta` key of a `session/prompt` response carrying the turn's [`TurnUsage`] (ACP's own
 /// `usage` field is still unstable).
 pub const USAGE_META_KEY: &str = "space/usage";
@@ -152,8 +154,8 @@ pub struct CommandInfo {
     /// What the arguments are, for the menu (`<instructions>`); absent when it takes none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
-    /// Answered on the side: the client sends the arguments with [`SideQuestion`] (which works
-    /// while a turn runs and never joins the conversation) instead of as a prompt.
+    /// Not a prompt: it opens the client's side chat (a session made with [`SIDE_OF_META_KEY`])
+    /// and the arguments go there.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[cfg_attr(test, ts(optional, as = "Option<bool>"))]
     pub side: bool,
@@ -428,26 +430,6 @@ pub struct CompleteResult {
     pub text: String,
 }
 
-/// `_space/session/btw` (client → agent request): a side question about session `session_id`,
-/// answered by its model from the conversation so far, without tools. Neither the question nor
-/// the answer joins the conversation, and it can be asked while a turn runs.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
-#[request(method = "_space/session/btw", response = SideAnswer)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[serde(rename_all = "camelCase")]
-pub struct SideQuestion {
-    pub session_id: String,
-    pub question: String,
-}
-
-/// The answer to [`SideQuestion`], as markdown.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcResponse)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[serde(rename_all = "camelCase")]
-pub struct SideAnswer {
-    pub text: String,
-}
-
 /// Hidden text a plugin adds to a prompt (the agent puts it in its system prompt, never in
 /// the user's message or the transcript).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -525,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn commands_and_side_question_wire_format() {
+    fn commands_wire_format() {
         let s: SpaceStatus = serde_json::from_value(serde_json::json!({
             "sessionId": "s",
             "commands": [{"name": "compact", "description": "Summarize", "hint": "<instructions>"}, {"name": "btw", "description": "Ask", "side": true}]
@@ -538,8 +520,5 @@ mod tests {
             serde_json::to_value(&commands[0]).unwrap(),
             serde_json::json!({"name": "compact", "description": "Summarize", "hint": "<instructions>"})
         );
-        let q = SideQuestion { session_id: "s".into(), question: "why?".into() };
-        assert_eq!(q.method(), SIDE_QUESTION_METHOD);
-        assert_eq!(serde_json::to_value(&q).unwrap(), serde_json::json!({"sessionId": "s", "question": "why?"}));
     }
 }

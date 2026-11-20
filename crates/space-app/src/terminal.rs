@@ -296,9 +296,9 @@ impl SpaceApp {
         self.open_pane(key, view, window, cx);
     }
 
-    /// ⌘J / ⌃` (Terminal) and ⌘P (Files, on its tree): open the pane on that view; when it's
-    /// shown already (Terminal focused, or the tree showing), hide the pane and go back to the
-    /// composer.
+    /// ⌘J / ⌃` (Terminal), ⌘P (Files, on its tree) and ⌘⇧L (the side chat): open the pane on
+    /// that view; when it's shown already (Terminal or the side chat focused, or the tree
+    /// showing), hide the pane and go back to the composer.
     pub(crate) fn show_pane_view(&mut self, view: PaneView, window: &mut Window, cx: &mut Context<Self>) {
         if self.show_settings {
             return;
@@ -306,7 +306,12 @@ impl SpaceApp {
         let Some(key) = self.selected else { return };
         let shown = self.terminals.panes.get(&key).is_some_and(|p| p.open && p.view == Some(view));
         let tree_shown = self.file_tabs.get(&key).is_none_or(|t| t.active.is_none() || !t.tree_hidden);
-        if shown && (if view == PaneView::Files { tree_shown } else { self.terminal_focused(key, window, cx) }) {
+        let in_use = match view {
+            PaneView::Files => tree_shown,
+            PaneView::Terminal => self.terminal_focused(key, window, cx),
+            PaneView::SideChat => self.side_chat_focused(key, window, cx),
+        };
+        if shown && in_use {
             self.hide_terminal(window, cx);
             return;
         }
@@ -324,7 +329,8 @@ impl SpaceApp {
     }
 
     /// Open thread `key`'s pane on `view` (`None`: the chooser). Terminal starts a shell the
-    /// first time and takes focus.
+    /// first time and takes focus; the side chat takes focus at once (it's drawn on the next
+    /// frame, but its input is focused now, so no key typed in between is lost).
     fn open_pane(&mut self, key: u64, view: Option<PaneView>, window: &mut Window, cx: &mut Context<Self>) {
         let pane = self.terminals.panes.entry(key).or_default();
         pane.open = true;
@@ -341,6 +347,9 @@ impl SpaceApp {
                 self.open_terminal(key, None, window, cx);
             }
             self.focus_terminal(key, window, cx);
+        }
+        if view == Some(PaneView::SideChat) {
+            self.focus_side_chat(key, window, cx);
         }
         self.terminal_slide(cx);
         cx.notify();

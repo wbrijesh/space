@@ -24,7 +24,7 @@ use super::quote::composer_quote;
 use super::loaders::ContextRing;
 use super::model_picker::{PaneHandler, PickerPane, model_picker};
 use super::trajectory::duration_label;
-use super::transcript::{agent_message, attachment_chip};
+use super::transcript::attachment_chip;
 use super::tip::TipExt as _;
 use super::menu::{chevron, choice, heading, popover, row, separator, surface, trigger};
 use super::widgets::icon_button;
@@ -135,8 +135,6 @@ pub struct ComposerHandlers {
     pub on_complete_command: KeyHandler,
     /// A click outside the `/` menu.
     pub on_close_commands: Handler,
-    /// The side question's × was clicked.
-    pub on_close_side: Handler,
 }
 
 /// A message waiting for the agent, as its row above the composer shows it.
@@ -189,7 +187,6 @@ impl Default for ComposerHandlers {
             on_command: Rc::new(|_, _, _| {}),
             on_complete_command: Rc::new(|_, _| false),
             on_close_commands: Rc::new(|_, _| {}),
-            on_close_side: Rc::new(|_, _| {}),
         }
     }
 }
@@ -313,15 +310,6 @@ pub struct CommandMenu {
     pub selected: usize,
 }
 
-/// A side question (`/btw`) and its answer, shown above the composer until it's closed.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct SideView {
-    pub question: SharedString,
-    /// Markdown; `None` while it's on its way.
-    pub answer: Option<SharedString>,
-    pub error: Option<SharedString>,
-}
-
 /// Why the composer can't send, and the links that fix it.
 #[derive(Clone, Default)]
 pub struct ComposerBlocker {
@@ -356,8 +344,8 @@ pub struct Composer {
     after_step: bool,
     /// The `/` menu is open.
     commands: Option<CommandMenu>,
-    /// A side question to show above the card.
-    side: Option<SideView>,
+    /// The "+" button (files and images can be attached).
+    attach: bool,
 }
 
 impl Composer {
@@ -376,17 +364,18 @@ impl Composer {
             queued_messages: Vec::new(),
             after_step: false,
             commands: None,
-            side: None,
+            attach: true,
         }
+    }
+
+    /// Without the "+" button: nothing can be attached.
+    pub fn without_attach(mut self) -> Self {
+        self.attach = false;
+        self
     }
 
     pub fn commands(mut self, commands: Option<CommandMenu>) -> Self {
         self.commands = commands;
-        self
-    }
-
-    pub fn side(mut self, side: Option<SideView>) -> Self {
-        self.side = side;
         self
     }
 
@@ -443,7 +432,7 @@ impl Composer {
 
 impl RenderOnce for Composer {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let Self { id, input, running, queued, attachments, images, pastes, quote, controls, handlers: h, queued_messages, after_step, commands, side } = self;
+        let Self { id, input, running, queued, attachments, images, pastes, quote, controls, handlers: h, queued_messages, after_step, commands, attach: can_attach } = self;
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
         let has_text = !input.read(cx).value().trim().is_empty();
         let blocker = controls.as_ref().and_then(|c| c.blocker.clone());
@@ -588,14 +577,19 @@ impl RenderOnce for Composer {
         };
 
         let (attach_fn, focus_fn) = (h.on_attach.clone(), h.on_focus.clone());
-        let attach = icon_button("attach", IconName::Plus, true, false)
-            .size(px(BUTTON))
-            .rounded_full()
-            .tip("Attach images, files or folders")
-            .on_click(move |_, w, cx| {
-                focus_fn(w, cx);
-                attach_fn(w, cx);
-            });
+        let attach = if can_attach {
+            icon_button("attach", IconName::Plus, true, false)
+                .size(px(BUTTON))
+                .rounded_full()
+                .tip("Attach images, files or folders")
+                .on_click(move |_, w, cx| {
+                    focus_fn(w, cx);
+                    attach_fn(w, cx);
+                })
+                .into_any_element()
+        } else {
+            div().w(px(space::XS)).flex_none().into_any_element()
+        };
         // XSmall: no vertical editor padding, 4px horizontal.
         let paste = h.on_paste.clone();
         let textarea = Textarea::new(&input)
@@ -694,7 +688,6 @@ impl RenderOnce for Composer {
                     }
                 }
             })
-            .children(side.map(|s| side_card(&s, h.on_close_side.clone())))
             .children((!queued_messages.is_empty()).then(|| queued_rows(&queued_messages, running, h.on_queued.clone())))
             .children(blocker.map(|b| blocker_row(b, h.on_blocker_action.clone())))
             .child(card)
@@ -714,54 +707,6 @@ pub fn command_menu(menu: &CommandMenu, on_command: StringHandler) -> Div {
             .child(div().flex_1().min_w_0().truncate().text_size(text::SM).text_color(color::text_3()).child(c.description.clone()))
             .on_click(move |_, w, cx| run(name.clone(), w, cx))
     }))
-}
-
-/// A side question above the card: the question, its answer (or that it's coming, or why it
-/// didn't), and × to close it. The answer scrolls when it's long.
-pub fn side_card(side: &SideView, on_close: Handler) -> Div {
-    let body = match (&side.answer, &side.error) {
-        (Some(answer), _) => div()
-            .id("side-answer")
-            .max_h(px(280.))
-            .overflow_y_scroll()
-            .child(agent_message("side-answer-md", answer))
-            .into_any_element(),
-        (None, Some(error)) => div().text_size(text::SM).text_color(color::red()).child(format::clean_error(error)).into_any_element(),
-        (None, None) => div()
-            .flex()
-            .items_center()
-            .gap_1p5()
-            .text_size(text::SM)
-            .text_color(color::text_3())
-            .child(super::loaders::Spinner::new(size::SPINNER_MD))
-            .child("Answering on the side…")
-            .into_any_element(),
-    };
-    div()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .p_3()
-        .rounded(radius::XL)
-        .bg(color::surface())
-        .border_1()
-        .border_color(color::border())
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .text_size(text::SM)
-                .text_color(color::text_2())
-                .child(Icon::new(Lucide::MessageCircleQuestionMark).size(size::ICON).flex_none())
-                .child(div().flex_1().min_w_0().truncate().child(side.question.clone()))
-                .child(
-                    icon_button("close-side", IconName::Close, true, false)
-                        .tip("Close  ⎋")
-                        .on_click(move |_, w, cx| on_close(w, cx)),
-                ),
-        )
-        .child(body)
 }
 
 /// Messages waiting for the agent, above the card: when each goes (a small arrow, white for
@@ -1365,19 +1310,11 @@ pub mod fixtures {
     pub fn commands() -> Vec<CommandInfo> {
         let c = |name: &str, description: &str, side: bool| CommandInfo { name: name.into(), description: description.into(), hint: None, side };
         vec![
-            c("btw", "Ask a side question about the conversation without adding to it", true),
+            c("btw", "Talk about this thread in a side chat, without adding to it", true),
             c("compact", "Free up context by summarizing the conversation so far", false),
             c("context", "Show current context usage", false),
             c("goal", "Set a goal — keep working until the condition is met", false),
         ]
-    }
-
-    pub fn side(answer: Option<&str>, error: Option<&str>) -> SideView {
-        SideView {
-            question: "Which files did the last edit touch?".into(),
-            answer: answer.map(|a| a.to_string().into()),
-            error: error.map(|e| e.to_string().into()),
-        }
     }
 
     pub fn controls(tokens: u64, locked: bool) -> ComposerControls {
@@ -1543,11 +1480,6 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 let items = fixtures::commands().into_iter().filter(|c| c.name.starts_with("co")).collect();
                 c.commands(Some(CommandMenu { items, selected: 1 }))
             }),
-            example("side question: answering", "", |c| c.running(true).side(Some(fixtures::side(None, None)))),
-            example("side question: answered", "", |c| {
-                c.side(Some(fixtures::side(Some("`src/session.ts` and its test, `src/session.test.ts`: the turn now ends when Claude Code is **idle**."), None)))
-            }),
-            example("side question: failed", "", |c| c.side(Some(fixtures::side(None, Some("There's no conversation to ask about yet."))))),
         ]),
         ComponentPreview::new(Area::Composer, "Menus", "Dropdown contents, rendered open.").examples([
             menu("permission mode", || {

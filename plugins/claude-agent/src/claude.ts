@@ -5,6 +5,7 @@
 import {
 	type AccountInfo,
 	type CanUseTool,
+	getSessionMessages,
 	type HookCallbackMatcher,
 	type HookEvent,
 	type HookJSONOutput,
@@ -15,12 +16,13 @@ import {
 	query,
 	type SDKMessage,
 	type SDKUserMessage,
+	type SessionMessage,
 	type SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk";
 import { errorText, log } from "./env.js";
 import type { UserContent } from "./translate.js";
 
-export type { ModelInfo, SDKMessage, SlashCommand };
+export type { ModelInfo, SDKMessage, SessionMessage, SlashCommand };
 
 /** The provider id Space knows the models by: the signed-in Claude Code CLI. */
 export const PROVIDER = "claude-cli";
@@ -99,6 +101,12 @@ export interface EngineOptions {
 	sessionId: string;
 	/** Continue the transcript kept under `sessionId` instead of starting it. */
 	resume: boolean;
+	/** Not resuming: start as a copy of this session's conversation (a side chat). */
+	forkFrom?: string;
+	/** The tools Claude may use. */
+	tools: string[];
+	/** Added to Claude Code's system prompt. */
+	appendSystemPrompt?: string;
 	model?: string;
 	effort: Effort;
 	hooks: SessionHooks;
@@ -156,8 +164,8 @@ export class Engine {
 			prompt: this.inbox,
 			options: {
 				...baseOptions(options.cli, options.cwd),
-				systemPrompt: { type: "preset", preset: "claude_code" },
-				tools: TOOLS,
+				systemPrompt: { type: "preset", preset: "claude_code", ...(options.appendSystemPrompt ? { append: options.appendSystemPrompt } : {}) },
+				tools: options.tools,
 				permissionMode: "default",
 				hooks: hookSet,
 				canUseTool: hooks.canUseTool,
@@ -165,7 +173,11 @@ export class Engine {
 				thinking: { type: "adaptive", display: "summarized" },
 				effort: options.effort,
 				...(options.model ? { model: options.model } : {}),
-				...(options.resume ? { resume: options.sessionId } : { sessionId: options.sessionId }),
+				...(options.resume
+					? { resume: options.sessionId }
+					: options.forkFrom
+						? { resume: options.forkFrom, forkSession: true, sessionId: options.sessionId }
+						: { sessionId: options.sessionId }),
 			},
 		});
 		void this.pump(onMessage, onExit);
@@ -254,25 +266,12 @@ export function complete(cli: string, cwd: string, prompt: string, model: string
 	return answer(prompt, { ...baseOptions(cli, cwd), tools: [], maxTurns: 1, persistSession: false, ...(model ? { model } : {}) });
 }
 
-const SIDE_QUESTION = "This is a side question about the conversation so far, asked while the work goes on. Answer it briefly from what you already know. Don't use tools and don't continue the task.";
-
 /**
- * `/btw`: a side question about session `sessionId`, asked of a throwaway copy of it, so
- * neither the question nor the answer joins the conversation. Works while a turn runs (the
- * copy has the transcript up to now).
+ * Session `sessionId`'s saved messages in order (its transcript's conversation chain), read
+ * from where Claude Code keeps sessions run in `cwd`. Empty when there's none.
  */
-export function askAside(cli: string, cwd: string, sessionId: string, question: string, model: string | undefined, effort: Effort): Promise<string> {
-	return answer(`${SIDE_QUESTION}\n\n${question}`, {
-		...baseOptions(cli, cwd),
-		systemPrompt: { type: "preset", preset: "claude_code" },
-		tools: [],
-		maxTurns: 1,
-		resume: sessionId,
-		forkSession: true,
-		persistSession: false,
-		effort,
-		...(model ? { model } : {}),
-	});
+export async function savedMessages(sessionId: string, cwd: string): Promise<SessionMessage[]> {
+	return getSessionMessages(sessionId, { dir: cwd });
 }
 
 /** An async queue: the messages Claude Code reads, in order, until it's closed. */

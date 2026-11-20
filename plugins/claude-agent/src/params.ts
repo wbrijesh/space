@@ -1,7 +1,7 @@
 // Parameters of Space's `_space/*` requests, checked (anything malformed is a readable error).
 
 import type { ContentBlock } from "@agentclientprotocol/sdk";
-import type { Complete, ConfigureSession, SideQuestion, SteerSession, UnsteerSession } from "./generated/protocol.js";
+import type { Complete, ConfigureSession, SteerSession, UnsteerSession } from "./generated/protocol.js";
 
 function isObject(v: unknown): v is Record<string, unknown> {
 	return !!v && typeof v === "object" && !Array.isArray(v);
@@ -29,10 +29,9 @@ export function parseComplete(raw: unknown): Complete {
 	return { ...sessionRef(raw), prompt, provider: str(p.provider), model: str(p.model) };
 }
 
-export function parseSideQuestion(raw: unknown): SideQuestion {
-	const question = str(isObject(raw) ? raw.question : undefined)?.trim();
-	if (!question) throw new Error("question is required");
-	return { ...sessionRef(raw), question };
+/** The session a new or loaded session is a side chat of (`_meta[key]`), if any. */
+export function sideOf(meta: unknown, key: string): string | undefined {
+	return str(isObject(meta) ? meta[key] : undefined);
 }
 
 export function parseSteer(raw: unknown): SteerSession {

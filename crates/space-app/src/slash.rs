@@ -1,16 +1,15 @@
-//! The composer's `/` menu, and side questions (`/btw`).
+//! The composer's `/` menu, and `/btw`, which opens the side chat.
 //!
 //! A text that is `/` and the start of a command's name lists the agent's commands (from its
 //! `_space/status`) that begin with it. ↑/↓ move the selection, Tab completes `/name ` (to type
 //! arguments), ⏎ or a click sends the selected command, Esc closes the menu until the text
-//! changes. A command marked `side` (`/btw`) isn't sent as a prompt: the rest of its text is a
-//! side question, answered beside the conversation (also while a turn runs) above the composer;
-//! the command alone shows the last answer again.
+//! changes. A command marked `side` (`/btw`) isn't sent as a prompt: typing it and a space opens
+//! the side chat (see `side_chat`), focused, and what follows goes there.
 
 use gpui::component::input::RopeExt as _;
 use gpui::*;
 use space_core::protocol::CommandInfo;
-use space_ui::components::composer::{CommandMenu, RecallStep, SideView};
+use space_ui::components::composer::{CommandMenu, RecallStep};
 
 use crate::app::SpaceApp;
 
@@ -42,17 +41,28 @@ pub(crate) fn matches<'a>(text: &str, commands: &'a [CommandInfo]) -> Vec<&'a Co
     commands.iter().filter(|c| c.name.to_lowercase().starts_with(&name)).collect()
 }
 
-/// The side question in `text`, when it runs a side command: `/btw why?` → `why?`; `/btw` → ``.
-pub(crate) fn side_question<'a>(text: &'a str, commands: &[CommandInfo]) -> Option<&'a str> {
+/// The text for the side chat when `text` (as sent) runs a side command: `/btw why?` → `why?`;
+/// `/btw` → ``.
+pub(crate) fn side_text<'a>(text: &'a str, commands: &[CommandInfo]) -> Option<&'a str> {
     let rest = text.trim().strip_prefix('/')?;
     let (name, question) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
     commands.iter().any(|c| c.side && c.name == name).then(|| question.trim())
 }
 
+/// As it's typed: `text` is a side command and a space (or more after it), so the side chat
+/// opens; what came after the space goes there. `/btw` alone isn't yet (it may become `/btwx`).
+pub(crate) fn side_opening<'a>(text: &'a str, commands: &[CommandInfo]) -> Option<&'a str> {
+    let rest = text.strip_prefix('/')?;
+    let at = rest.find(char::is_whitespace)?;
+    let (name, after) = rest.split_at(at);
+    let space = after.chars().next()?.len_utf8();
+    commands.iter().any(|c| c.side && c.name == name).then(|| &after[space..])
+}
+
 impl SpaceApp {
     /// The commands of the selected thread's agent: its session's, or (no session yet) the ones
     /// the agent listed last.
-    fn commands(&self) -> Vec<CommandInfo> {
+    pub(crate) fn commands(&self) -> Vec<CommandInfo> {
         let own = self.current().and_then(|t| t.state.status.commands.clone());
         own.or_else(|| self.agent_commands.clone()).unwrap_or_default()
     }
@@ -128,56 +138,13 @@ impl SpaceApp {
         self.slash.edited("");
         cx.notify();
     }
-
-    /// Send `text` as a side question when it runs a side command. `false`: it doesn't.
-    pub(crate) fn send_side_question(&mut self, key: u64, text: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let commands = self.commands();
-        let Some(question) = side_question(text, &commands).map(str::to_string) else { return false };
-        self.input.update(cx, |s, cx| s.clean(window, cx));
-        let Some(thread) = self.thread_mut(key) else { return true };
-        thread.draft.clear();
-        if question.is_empty() {
-            // The command alone: the last answer again.
-            thread.state.dismiss_side(false);
-        } else if let Some(session) = thread.live_session().cloned() {
-            cx.background_spawn(async move {
-                if let Err(e) = session.ask_aside(question).await {
-                    tracing::info!("side question: {e:#}");
-                }
-            })
-            .detach();
-        } else {
-            self.banner = Some("Side questions are about a conversation: send a message first.".into());
-        }
-        cx.notify();
-        true
-    }
-
-    /// The side question to show above the composer.
-    pub(crate) fn side_view(&self) -> Option<SideView> {
-        let side = self.current()?.state.side()?;
-        Some(SideView {
-            question: side.question.clone().into(),
-            answer: side.answer.clone().map(Into::into),
-            error: side.error.clone().map(Into::into),
-        })
-    }
-
-    /// Close the side question (its × or Esc). `false`: none was shown.
-    pub(crate) fn close_side(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(key) = self.selected else { return false };
-        let Some(thread) = self.thread_mut(key).filter(|t| t.state.side().is_some()) else { return false };
-        thread.state.dismiss_side(true);
-        cx.notify();
-        true
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use space_core::protocol::CommandInfo;
 
-    use super::{SlashMenu, matches, side_question};
+    use super::{SlashMenu, matches, side_opening, side_text};
 
     fn commands() -> Vec<CommandInfo> {
         let c = |name: &str, side: bool| CommandInfo { name: name.into(), description: String::new(), hint: None, side };
@@ -201,14 +168,26 @@ mod tests {
     }
 
     #[test]
-    fn side_questions() {
+    fn side_commands_as_sent() {
         let cs = commands();
-        assert_eq!(side_question("/btw why the retry?", &cs), Some("why the retry?"));
-        assert_eq!(side_question("  /btw\n  what changed? ", &cs), Some("what changed?"));
-        assert_eq!(side_question("/btw", &cs), Some(""));
-        assert_eq!(side_question("/btwx why", &cs), None);
-        assert_eq!(side_question("/compact", &cs), None);
-        assert_eq!(side_question("btw why", &cs), None);
+        assert_eq!(side_text("/btw why the retry?", &cs), Some("why the retry?"));
+        assert_eq!(side_text("  /btw\n  what changed? ", &cs), Some("what changed?"));
+        assert_eq!(side_text("/btw", &cs), Some(""));
+        assert_eq!(side_text("/btwx why", &cs), None);
+        assert_eq!(side_text("/compact", &cs), None);
+        assert_eq!(side_text("btw why", &cs), None);
+    }
+
+    #[test]
+    fn the_side_chat_opens_on_the_space_after_the_command() {
+        let cs = commands();
+        assert_eq!(side_opening("/btw", &cs), None, "not yet: it could still become another word");
+        assert_eq!(side_opening("/btw ", &cs), Some(""));
+        assert_eq!(side_opening("/btw why", &cs), Some("why"), "pasted with the question");
+        assert_eq!(side_opening("/btw  two", &cs), Some(" two"));
+        assert_eq!(side_opening("/btwx ", &cs), None);
+        assert_eq!(side_opening("/compact ", &cs), None);
+        assert_eq!(side_opening(" /btw ", &cs), None);
     }
 
     #[test]

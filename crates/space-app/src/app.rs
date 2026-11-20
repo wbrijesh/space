@@ -33,7 +33,7 @@ pub use space_ui::actions::{
     ToggleSidebar,
     ShowChat, ShowTrajectory, CloseFile, OpenInLastApp,
     CloseTerminal, MaximizePane, NewTerminal, NextTerminal, PreviousTerminal, TerminalClear, TerminalCopy, TerminalPaste,
-    ToggleRightPane, ShowTerminal, ShowFiles, OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
+    ToggleRightPane, ShowTerminal, ShowFiles, ShowSideChat, OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
 };
 use space_ui::assets::SpaceAssets;
 use space_ui::components::composer;
@@ -175,6 +175,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-j", ShowTerminal, None),
             KeyBinding::new("cmd-alt-b", ToggleRightPane, None),
             KeyBinding::new("cmd-p", ShowFiles, None),
+            KeyBinding::new("cmd-shift-l", ShowSideChat, None),
             // Maximize the right pane, from anywhere (the terminal would take the key otherwise).
             KeyBinding::new("cmd-shift-enter", MaximizePane, None),
             KeyBinding::new("cmd-shift-enter", MaximizePane, Some("Terminal")),
@@ -191,6 +192,8 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-w", CloseFile, Some("Files")),
             KeyBinding::new("cmd-w", CloseFile, Some("FileTree")),
             KeyBinding::new("cmd-w", CloseFile, Some("Files > Input")),
+            // In the side chat, ⌘W hides the pane.
+            KeyBinding::new("cmd-w", ToggleRightPane, Some("SideChat > Composer > Input")),
             KeyBinding::new("ctrl-tab", NextTerminal, Some("Terminal")),
             KeyBinding::new("ctrl-shift-tab", PreviousTerminal, Some("Terminal")),
             KeyBinding::new("cmd-c", TerminalCopy, Some("Terminal")),
@@ -270,6 +273,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
                     MenuItem::action("Right Pane", ToggleRightPane),
                     MenuItem::action("Terminal", ShowTerminal),
                     MenuItem::action("Files", ShowFiles),
+                    MenuItem::action("Side Chat", ShowSideChat),
                     MenuItem::separator(),
                     MenuItem::action("Scroll to Bottom", ScrollToBottom),
                     MenuItem::action("Focus Composer", FocusComposer),
@@ -457,6 +461,10 @@ pub struct SpaceApp {
     /// The trackpad gesture under way, for two-finger swipes.
     pub(crate) swipe: crate::swipe::SwipeTracker,
     pub(crate) terminals: crate::terminal::Terminals,
+    /// Each thread's side chat (by the thread's key), made when it's first opened.
+    pub(crate) side_chats: HashMap<u64, crate::side_chat::SideChat>,
+    /// Side chats saved for threads, until they're opened.
+    pub(crate) saved_sides: crate::side_chat::SavedSides,
 }
 
 impl SpaceApp {
@@ -489,8 +497,17 @@ impl SpaceApp {
                 // Typing ends ↑/↓ recall (a recalled message is set without a change event), and
                 // typing while the agent sleeps starts it, so it's up when you send.
                 InputEvent::Change => {
+                    // Keys meant for the side chat `/btw` just opened, before it's drawn.
+                    if this.hand_off_to_side(window, cx) {
+                        return;
+                    }
                     this.end_recall();
                     let text = this.input.read(cx).value().to_string();
+                    // `/btw` and a space: to the side chat, with what follows.
+                    if let Some(rest) = crate::slash::side_opening(&text, &this.commands()).map(str::to_string) {
+                        this.open_side_chat_with(&rest, window, cx);
+                        return;
+                    }
                     this.slash.edited(&text);
                     if !this.input.read(cx).value().trim().is_empty() {
                         this.wake_agent(cx);
@@ -676,6 +693,8 @@ impl SpaceApp {
             cmd_held: false,
             slash: Default::default(),
             swipe: Default::default(),
+            side_chats: HashMap::new(),
+            saved_sides: Default::default(),
         };
         this.watch_agent_idle(cx);
         this.watch_midnight(cx);
@@ -709,12 +728,16 @@ impl SpaceApp {
 
     // ----- lookup -----------------------------------------------------------------------
 
+    /// Thread `key`: one on the sidebar, or a side chat.
     pub(crate) fn thread(&self, key: u64) -> Option<&Thread> {
-        self.threads.iter().find(|t| t.key == key)
+        self.threads.iter().find(|t| t.key == key).or_else(|| self.side_chats.values().map(|s| &s.thread).find(|t| t.key == key))
     }
 
     pub(crate) fn thread_mut(&mut self, key: u64) -> Option<&mut Thread> {
-        self.threads.iter_mut().find(|t| t.key == key)
+        match self.threads.iter().position(|t| t.key == key) {
+            Some(ix) => self.threads.get_mut(ix),
+            None => self.side_chats.values_mut().map(|s| &mut s.thread).find(|t| t.key == key),
+        }
     }
 
     pub(crate) fn current(&self) -> Option<&Thread> {
@@ -793,6 +816,10 @@ impl SpaceApp {
                     return;
                 }
                 let thread = n.session_id.as_ref().and_then(|sid| self.session_threads.get(sid)).and_then(|k| self.thread(*k));
+                // A side chat answers while you watch it.
+                if thread.is_some_and(|t| t.side_of.is_some()) {
+                    return;
+                }
                 let body = n.body.clone().or_else(|| thread.map(Thread::title)).unwrap_or_default();
                 notify::post(thread.map(|t| t.key), &n.title, &body, n.banner, n.sound);
             }

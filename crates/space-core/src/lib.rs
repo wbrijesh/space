@@ -30,7 +30,7 @@ pub use host::{
 pub use secrets::Secrets;
 pub use session::{
     ImageRef, TextRef, UserInput, PermissionDecision, PermissionKind, PermissionOption, PermissionRequest, PlanEntry, SessionEvent, SessionId,
-    SessionState, SideQuestion, ToolCallInfo, ToolCallPatch, ToolStatus, TranscriptItem,
+    SessionState, ToolCallInfo, ToolCallPatch, ToolStatus, TranscriptItem,
 };
 pub use space_protocol as protocol;
 

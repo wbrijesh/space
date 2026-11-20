@@ -90,6 +90,8 @@ pub struct Thread {
     pub open_turns: HashSet<usize>,
     thought_started: HashMap<usize, Instant>,
     pub thought_secs: HashMap<usize, u64>,
+    /// A side chat: the thread it's beside (see `side_chat`).
+    pub side_of: Option<u64>,
 }
 
 /// A message on its way: what the composer held when it was sent.
@@ -155,6 +157,7 @@ impl Thread {
             open_turns: HashSet::new(),
             thought_started: HashMap::new(),
             thought_secs: HashMap::new(),
+            side_of: None,
         }
     }
 
@@ -329,6 +332,19 @@ impl SpaceApp {
             return;
         };
         let Some(thread) = self.thread(key) else { return };
+        // A side chat follows its thread's session: it waits for one.
+        let side_of = match thread.side_of {
+            None => None,
+            Some(main) => match self.main_session_id(main) {
+                Some(id) => Some(id),
+                None => {
+                    if self.thread(main).is_some_and(|t| t.session.is_none() && !t.creating) {
+                        self.create_session(main, cx);
+                    }
+                    return;
+                }
+            },
+        };
         let defaults = self.session_defaults(thread);
         let host = self.host.clone();
         // Sessions are kept (and can be loaded) only with a session store.
@@ -350,13 +366,24 @@ impl SpaceApp {
                 }
             });
             let data_dir = dirs.data;
-            let result = match &resume {
-                Some((_, session_id)) => agent.load_session(session_id, cwd, data_dir, Some(&id)).await,
+            let new = |data_dir: Option<PathBuf>| {
+                let (agent, cwd, side_of) = (agent.clone(), cwd.clone(), side_of.clone());
+                let id = id.clone();
+                async move {
+                    match &side_of {
+                        Some(main) => agent.new_side_session(main, cwd, data_dir, Some(&id)).await,
+                        None => agent.new_session_in(cwd, data_dir, Some(&id)).await,
+                    }
+                }
+            };
+            let result = match (&resume, &side_of) {
+                (Some((_, session_id)), Some(main)) => agent.load_side_session(session_id, main, cwd.clone(), data_dir, Some(&id)).await,
+                (Some((_, session_id)), None) => agent.load_session(session_id, cwd.clone(), data_dir, Some(&id)).await,
                 // An agent that can't use the folder still gets a session (kept in memory).
-                None => match agent.new_session_in(cwd.clone(), data_dir.clone(), Some(&id)).await {
+                (None, _) => match new(data_dir.clone()).await {
                     Err(e) if data_dir.is_some() => {
                         tracing::warn!("a session in {}: {e:#}; keeping it in memory", data_dir.unwrap_or_default().display());
-                        agent.new_session_in(cwd, None, Some(&id)).await
+                        new(None).await
                     }
                     result => result,
                 },
@@ -408,6 +435,11 @@ impl SpaceApp {
     /// What a new session should be switched to: for a new thread, the defaults from
     /// Settings; for a thread whose agent exited, the model and level it was using.
     pub(crate) fn session_defaults(&self, thread: &Thread) -> Option<ConfigureSession> {
+        // A new side chat: on its thread's model and level.
+        let thread = match thread.side_of.and_then(|main| self.thread(main)) {
+            Some(main) if thread.state.items.is_empty() && !main.state.items.is_empty() => main,
+            _ => thread,
+        };
         let request = if thread.state.items.is_empty() {
             let d = &self.settings.settings.new_threads;
             let (provider, model) =
@@ -440,6 +472,7 @@ impl SpaceApp {
         for event in self.orphans.remove(&sid).unwrap_or_default() {
             self.apply_session_event(key, &event, cx);
         }
+        self.main_session_started(key, cx);
         cx.notify();
     }
 
@@ -497,9 +530,14 @@ impl SpaceApp {
         self.accept_command(window, cx);
         let text = self.input.read(cx).value().trim().to_string();
         let Some(thread) = self.thread_mut(key) else { return };
-        // A side question (`/btw …`) goes beside the conversation, also while a turn runs.
+        // `/btw …` goes to the side chat (also while a turn runs).
         let plain = thread.attachments.is_empty() && thread.images.is_empty() && thread.pastes.is_empty() && thread.quote.is_none();
-        if plain && self.send_side_question(key, &text, window, cx) {
+        if plain && let Some(rest) = crate::slash::side_text(&text, &self.commands()).map(str::to_string) {
+            self.open_side_chat_with("", window, cx);
+            if let Some(side) = self.side_chats.get(&key) {
+                side.input.update(cx, |s, cx| s.set_value(rest, window, cx));
+            }
+            self.send_side(key, window, cx);
             return;
         }
         let Some(thread) = self.thread_mut(key) else { return };
@@ -547,7 +585,7 @@ impl SpaceApp {
     }
 
     /// Send `message` in thread `key`: now, queued while the agent works, or once a session is up.
-    fn dispatch(&mut self, key: u64, when: crate::queue::When, running: bool, message: Outgoing, cx: &mut Context<Self>) {
+    pub(crate) fn dispatch(&mut self, key: u64, when: crate::queue::When, running: bool, message: Outgoing, cx: &mut Context<Self>) {
         // The agent is working: the message waits (for the turn, or for the current step).
         if running {
             self.queue_message(key, when, message, cx);
@@ -568,7 +606,9 @@ impl SpaceApp {
                 self.create_session(key, cx);
             }
         }
-        self.transcript_scroll.jump_to_bottom();
+        if self.selected == Some(key) {
+            self.transcript_scroll.jump_to_bottom();
+        }
         cx.notify();
     }
 
@@ -579,6 +619,7 @@ impl SpaceApp {
         let Some(session) = thread.session.clone() else { return };
         // A thread that was saved already had its first message.
         let first = thread.name.is_none()
+            && thread.side_of.is_none()
             && thread.meta.is_none()
             && !thread.state.items.iter().any(|i| matches!(i, TranscriptItem::User { .. }));
         if first && !message.text.trim().is_empty() {

@@ -8,7 +8,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
-import { askAside, complete, Engine, PROVIDER, type SDKMessage } from "./claude.js";
+import { complete, Engine, PROVIDER, type SDKMessage, savedMessages } from "./claude.js";
 import { claudeCli, errorText, log } from "./env.js";
 import {
 	COMPLETE_METHOD,
@@ -20,7 +20,7 @@ import {
 	type PreExecuteResult,
 	PROTOCOL_VERSION,
 	PROTOCOL_VERSION_META_KEY,
-	SIDE_QUESTION_METHOD,
+	SIDE_OF_META_KEY,
 	STATUS_METHOD,
 	STEER_META_KEY,
 	STEER_METHOD,
@@ -29,7 +29,7 @@ import {
 	UNSTEER_METHOD,
 	USAGE_META_KEY,
 } from "./generated/protocol.js";
-import { parseComplete, parseConfigure, parseSideQuestion, parseSteer, sessionRef, steerBlocks } from "./params.js";
+import { parseComplete, parseConfigure, parseSteer, sessionRef, sideOf, steerBlocks } from "./params.js";
 import { contextFromMeta, type HostLink, type Output, Session } from "./session.js";
 import { TraceRecorder } from "./trace.js";
 // Built in (a single-file executable has no package.json next to it).
@@ -97,8 +97,11 @@ const host: HostLink = {
 	confine: (params) => connection.client.request<ConfineResult>(CONFINE_METHOD, params),
 };
 
-/** Start (or continue) the session `sessionId` and announce its status once the reply is out. */
-async function openSession(sessionId: string, cwd: string, resume: boolean): Promise<void> {
+/**
+ * Start (or continue) the session `sessionId` and announce its status once the reply is out.
+ * `side`: it's a side chat of that session.
+ */
+async function openSession(sessionId: string, cwd: string, resume: boolean, side: string | undefined): Promise<void> {
 	const output = new Outbox(sessionId);
 	const trace = new TraceRecorder(sessionId, (batch: TraceBatch) => connection.client.notify(TRACE_METHOD, batch), resume);
 	let session: Session;
@@ -112,13 +115,15 @@ async function openSession(sessionId: string, cwd: string, resume: boolean): Pro
 			output,
 			trace,
 			start: (options, onMessage, onExit) => new Engine(options, record(sessionId, onMessage), onExit),
+			read: savedMessages,
+			...(side ? { sideOf: side } : {}),
 		});
 	} catch (error) {
 		log(`session/${resume ? "load" : "new"} failed:`, errorText(error));
 		throw error instanceof acp.RequestError ? error : new acp.RequestError(-32603, `Couldn't start Claude Code: ${errorText(error)}`);
 	}
 	sessions.set(sessionId, session);
-	log(`session/${resume ? "load" : "new"} ${sessionId} cwd=${cwd} model=${session.settings.model}`);
+	log(`session/${resume ? "load" : "new"} ${sessionId} cwd=${cwd} model=${session.settings.model}${side ? ` side chat of ${side}` : ""}`);
 	// Sent after the response is written, so the client already knows the session.
 	setImmediate(() => output.notify(STATUS_METHOD, session.status()));
 }
@@ -154,13 +159,13 @@ const app = acp
 	.onRequest(acp.methods.agent.session.new, async ({ params }) => {
 		// Claude Code takes the id as its own session id (a UUID).
 		const sessionId = randomUUID();
-		await openSession(sessionId, params.cwd, false);
+		await openSession(sessionId, params.cwd, false, sideOf(params._meta, SIDE_OF_META_KEY));
 		return { sessionId };
 	})
 	// Continues the conversation Claude Code kept. ACP has the agent replay it here; Space
 	// already shows it (from its own saved thread), so nothing is replayed.
 	.onRequest(acp.methods.agent.session.load, async ({ params }) => {
-		if (!sessions.has(params.sessionId)) await openSession(params.sessionId, params.cwd, true);
+		if (!sessions.has(params.sessionId)) await openSession(params.sessionId, params.cwd, true, sideOf(params._meta, SIDE_OF_META_KEY));
 		return {};
 	})
 	.onRequest(acp.methods.agent.session.prompt, async ({ params }) => {
@@ -197,18 +202,6 @@ const app = acp
 			return { text: await complete(requireCli(), session.cwd, params.prompt, params.model ?? session.settings.model) };
 		} catch (error) {
 			log(`complete ${params.sessionId} failed:`, errorText(error));
-			throw new acp.RequestError(-32603, errorText(error));
-		}
-	})
-	// `/btw`: a side question, answered from a copy of the conversation.
-	.onRequest(SIDE_QUESTION_METHOD, parseSideQuestion, async ({ params }) => {
-		const session = sessionFor(params.sessionId);
-		const { model, effort, conversation } = session.settings;
-		if (!conversation) throw new acp.RequestError(-32603, "There's no conversation to ask about yet.");
-		try {
-			return { text: await askAside(requireCli(), session.cwd, session.id, params.question, model, effort) };
-		} catch (error) {
-			log(`btw ${params.sessionId} failed:`, errorText(error));
 			throw new acp.RequestError(-32603, errorText(error));
 		}
 	})

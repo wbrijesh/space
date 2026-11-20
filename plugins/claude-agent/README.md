@@ -50,14 +50,14 @@ Space (ACP client) ──stdin/stdout NDJSON──▶ space-ts claude-agent (src
 | `_space/session/configure` | `setModel`, and the effort level (Space's thinking level). |
 | `_space/status` | The newest model of each family, the model's effort levels, context use, "Continue in Claude Code", and the commands. |
 | `_space/complete` | A one-turn, tool-free query outside the session (thread titles). |
-| `_space/session/btw` | A one-turn, tool-free query on a throwaway fork of the session. |
+| `space/sideOf` (side chats) | The first start forks the other session (`resume` + `forkSession`, under the side chat's own id); only `Read`, `Glob`, `Grep`, `WebFetch` and `WebSearch`; each prompt starts with what the other session's saved transcript has after the last message the side chat saw (`<main-thread-update through="…">`, shown as "Caught up with the main thread"), so where it left off is in its own transcript (src/side.ts). |
 
 ## Slash commands
 
 `/compact`, `/context` and `/goal` are Claude Code's own: a prompt that is exactly the command (with
 arguments) runs it; their output appears as the agent's reply (`/compact` says how far the context
-shrank). Any other text starting with `/` is sent as written. `/btw` is answered on the side
-(`_space/session/btw`); Claude Code doesn't run it headless.
+shrank). Any other text starting with `/` is sent as written. `/btw` is listed for Space, which
+opens its side chat with it; it never reaches Claude Code.
 
 ## Develop
 

@@ -37,6 +37,7 @@ mod reload;
 #[cfg(feature = "dev")]
 mod scenarios;
 mod settings;
+mod side_chat;
 mod single;
 mod slash;
 mod swipe;
