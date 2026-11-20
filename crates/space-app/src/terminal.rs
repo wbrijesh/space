@@ -277,7 +277,7 @@ impl SpaceApp {
         Some(view)
     }
 
-    fn pane_open(&self, key: u64) -> bool {
+    pub(crate) fn pane_open(&self, key: u64) -> bool {
         self.terminals.panes.get(&key).is_some_and(|p| p.open)
     }
 

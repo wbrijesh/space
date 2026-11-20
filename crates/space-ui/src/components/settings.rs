@@ -161,7 +161,12 @@ pub struct SettingsHandlers {
     pub on_plugin_enabled: PluginToggleHandler,
     /// `(plugin id, approved)`.
     pub on_plugin_approval: PluginToggleHandler,
+    /// What a two-finger swipe shows and hides (an index of [`SWIPE_CHOICES`]).
+    pub on_swipe: IndexHandler,
 }
+
+/// The choices of Trackpad ▸ "Two-finger swipe", in order.
+pub const SWIPE_CHOICES: [&str; 3] = ["Right pane", "Sidebar", "Off"];
 
 impl Default for SettingsHandlers {
     fn default() -> Self {
@@ -178,6 +183,7 @@ impl Default for SettingsHandlers {
             on_choose_field: Rc::new(|_, _, _, _, _| {}),
             on_plugin_enabled: Rc::new(|_, _, _, _| {}),
             on_plugin_approval: Rc::new(|_, _, _, _| {}),
+            on_swipe: Rc::new(|_, _, _| {}),
         }
     }
 }
@@ -200,6 +206,8 @@ pub struct SettingsPage {
     /// The days closed threads are kept (saved on ⏎ or when it loses focus); `None`: threads
     /// aren't saved, so no row.
     keep_closed: Option<Entity<InputState>>,
+    /// What a two-finger swipe shows and hides (an index of [`SWIPE_CHOICES`]).
+    swipe: usize,
 }
 
 impl SettingsPage {
@@ -215,7 +223,13 @@ impl SettingsPage {
             plugins: Vec::new(),
             handlers: SettingsHandlers::default(),
             keep_closed: None,
+            swipe: 0,
         }
+    }
+
+    pub fn swipe(mut self, choice: usize) -> Self {
+        self.swipe = choice;
+        self
     }
 
     pub fn keep_closed(mut self, input: Option<Entity<InputState>>) -> Self {
@@ -272,7 +286,7 @@ fn model_name(m: &ModelInfo) -> String {
 
 impl RenderOnce for SettingsPage {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        let Self { catalog, model, thinking, permission, modes, mode, plugin_settings, plugins, handlers: h, keep_closed } = self;
+        let Self { catalog, model, thinking, permission, modes, mode, plugin_settings, plugins, handlers: h, keep_closed, swipe } = self;
 
         // Model: "Agent default" + the agent's models.
         let (model_row, thinking_row) = match &catalog {
@@ -350,6 +364,7 @@ impl RenderOnce for SettingsPage {
             .child(div().text_size(text::HEADING).font_weight(FontWeight::SEMIBOLD).child("Settings"))
             .child(section("New threads", Some("Applies to threads you start from now on."), new_threads))
             .when_some(keep_closed, |d, input| d.child(section("Threads", None, vec![keep_closed_row(&input).into_any_element()])))
+            .child(section("Trackpad", None, vec![swipe_row(swipe, h.on_swipe.clone(), window).into_any_element()]))
             .children(plugin_sections)
             .child(section("Notifications", None, notifications))
             .when(!plugin_rows.is_empty(), |d| {
@@ -583,6 +598,19 @@ pub fn keep_closed_row(input: &Entity<InputState>) -> Div {
         "Keep closed threads",
         "Closed threads can be resumed from a new thread in their folder, then they're deleted.",
         Some(control.into_any_element()),
+    )
+}
+
+/// Which pane a two-finger swipe shows and hides.
+pub fn swipe_row(choice: usize, on_swipe: IndexHandler, window: &Window) -> Div {
+    let label = SWIPE_CHOICES.get(choice).copied().unwrap_or(SWIPE_CHOICES[0]);
+    let options = SWIPE_CHOICES.iter().map(|c| SharedString::from(*c)).collect();
+    let control = select("settings-swipe", label, options, Some(choice), Some(on_swipe), window);
+    row(
+        "Two-finger swipe",
+        "Shows and hides this pane wherever the pointer is: swipe the way it moves to show it (to the left for the \
+         right pane, to the right for the sidebar), the other way to hide it.",
+        Some(control),
     )
 }
 

@@ -182,6 +182,8 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
                 cx.stop_propagation();
             }
         }))
+        // Two-finger swipes show and hide a pane (Settings ▸ Trackpad).
+        .on_scroll(cx.listener(|this, e: &ScrollEvent, window, cx| this.scrolled(e, window, cx)))
         // Esc in the composer closes the `/` menu, then the side question, then stops the agent
         // while it works (open panels and menus close first).
         .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
@@ -911,10 +913,18 @@ fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>)
                 let _ = this.update(cx, |this, cx| this.answer_plugin_approval(plugin, approved, cx));
             })
         },
+        on_swipe: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |ix, _, cx| {
+                let pane = crate::settings::SwipePane::ALL.get(ix).copied().unwrap_or_default();
+                let _ = this.update(cx, |this, cx| this.set_swipe_pane(pane, cx));
+            })
+        },
     };
     let s = &app.settings.settings;
     let page = SettingsPage::new(catalog)
         .keep_closed(keep_closed)
+        .swipe(s.trackpad.swipe.index())
         .model(s.new_threads.model.clone().map(|m| (m.provider, m.id)))
         .thinking(s.new_threads.thinking_level.clone())
         .permission(app.permission)

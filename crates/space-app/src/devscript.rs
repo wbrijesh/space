@@ -16,6 +16,8 @@
 //! release 400 300     left mouse up
 //! selection           print the window's selected text and where it ends, and the quote state
 //! scroll 400 300 -120 trackpad scroll at (400, 300) moving the view 120 px (negative: up)
+//! swipe 400 300 -200  a two-finger trackpad gesture at (400, 300): began, moved 200 px across as
+//!                     the platform reports it (with natural scrolling, negative: fingers to the left), ended
 //! key cmd-n           dispatch a keystroke
 //! type some text      type text into the focused element
 //! resize 1280 820     resize the window (logical px)
@@ -190,6 +192,29 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                         window.refresh();
                     });
                     cx.background_executor().timer(Duration::from_millis(16)).await;
+                }
+                "swipe" => {
+                    let position = point(px(num(0)), px(num(1)));
+                    let steps = 8;
+                    let mut phases = vec![(TouchPhase::Started, 0.)];
+                    phases.extend((0..steps).map(|_| (TouchPhase::Moved, num(2) / steps as f32)));
+                    phases.push((TouchPhase::Ended, 0.));
+                    for (touch_phase, dx) in phases {
+                        let _ = window.update(cx, |_, window, cx| {
+                            window.dispatch_event(
+                                PlatformInput::Scroll(ScrollEvent {
+                                    position,
+                                    delta: ScrollDelta::Pixels(point(px(dx), px(0.))),
+                                    modifiers: Modifiers::default(),
+                                    touch_phase,
+                                    source: ScrollSource::Pointer,
+                                }),
+                                cx,
+                            );
+                            window.refresh();
+                        });
+                        cx.background_executor().timer(Duration::from_millis(16)).await;
+                    }
                 }
                 "key" => {
                     if let Some(k) = args.first().and_then(|k| Keystroke::parse(Box::leak(k.to_string().into_boxed_str())).ok()) {

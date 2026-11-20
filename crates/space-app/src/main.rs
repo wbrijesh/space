@@ -39,6 +39,7 @@ mod scenarios;
 mod settings;
 mod single;
 mod slash;
+mod swipe;
 mod terminal;
 mod terminal_view;
 mod text_prompt;

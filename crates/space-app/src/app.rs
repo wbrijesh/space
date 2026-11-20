@@ -451,6 +451,8 @@ pub struct SpaceApp {
     pub(crate) cmd_held: bool,
     /// The composer's `/` menu.
     pub(crate) slash: crate::slash::SlashMenu,
+    /// The trackpad gesture under way, for two-finger swipes.
+    pub(crate) swipe: crate::swipe::SwipeTracker,
     pub(crate) terminals: crate::terminal::Terminals,
 }
 
@@ -670,6 +672,7 @@ impl SpaceApp {
             next_pending: 0,
             cmd_held: false,
             slash: Default::default(),
+            swipe: Default::default(),
         };
         this.watch_agent_idle(cx);
         this.watch_midnight(cx);

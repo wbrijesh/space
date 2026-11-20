@@ -28,6 +28,7 @@ pub const SETTINGS_ENV: &str = "SPACE_SETTINGS";
 pub struct Settings {
     pub new_threads: NewThreads,
     pub threads: Threads,
+    pub trackpad: Trackpad,
     pub plugins: Plugins,
     /// The app "Open in" used last (a bundle id); Finder when unset or uninstalled.
     pub open_in: Option<String>,
@@ -60,6 +61,33 @@ pub struct Threads {
 impl Default for Threads {
     fn default() -> Self {
         Self { keep_closed_days: DEFAULT_KEEP_CLOSED_DAYS }
+    }
+}
+
+/// Trackpad gestures.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Trackpad {
+    /// The pane a two-finger swipe shows and hides.
+    pub swipe: SwipePane,
+}
+
+/// What a two-finger swipe shows and hides (see `swipe`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SwipePane {
+    #[default]
+    RightPane,
+    Sidebar,
+    Off,
+}
+
+impl SwipePane {
+    /// In the order of the Settings choices (`SWIPE_CHOICES`).
+    pub const ALL: [SwipePane; 3] = [SwipePane::RightPane, SwipePane::Sidebar, SwipePane::Off];
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|p| *p == self).unwrap_or(0)
     }
 }
 
@@ -244,6 +272,11 @@ impl SpaceApp {
 
     pub(crate) fn set_default_thinking(&mut self, level: Option<String>, cx: &mut Context<Self>) {
         self.settings.update(|s| s.new_threads.thinking_level = level);
+        cx.notify();
+    }
+
+    pub(crate) fn set_swipe_pane(&mut self, pane: SwipePane, cx: &mut Context<Self>) {
+        self.settings.update(|s| s.trackpad.swipe = pane);
         cx.notify();
     }
 
@@ -446,12 +479,14 @@ mod tests {
             s.new_threads.model = Some(ModelRef { provider: "stub".into(), id: "stub-fast".into() });
             s.new_threads.thinking_level = Some("high".into());
             s.new_threads.permission_mode = Some("locked".into());
+            s.trackpad.swipe = SwipePane::Sidebar;
             s.plugins.disabled = vec!["alerts".into()];
         });
         let json = std::fs::read_to_string(&path).unwrap();
         assert!(json.contains("\"newThreads\"") && json.contains("\"thinkingLevel\""));
         assert!(!json.contains("notifications"));
         assert!(json.contains("\"permissionMode\"") && json.contains("\"disabled\""));
+        assert!(json.contains("\"swipe\": \"sidebar\""), "{json}");
         assert_eq!(SettingsStore::load(Some(path)).settings, store.settings);
     }
 

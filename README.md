@@ -25,6 +25,7 @@ cask clears macOS's download mark so it opens normally.
 | **While the agent works** | ⏎ queues a message for when it's done · ⌘⏎ sends it into the running turn, after the current step |
 | **Transcript** | ⌘F find · ⌘G / ⇧⌘G next / previous · ⌘↓ scroll to the bottom · ⇧⌘C Chat · ⇧⌘T Trajectory · select text in a message, then **Quote** to answer it (the agent gets it as a blockquote) |
 | **Right pane** | ⌘⌥B (or the title bar's pane button) show / hide, on the tab used last · ⌘J (or ⌃\`) Terminal, from it hide · ⌘P the file tree, from it hide · in Files, ⌘W closes the open file, from the tree hides the pane · in a terminal, ⌘T new tab · ⌘W close tab · ⌃Tab next tab · ⇧⌘⏎ maximize · ⌘K clear |
+| **Trackpad** | two-finger swipe left shows the right pane, right hides it, wherever the pointer is (Settings ▸ Trackpad: the sidebar instead, the other way round, or off) |
 | **App** | ⌘, Settings · ⌘Q quit (always asks, and says if threads are working or terminals run something) |
 
 - **No checks:** the agent runs every tool call it decides on (shell commands, edits, fetches)
