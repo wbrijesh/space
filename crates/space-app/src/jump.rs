@@ -2,15 +2,22 @@
 //!
 //! Holding ⌘ numbers the sidebar rows in view, from the top of what's shown (1, 2, … 10, 11 …:
 //! scrolling renumbers them). Typing a number while ⌘ is held picks a row, and letting go of ⌘
-//! goes to it, so two digits work (⌘ held, 1, 2, release: row 12). Rows the digits typed so far
+//! goes to it, so two digits work (⌘ held, 1, 2, release: row 12). That works at once, but the
+//! numbers only show once ⌘ has been held for [`NUMBERS_AFTER`]: a quick ⌘ shortcut, or ⌘ and a
+//! number you know, doesn't flash them. Rows the digits typed so far
 //! no longer lead to fade. Any other ⌘ shortcut (⌘J, ⌘N…) hides the numbers at once, until ⌘
 //! is pressed again. ⌘⌥↓ / ⌘⌥↑ step to the next or previous thread in the list.
 
 use std::ops::Range;
+use std::time::Duration;
 
 use gpui::*;
 
 use crate::app::SpaceApp;
+
+/// How long ⌘ alone is held before the sidebar shows the rows' numbers. Someone who knows the
+/// number has typed it well before this; holding ⌘ this long means looking for them.
+pub(crate) const NUMBERS_AFTER: Duration = Duration::from_millis(300);
 
 /// ⌘ and a digit, nothing else: a thread number.
 pub(crate) fn is_number_key(k: &Keystroke) -> bool {
@@ -44,11 +51,32 @@ impl SpaceApp {
         }
     }
 
-    /// While ⌘ alone is held (and the sidebar is open): each listed row's number, if it has
-    /// one, and whether the digits typed so far lead to it.
+    /// ⌘ alone went down (`true`) or isn't held any more: the numbers show after
+    /// [`NUMBERS_AFTER`] if it's still held then, and go at once.
+    pub(crate) fn cmd_alone_changed(&mut self, alone: bool, cx: &mut Context<Self>) {
+        self.cmd_numbers = false;
+        if !alone {
+            return;
+        }
+        self.cmd_press += 1;
+        let press = self.cmd_press;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(NUMBERS_AFTER).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.cmd_press == press && this.cmd_alone {
+                    this.cmd_numbers = true;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// While ⌘ alone has been held a while (and the sidebar is open): each listed row's number,
+    /// if it has one, and whether the digits typed so far lead to it.
     pub(crate) fn row_shortcuts(&self) -> Vec<Option<(SharedString, bool)>> {
         let count = self.listed_threads().len();
-        if !self.cmd_alone || self.cmd_other || !self.sidebar_open {
+        if !self.cmd_numbers || self.cmd_other || !self.sidebar_open {
             return vec![None; count];
         }
         let view = self.rows_in_view(count);

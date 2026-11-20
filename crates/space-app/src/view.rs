@@ -159,7 +159,8 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &FindPrevious, window, cx| this.find_step(false, window, cx)))
         .on_action(cx.listener(|this, _: &CloseFind, window, cx| this.close_find(true, window, cx)))
         // ⌘ held turns the composer's queue button white (after this step), and alone numbers
-        // the sidebar rows; letting go goes to the row whose number was typed (see `jump`).
+        // the sidebar rows (shown after a moment); letting go goes to the row whose number was
+        // typed (see `jump`).
         .on_modifiers_changed(cx.listener(|this, e: &ModifiersChangedEvent, window, cx| {
             let m = &e.modifiers;
             let alone = m.platform && !m.alt && !m.control && !m.shift;
@@ -170,7 +171,10 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
                     this.cmd_other = false;
                 }
                 this.cmd_held = m.platform;
-                this.cmd_alone = alone;
+                if this.cmd_alone != alone {
+                    this.cmd_alone = alone;
+                    this.cmd_alone_changed(alone, cx);
+                }
                 if released {
                     this.cmd_released(window, cx);
                 }

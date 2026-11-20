@@ -417,8 +417,12 @@ pub struct SpaceApp {
     pub(crate) replies: crate::find::Replies,
     /// The sidebar's thread list (which rows are in view, for ⌘ numbers).
     pub(crate) sidebar_scroll: ScrollHandle,
-    /// ⌘ alone is held: the sidebar shows row numbers.
+    /// ⌘ alone is held: ⌘ and digits go to a sidebar row.
     pub(crate) cmd_alone: bool,
+    /// ⌘ alone has been held a while: the sidebar shows the rows' numbers (see `jump`).
+    pub(crate) cmd_numbers: bool,
+    /// Counts ⌘ presses, so a wait for the numbers from an earlier one does nothing.
+    pub(crate) cmd_press: u64,
     /// Digits typed while ⌘ is held: the row to go to when it's let go.
     pub(crate) cmd_digits: String,
     /// Another ⌘ shortcut was pressed while ⌘ is held: no numbers until it's pressed again.
@@ -667,6 +671,8 @@ impl SpaceApp {
             closed_threads: Vec::new(),
             sidebar_scroll: ScrollHandle::new(),
             cmd_alone: false,
+            cmd_numbers: false,
+            cmd_press: 0,
             cmd_digits: String::new(),
             cmd_other: false,
             keep_closed_input: None,

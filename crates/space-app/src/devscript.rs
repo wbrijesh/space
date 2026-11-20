@@ -19,6 +19,7 @@
 //! swipe 400 300 -200  a two-finger trackpad gesture at (400, 300): began, moved 200 px across as
 //!                     the platform reports it (with natural scrolling, negative: fingers to the left), ended
 //! key cmd-n           dispatch a keystroke
+//! modifiers cmd       hold these modifiers (`cmd`, `alt`, `ctrl`, `shift`, joined by `-`; `none` lets go)
 //! type some text      type text into the focused element
 //! resize 1280 820     resize the window (logical px)
 //! size                print the window's size and scale factor
@@ -224,6 +225,15 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                             window.refresh();
                         });
                     }
+                }
+                "modifiers" => {
+                    let held = args.first().copied().unwrap_or("none");
+                    let has = |m: &str| held.split('-').any(|h| h == m);
+                    let modifiers = Modifiers { platform: has("cmd"), alt: has("alt"), control: has("ctrl"), shift: has("shift"), function: false };
+                    let _ = window.update(cx, |_, window, cx| {
+                        window.dispatch_event(PlatformInput::ModifiersChanged(ModifiersChangedEvent { modifiers, capslock: Capslock::default() }), cx);
+                        window.refresh();
+                    });
                 }
                 "type" => {
                     let text = line.strip_prefix("type").unwrap_or("").trim_start().to_string();
