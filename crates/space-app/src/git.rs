@@ -41,7 +41,7 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
 
 /// git's error, without its hints, on a few lines. A switch that would overwrite local changes
 /// says which files, briefly.
-fn message(stderr: &str) -> String {
+pub(crate) fn message(stderr: &str) -> String {
     if stderr.contains("would be overwritten by checkout") {
         let files: Vec<&str> = stderr.lines().filter(|l| l.starts_with('\t')).map(str::trim).collect();
         let mut list = files.iter().take(3).copied().collect::<Vec<_>>().join(", ");

@@ -2,6 +2,7 @@
 //! app and the gallery render the same code. With the `dev` feature each module also has a
 //! `previews()` function listing named example states (see [`crate::preview`]).
 
+pub mod changes;
 pub mod composer;
 pub mod file_tree;
 pub mod file_viewer;

@@ -296,7 +296,7 @@ impl SpaceApp {
         self.open_pane(key, view, window, cx);
     }
 
-    /// ⌘J / ⌃` (Terminal), ⌘P (Files, on its tree) and ⌘⇧L (the side chat): open the pane on
+    /// ⌘J / ⌃` (Terminal), ⌘P (Files, on its tree), ⌘⇧L (the side chat) and ⌃⇧G (Changes): open the pane on
     /// that view; when it's shown already (Terminal or the side chat focused, or the tree
     /// showing), hide the pane and go back to the composer.
     pub(crate) fn show_pane_view(&mut self, view: PaneView, window: &mut Window, cx: &mut Context<Self>) {
@@ -310,6 +310,7 @@ impl SpaceApp {
             PaneView::Files => tree_shown,
             PaneView::Terminal => self.terminal_focused(key, window, cx),
             PaneView::SideChat => self.side_chat_focused(key, window, cx),
+            PaneView::Changes => self.changes_focus.contains_focused(window, cx),
         };
         if shown && in_use {
             self.hide_terminal(window, cx);
@@ -350,6 +351,10 @@ impl SpaceApp {
         }
         if view == Some(PaneView::SideChat) {
             self.focus_side_chat(key, window, cx);
+        }
+        if view == Some(PaneView::Changes) {
+            let focus = self.changes_focus.clone();
+            window.focus(&focus, cx);
         }
         self.terminal_slide(cx);
         cx.notify();

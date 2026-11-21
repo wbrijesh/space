@@ -92,6 +92,9 @@ pub struct Thread {
     pub thought_secs: HashMap<usize, u64>,
     /// A side chat: the thread it's beside (see `side_chat`).
     pub side_of: Option<u64>,
+    /// Told to the agent with the next message: the folder was switched to another branch
+    /// from the Changes view (see `changes`).
+    pub branch_note: Option<String>,
 }
 
 /// A message on its way: what the composer held when it was sent.
@@ -108,7 +111,7 @@ pub struct Outgoing {
 impl Outgoing {
     /// The message as the agent gets it, once its images and pastes are saved.
     pub fn input(&self, images: Vec<space_core::ImageRef>, texts: Vec<space_core::TextRef>) -> space_core::UserInput {
-        space_core::UserInput { text: self.text.clone(), quote: self.quote.clone(), attachments: self.attachments.clone(), images, texts }
+        space_core::UserInput { text: self.text.clone(), quote: self.quote.clone(), attachments: self.attachments.clone(), images, texts, note: None }
     }
 }
 
@@ -158,6 +161,7 @@ impl Thread {
             thought_started: HashMap::new(),
             thought_secs: HashMap::new(),
             side_of: None,
+            branch_note: None,
         }
     }
 
@@ -626,6 +630,7 @@ impl SpaceApp {
             self.request_title(key, session.id().to_string(), message.text.clone(), cx);
         }
         let dir = thread_attachments_dir(self.thread(key));
+        let note = self.thread_mut(key).and_then(|t| t.branch_note.take());
         cx.spawn(async move |this, cx| {
             let (images, pastes) = (message.images.clone(), message.pastes.clone());
             let saved = cx.background_spawn(async move { crate::paste::save_all(&images, &pastes, &dir) }).await;
@@ -640,7 +645,7 @@ impl SpaceApp {
                 }
             };
             // Failures are reported as session events (Error + TurnEnded).
-            let _ = session.prompt_with(message.input(images, texts)).await;
+            let _ = session.prompt_with(space_core::UserInput { note, ..message.input(images, texts) }).await;
         })
         .detach();
     }

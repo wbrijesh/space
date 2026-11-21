@@ -33,7 +33,7 @@ pub use space_ui::actions::{
     ToggleSidebar,
     ShowChat, ShowTrajectory, CloseFile, OpenInLastApp,
     CloseTerminal, MaximizePane, NewTerminal, NextTerminal, PreviousTerminal, TerminalClear, TerminalCopy, TerminalPaste,
-    ToggleRightPane, ShowTerminal, ShowFiles, ShowSideChat, OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
+    ToggleRightPane, ShowTerminal, ShowFiles, ShowSideChat, ShowChanges, OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
 };
 use space_ui::assets::SpaceAssets;
 use space_ui::components::composer;
@@ -75,6 +75,8 @@ pub struct Options {
     pub open_terminal: bool,
     /// Dev scenarios: open the selected thread's right pane on Files.
     pub open_files: bool,
+    /// Dev scenarios: open the selected thread's right pane on Changes.
+    pub open_changes: bool,
 }
 
 /// A thread opened at launch: an optional prompt sent once its session exists and an
@@ -176,6 +178,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-alt-b", ToggleRightPane, None),
             KeyBinding::new("cmd-p", ShowFiles, None),
             KeyBinding::new("cmd-shift-l", ShowSideChat, None),
+            KeyBinding::new("ctrl-shift-g", ShowChanges, None),
             // Maximize the right pane, from anywhere (the terminal would take the key otherwise).
             KeyBinding::new("cmd-shift-enter", MaximizePane, None),
             KeyBinding::new("cmd-shift-enter", MaximizePane, Some("Terminal")),
@@ -194,6 +197,8 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-w", CloseFile, Some("Files > Input")),
             // In the side chat, ⌘W hides the pane.
             KeyBinding::new("cmd-w", ToggleRightPane, Some("SideChat > Composer > Input")),
+            // Changes: the open file (or the pull request's editor), then the pane.
+            KeyBinding::new("cmd-w", CloseFile, Some("Changes")),
             KeyBinding::new("ctrl-tab", NextTerminal, Some("Terminal")),
             KeyBinding::new("ctrl-shift-tab", PreviousTerminal, Some("Terminal")),
             KeyBinding::new("cmd-c", TerminalCopy, Some("Terminal")),
@@ -274,6 +279,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
                     MenuItem::action("Terminal", ShowTerminal),
                     MenuItem::action("Files", ShowFiles),
                     MenuItem::action("Side Chat", ShowSideChat),
+                    MenuItem::action("Changes", ShowChanges),
                     MenuItem::separator(),
                     MenuItem::action("Scroll to Bottom", ScrollToBottom),
                     MenuItem::action("Focus Composer", FocusComposer),
@@ -397,6 +403,11 @@ pub struct SpaceApp {
     pub(crate) files: crate::files_view::FilesView,
     /// The folder menu's branch page while it's open.
     pub(crate) branch_menu: Option<crate::branches::BranchMenu>,
+    /// The right pane's Changes mode: each folder's state, its focus, and the watcher on the
+    /// shown one.
+    pub(crate) changes: crate::changes::ChangesByFolder,
+    pub(crate) changes_focus: FocusHandle,
+    pub(crate) changes_watch: Option<crate::changes::ChangesWatch>,
     /// A finished selection in the transcript that can be quoted: its thread and text.
     pub(crate) quote_offer: Option<(u64, String)>,
     pub(crate) transcript_area: crate::quote::Area,
@@ -656,6 +667,9 @@ impl SpaceApp {
             file_tabs: HashMap::new(),
             files: crate::files_view::FilesView::new(window, cx),
             branch_menu: None,
+            changes: HashMap::new(),
+            changes_focus: cx.focus_handle(),
+            changes_watch: None,
             quote_offer: None,
             transcript_area: Default::default(),
             next_image_id: 0,
@@ -728,6 +742,9 @@ impl SpaceApp {
         }
         if options.open_terminal {
             this.show_pane_view(space_ui::components::right_pane::PaneView::Terminal, window, cx);
+        }
+        if options.open_changes {
+            this.show_pane_view(space_ui::components::right_pane::PaneView::Changes, window, cx);
         }
         this
     }
@@ -1325,7 +1342,7 @@ pub(crate) fn resolve_mode(entries: &[CatalogEntry], thread: Option<&str>, defau
 
 
 /// Open a URL in the browser (on a thread, so the `open` child is reaped).
-fn open_url(url: String) {
+pub(crate) fn open_url(url: String) {
     std::thread::spawn(move || {
         if let Err(e) = std::process::Command::new("open").arg(&url).status() {
             tracing::warn!("opening {url}: {e}");

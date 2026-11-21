@@ -55,6 +55,17 @@ impl Host {
     }
 }
 
+impl Host {
+    /// One short, tool-free answer to `prompt` by the agent of `session_id`, with its model
+    /// (commit messages, pull request text). The error says why there's none.
+    pub async fn complete(&self, session_id: &str, prompt: &str) -> Result<String, String> {
+        let request = Complete { session_id: session_id.to_string(), prompt: prompt.to_string(), provider: None, model: None };
+        let inner = self.inner.clone();
+        let result = self.inner.rt.spawn(async move { inner.agent_complete(request).await }).await.map_err(|e| e.to_string())?;
+        result.map(|r| r.text).map_err(|e| e.message)
+    }
+}
+
 impl HostInner {
     /// `agent/complete`: forward to the agent of the request's session.
     pub(super) async fn agent_complete(self: &Arc<Self>, request: Complete) -> Result<CompleteResult, RpcError> {

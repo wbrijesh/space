@@ -28,6 +28,7 @@ gpui::actions!(
         ShowTerminal,
         ShowFiles,
         ShowSideChat,
+        ShowChanges,
         CloseFile,
         NewTerminal,
         CloseTerminal,

@@ -29,6 +29,8 @@ pub struct Scenario {
     pub trajectory: bool,
     /// Open the right pane on Files (the project folder: the repo, or the folder given).
     pub files: bool,
+    /// Open the right pane on Changes (the project folder: the repo, or the folder given).
+    pub changes: bool,
     /// Also run the real terminal plugin (with a scripted shell: a colour test, then `sh`), and
     /// open the selected thread's terminal pane.
     pub terminal: bool,
@@ -356,6 +358,14 @@ pub fn all() -> Vec<Scenario> {
             ..Default::default()
         },
         Scenario {
+            name: "changes",
+            description: "The right pane's Changes view beside a finished thread, on the project folder (the \
+                          repo, or the folder given after the scenario name). The stub writes commit messages.",
+            threads: vec![explain_thread()],
+            changes: true,
+            ..Default::default()
+        },
+        Scenario {
             name: "side-chat",
             description: "A finished thread to open the side chat beside (⌘⇧L, or /btw and a space). Threads are \
                           saved in a temp folder kept between launches, so a side chat is there again next time.",
@@ -537,6 +547,7 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         open_trajectory: scenario.trajectory,
         open_terminal: scenario.terminal,
         open_files: scenario.files,
+        open_changes: scenario.changes,
     };
     Ok((host, options))
 }

@@ -143,6 +143,9 @@ pub struct UserInput {
     pub attachments: Vec<PathBuf>,
     pub images: Vec<ImageRef>,
     pub texts: Vec<TextRef>,
+    /// Told to the agent before the message but not part of it (the transcript doesn't show
+    /// it): say, that the folder was switched to another branch.
+    pub note: Option<String>,
 }
 
 impl UserInput {
@@ -150,9 +153,17 @@ impl UserInput {
         Self { text: text.into(), ..Default::default() }
     }
 
-    /// The text the agent gets: the quote as a markdown blockquote ("> " on each line) and a
-    /// blank line, then the message.
+    /// The text the agent gets: the note and a blank line, the quote as a markdown blockquote
+    /// ("> " on each line) and a blank line, then the message.
     pub fn prompt_text(&self) -> String {
+        let message = self.message_text();
+        match self.note.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+            Some(note) => format!("{note}\n\n{message}"),
+            None => message,
+        }
+    }
+
+    fn message_text(&self) -> String {
         let Some(quote) = self.quote.as_deref().map(str::trim).filter(|q| !q.is_empty()) else { return self.text.clone() };
         let quoted: Vec<String> = quote.lines().map(|l| if l.trim().is_empty() { ">".to_string() } else { format!("> {l}") }).collect();
         let quoted = quoted.join("\n");
@@ -454,6 +465,8 @@ mod tests {
         assert_eq!(input("why?", Some("one\n\ntwo")).prompt_text(), "> one\n>\n> two\n\nwhy?");
         assert_eq!(input("", Some("just this")).prompt_text(), "> just this");
         assert_eq!(input("why?", Some("  ")).prompt_text(), "why?");
+        let noted = UserInput { note: Some("<branch-changed/>".into()), ..input("why?", Some("q")) };
+        assert_eq!(noted.prompt_text(), "<branch-changed/>\n\n> q\n\nwhy?");
         let SessionEvent::UserMessage { text, quote, .. } = input("why?", Some("one")).into_message(None) else { panic!() };
         assert_eq!((text.as_str(), quote.as_deref()), ("why?", Some("one")));
         // Threads saved before quotes load.

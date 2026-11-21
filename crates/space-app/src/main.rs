@@ -48,6 +48,10 @@ mod paste;
 mod diff;
 mod git;
 mod branches;
+mod changes;
+mod gh;
+mod repo;
+mod repo_state;
 mod files;
 mod files_view;
 mod open_in;
@@ -189,6 +193,7 @@ fn main() -> Result<()> {
         open_trajectory: false,
         open_terminal: false,
         open_files: false,
+        open_changes: false,
     };
     #[cfg(feature = "dev")]
     if let Some(name) = &args.scenario {

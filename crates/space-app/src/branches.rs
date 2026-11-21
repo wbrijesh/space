@@ -182,7 +182,7 @@ impl SpaceApp {
 }
 
 /// The branches matching `query` (any part, any case), most recent first.
-fn filter(data: &Branches, query: &str, now_ms: u64) -> Vec<BranchRow> {
+pub(crate) fn filter(data: &Branches, query: &str, now_ms: u64) -> Vec<BranchRow> {
     let q = query.to_lowercase();
     data.list
         .iter()

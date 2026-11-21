@@ -1,4 +1,4 @@
-//! The right pane beside a thread, in three modes: Files, Terminal and the side chat. Its header
+//! The right pane beside a thread, in four modes: Files, Terminal, the side chat and Changes. Its header
 //! (the modes, then maximize; the title bar's pane button hides it), the bar under it with the
 //! mode's own tabs (the side chat's: what it is, and starting it over), and the chooser shown
 //! before a thread picks a mode.
@@ -13,7 +13,7 @@ use super::file_viewer::pane_tab;
 use super::menu::shortcut_label;
 use super::tip::TipExt as _;
 use super::widgets::icon_button;
-use crate::actions::{MaximizePane, ShowFiles, ShowSideChat, ShowTerminal};
+use crate::actions::{MaximizePane, ShowChanges, ShowFiles, ShowSideChat, ShowTerminal};
 use crate::theme::{color, radius, size, text};
 
 /// The pane's views.
@@ -23,17 +23,20 @@ pub enum PaneView {
     Files,
     /// A side chat about the thread: it reads along and can't change anything.
     SideChat,
+    /// The folder's uncommitted changes, file by file, and committing, pushing and pull requests.
+    Changes,
 }
 
 impl PaneView {
     /// In the header's order.
-    pub const ALL: [PaneView; 3] = [PaneView::Files, PaneView::Terminal, PaneView::SideChat];
+    pub const ALL: [PaneView; 4] = [PaneView::Files, PaneView::Terminal, PaneView::SideChat, PaneView::Changes];
 
     pub fn label(self) -> &'static str {
         match self {
             PaneView::Terminal => "Terminal",
             PaneView::Files => "Files",
             PaneView::SideChat => "Side chat",
+            PaneView::Changes => "Changes",
         }
     }
 
@@ -42,6 +45,7 @@ impl PaneView {
             PaneView::Terminal => Icon::new(Lucide::SquareTerminal),
             PaneView::Files => Icon::new(IconName::Folder),
             PaneView::SideChat => Icon::new(Lucide::MessagesSquare),
+            PaneView::Changes => Icon::new(Lucide::GitCompare),
         }
     }
 
@@ -50,6 +54,7 @@ impl PaneView {
             PaneView::Terminal => Box::new(ShowTerminal),
             PaneView::Files => Box::new(ShowFiles),
             PaneView::SideChat => Box::new(ShowSideChat),
+            PaneView::Changes => Box::new(ShowChanges),
         }
     }
 }
@@ -58,16 +63,18 @@ pub type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 pub type ViewHandler = Rc<dyn Fn(PaneView, &mut Window, &mut App)>;
 
 /// The pane's header: its modes (`view`: the one shown), then maximize (it fills the window
-/// beside the sidebar) or restore.
-pub fn header(view: Option<PaneView>, maximized: bool, on_view: ViewHandler, on_maximize: Handler) -> Div {
+/// beside the sidebar) or restore. A narrow pane (`width`) names only the shown mode; the
+/// others are their icons.
+pub fn header(view: Option<PaneView>, maximized: bool, width: Pixels, on_view: ViewHandler, on_maximize: Handler) -> Div {
+    let compact = width < px(480.);
     let modes = PaneView::ALL.map(|v| {
         let pick = on_view.clone();
         let id = ElementId::Name(format!("pane-mode-{}", v.label()).into());
-        pane_tab(id, Some(v.label().into()), v.icon(), view == Some(v), None, Rc::new(move |w, cx| pick(v, w, cx)))
-            .tip_action(v.label(), v.action().as_ref())
+        let label = (!compact || (view == Some(v) && width >= px(300.))).then(|| v.label().into());
+        pane_tab(id, label, v.icon(), view == Some(v), None, Rc::new(move |w, cx| pick(v, w, cx))).flex_none().tip_action(v.label(), v.action().as_ref())
     });
     bar()
-        .child(div().flex_1().min_w_0().flex().items_center().gap_1().children(modes))
+        .child(div().flex_1().min_w_0().overflow_hidden().flex().items_center().gap_1().children(modes))
         .child(
             icon_button("pane-maximize", if maximized { Lucide::Minimize2 } else { Lucide::Maximize2 }, true, false)
                 .tip_action(if maximized { "Restore" } else { "Maximize" }, &MaximizePane)
@@ -160,7 +167,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         div().w(px(560.)).h(px(320.)).flex().flex_col().bg(color::bg()).border_1().border_color(color::border()).child(child)
     }
     fn header_for(view: Option<PaneView>) -> Div {
-        header(view, false, Rc::new(|_, _, _| {}), Rc::new(|_, _| {}))
+        header(view, false, px(560.), Rc::new(|_, _, _| {}), Rc::new(|_, _| {}))
     }
     fn placeholder(label: &'static str) -> Div {
         div().flex_1().min_h_0().flex().items_center().justify_center().text_size(text::SM).text_color(color::text_3()).child(label)

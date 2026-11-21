@@ -32,6 +32,7 @@
 //! sidechat            print the selected thread's side chat: focused, its input, the composer's, items, running
 //! terminals           print the selected thread's right pane: open, its view, tabs, shells starting, how far it's shown
 //! open src/main.rs    show a file (relative to the thread's folder) in the Files view, as a click on its row would
+//! changes             print the selected thread's Changes bar: status, main step, ▾ steps, files, the open one, error, done
 //! shot name           capture this window to `$SPACE_SHOT_DIR/name.png` (or run `$SPACE_SHOT_CMD name`)
 //! shotnow name        same as `shot` without the 250 ms settle delay (animation frames)
 //! quit                quit the app
@@ -387,6 +388,14 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                                 let path = cwd.canonicalize().unwrap_or(cwd).join(&rel);
                                 app.show_file(key, &path, window, cx);
                             });
+                        }
+                    });
+                }
+                "changes" => {
+                    let _ = window.update(cx, |root, _, cx| {
+                        let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
+                        if let Some(app) = app {
+                            eprintln!("script: changes {}", app.read(cx).changes_summary(cx));
                         }
                     });
                 }

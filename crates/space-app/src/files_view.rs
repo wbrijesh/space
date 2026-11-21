@@ -502,6 +502,9 @@ impl SpaceApp {
     /// hide the pane.
     pub(crate) fn close_files_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected else { return };
+        if self.terminals.pane(key).and_then(|p| p.view) == Some(PaneView::Changes) {
+            return self.close_changes_item(window, cx);
+        }
         match self.file_tabs.get(&key).and_then(|t| t.active) {
             Some(ix) => self.close_file_tab(ix, window, cx),
             None => self.hide_terminal(window, cx),
@@ -815,7 +818,7 @@ fn code_editor(text: SharedString, language: &str, wrap: bool, window: &mut Wind
 /// A diff in a read-only editor: its rows as lines, the old and new numbers in the gutter,
 /// added lines green and removed ones red (their changed words brighter), and the unchanged
 /// lines left out as a quiet row.
-fn diff_editor(d: &Diff, language: &str, wrap: bool, window: &mut Window, cx: &mut Context<SpaceApp>) -> Entity<EditorState> {
+pub(crate) fn diff_editor(d: &Diff, language: &str, wrap: bool, window: &mut Window, cx: &mut Context<SpaceApp>) -> Entity<EditorState> {
     let text: SharedString = d.rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join("\n").into();
     let width = d.rows.iter().filter_map(|r| r.old.max(r.new)).max().unwrap_or(1).to_string().len();
     let number = |n: Option<usize>| n.map_or_else(String::new, |n| n.to_string());
@@ -867,7 +870,7 @@ fn is_markdown(path: &Path) -> bool {
 
 /// The editor's language for a file: its extension (the highlighter knows those), or a name
 /// for the well-known files without one.
-fn editor_language(path: &Path) -> String {
+pub(crate) fn editor_language(path: &Path) -> String {
     let name = file_name(path).to_lowercase();
     match name.as_str() {
         "makefile" | "gnumakefile" => "make".into(),

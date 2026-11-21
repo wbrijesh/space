@@ -34,7 +34,7 @@ use space_ui::ClickHandler;
 
 use crate::app::{
     CloseSettings, CloseTerminal, CloseThread, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizePane, NewTerminal, NewThread,
-    NextTerminal, OpenSettings, PreviousTerminal, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleRightPane, ShowTerminal, ShowFiles, ShowSideChat, ShowChat, ShowTrajectory, CloseFile,
+    NextTerminal, OpenSettings, PreviousTerminal, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleRightPane, ShowTerminal, ShowFiles, ShowSideChat, ShowChanges, ShowChat, ShowTrajectory, CloseFile,
     OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
 };
 use crate::settings::SaveKind;
@@ -148,6 +148,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &ShowTerminal, window, cx| this.show_pane_view(PaneView::Terminal, window, cx)))
         .on_action(cx.listener(|this, _: &ShowFiles, window, cx| this.show_pane_view(PaneView::Files, window, cx)))
         .on_action(cx.listener(|this, _: &ShowSideChat, window, cx| this.show_pane_view(PaneView::SideChat, window, cx)))
+        .on_action(cx.listener(|this, _: &ShowChanges, window, cx| this.show_pane_view(PaneView::Changes, window, cx)))
         .on_action(cx.listener(|this, _: &NewTerminal, window, cx| this.new_terminal(window, cx)))
         .on_action(cx.listener(|this, _: &CloseTerminal, window, cx| this.close_current_terminal(window, cx)))
         .on_action(cx.listener(|this, _: &NextTerminal, window, cx| this.step_terminal(1, window, cx)))
@@ -411,8 +412,13 @@ fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Con
             .child(terminal_content(app, key, window, cx))
             .into_any_element(),
         Some(PaneView::SideChat) => crate::side_chat::side_chat_content(app, key, window, cx),
+        Some(PaneView::Changes) => app.changes_content(key, window, cx),
     };
-    div().size_full().flex().flex_col().bg(color::bg()).child(header(view, maximized, on_view, on_maximize)).child(content).into_any_element()
+    // The pane's width, for the header (a narrow one shows the other modes as icons).
+    let sidebar = f32::from(size::SIDEBAR_W) * app.sidebar_shown.target();
+    let main = f32::from(window.viewport_size().width) - sidebar;
+    let width = px(if maximized { main } else { main * app.terminals.width });
+    div().size_full().flex().flex_col().bg(color::bg()).child(header(view, maximized, width, on_view, on_maximize)).child(content).into_any_element()
 }
 
 /// The Terminal mode's tabs: the terminals, then a new one.

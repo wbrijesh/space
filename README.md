@@ -24,7 +24,7 @@ cask clears macOS's download mark so it opens normally.
 | **Composer** | ⏎ send · ⇧⏎ newline · ↑ / ↓ your earlier messages · `/` the agent's commands (↑ / ↓ pick, Tab completes, ⏎ runs, Esc closes) · ⌘L focus · Esc stops the agent · a paste over 4,096 characters becomes a "Pasted text" attachment (click to read it) · a quote from the transcript sits above the input (× removes it) |
 | **While the agent works** | ⏎ queues a message for when it's done · ⌘⏎ sends it into the running turn, after the current step |
 | **Transcript** | ⌘F find · ⌘G / ⇧⌘G next / previous · ⌘↓ scroll to the bottom · ⇧⌘C Chat · ⇧⌘T Trajectory · select text in a message, then **Quote** to answer it (the agent gets it as a blockquote) |
-| **Right pane** | ⌘⌥B (or the title bar's pane button) show / hide, on the tab used last · ⌘J (or ⌃\`) Terminal, from it hide · ⌘P Files with its tree, from the tree hide · ⇧⌘L Side chat, from it hide · ⌘W closes the shown file or terminal tab; with no file open, one terminal, or in the side chat, it hides the pane · ⇧⌘⏎ (or the pane's expand button) maximize / restore it · in a terminal, ⌘T new tab · ⌃Tab next tab · ⌘K clear |
+| **Right pane** | ⌘⌥B (or the title bar's pane button) show / hide, on the tab used last · ⌘J (or ⌃\`) Terminal, from it hide · ⌘P Files with its tree, from the tree hide · ⇧⌘L Side chat, from it hide · ⌃⇧G Changes, from it hide · ⌘W closes the shown file or terminal tab (in Changes, the open diff); with no file open, one terminal, or in the side chat, it hides the pane · ⇧⌘⏎ (or the pane's expand button) maximize / restore it · in a terminal, ⌘T new tab · ⌃Tab next tab · ⌘K clear |
 | **Trackpad** | two-finger swipe left shows the right pane, right hides it, wherever the pointer is (Settings ▸ Trackpad: the sidebar instead, the other way round, or off) |
 | **App** | ⌘, Settings · ⌘Q quit (always asks, and says if threads are working or terminals run something) |
 
@@ -44,10 +44,11 @@ cask clears macOS's download mark so it opens normally.
   Opened from Spotlight or the Dock, Space starts where you worked last.
 - **Open in** (title bar, right): opens the thread's folder in the app you used last; the chevron
   lists the editors, Finder and terminals installed, and Copy Path.
-- **The right pane** has three modes, **Files**, **Terminal** and **Side chat** (tabs at its top),
-  each with its own bar under them: the open files (with a toggle for the tree beside them), the
-  terminals, or the side chat's. A thread's first opening offers the three; then it reopens on
-  the tab used last.
+- **The right pane** has four modes, **Files**, **Terminal**, **Side chat** and **Changes** (tabs
+  at its top; a narrow pane names only the shown one), each with its own bar under them: the
+  open files (with a toggle for the tree beside them), the terminals, the side chat's, or the
+  branch and what to do next. A thread's first opening offers the four; then it reopens on the
+  tab used last.
 - **Files** is the thread's folder as a tree: `.gitignore`d files are left out, git changes are
   colored (M, A, D, R, U) and folders with changes get a dot, a folder holding only a folder
   shows as one row, and it updates as files change. Type in the filter to search every path.
@@ -62,6 +63,20 @@ cask clears macOS's download mark so it opens normally.
   (each message you send carries what's new; "Caught up with the main thread" shows it), and can
   only read (files and the web), never change anything. `/btw` opens it focused at once, and
   what you type after goes there, however fast. ↺ starts it over; it's saved with the thread.
+- **Changes** (⌃⇧G) lists the folder's uncommitted files with their line counts; click one for
+  its diff under it (one at a time). The bar shows the branch, one status line and only the
+  next step as its button, the others that make sense under ▾: **Commit** (everything; Claude
+  writes the message in the repository's style, Undo takes it back until it's pushed), **Push**,
+  **Pull** (fast-forward only), **Create PR** (Claude writes the title and description; the
+  GitHub CLI opens it), **Commit to new branch** on the default branch, and **Switch to main**
+  after a merge. The first pull request in a repository asks which branch it goes into; that's
+  then the default (kept in the repository's git config) and shows as "→ main" in the bar. An
+  open pull request shows as a chip (it opens in the browser) and ▾ **Edit pull request**
+  changes its title, description and base. The branch menu switches branches at any point of a
+  conversation, or creates one from the current branch or the default one; threads in the
+  folder are told with their next message. Nothing changes branches while a thread is working
+  in the folder, and a merge or rebase in progress offers no steps. It reads the folder again as
+  files or `.git` change, and asks the remote when shown and every few minutes after.
 - **Slash commands**: `/compact` (optionally with what to keep), `/context`, `/goal <condition>`
   (Claude keeps working until it holds) and `/btw`, which opens the side chat.
 - **Trajectory** shows every model request and tool call of a thread
