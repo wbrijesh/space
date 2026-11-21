@@ -346,6 +346,8 @@ pub struct Composer {
     commands: Option<CommandMenu>,
     /// The "+" button (files and images can be attached).
     attach: bool,
+    /// Flat, for docking along a pane's bottom edge: no card (fill, border, corners, shadow).
+    docked: bool,
 }
 
 impl Composer {
@@ -365,7 +367,14 @@ impl Composer {
             after_step: false,
             commands: None,
             attach: true,
+            docked: false,
         }
+    }
+
+    /// Flat, without the card, for a pane that docks it along its bottom edge (the side chat).
+    pub fn docked(mut self) -> Self {
+        self.docked = true;
+        self
     }
 
     /// Without the "+" button: nothing can be attached.
@@ -432,7 +441,7 @@ impl Composer {
 
 impl RenderOnce for Composer {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let Self { id, input, running, queued, attachments, images, pastes, quote, controls, handlers: h, queued_messages, after_step, commands, attach: can_attach } = self;
+        let Self { id, input, running, queued, attachments, images, pastes, quote, controls, handlers: h, queued_messages, after_step, commands, attach: can_attach, docked } = self;
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
         let has_text = !input.read(cx).value().trim().is_empty();
         let blocker = controls.as_ref().and_then(|c| c.blocker.clone());
@@ -625,12 +634,18 @@ impl RenderOnce for Composer {
             .flex()
             .flex_col()
             .gap_2()
-            .p(px(PAD))
-            .rounded(radius::CARD)
-            .bg(color::surface())
-            .border_1()
-            .border_color(if focused { color::border_strong() } else { color::border() })
-            .shadow_md()
+            .map(|d| {
+                if docked {
+                    d.py(px(PAD))
+                } else {
+                    d.p(px(PAD))
+                        .rounded(radius::CARD)
+                        .bg(color::surface())
+                        .border_1()
+                        .border_color(if focused { color::border_strong() } else { color::border() })
+                        .shadow_md()
+                }
+            })
             .cursor_text()
             // Clicking the card's padding focuses the input, like a real text field.
             .on_click(move |_, w, cx| focus(w, cx))

@@ -296,7 +296,8 @@ pub(crate) fn side_chat_content(app: &mut SpaceApp, main: u64, window: &mut Wind
             window,
             cx,
         );
-        let content = div().w_full().px_4().pt_4().pb(size::SCROLL_FADE_H).flex().flex_col().children(items);
+        // One column, as wide as the main chat's at most, centred in a wider pane.
+        let content = div().w_full().max_w(size::CONTENT_MAX_W).mx_auto().px_4().pt_4().pb(size::SCROLL_FADE_H).flex().flex_col().children(items);
         FollowScrollArea::new("side-chat-transcript", &side.scroll, content).fade(true).button(true).into_any_element()
     };
     let handlers = ComposerHandlers {
@@ -320,7 +321,7 @@ pub(crate) fn side_chat_content(app: &mut SpaceApp, main: u64, window: &mut Wind
         },
         ..Default::default()
     };
-    let composer = Composer::new("side-chat-composer", &side.input).without_attach().running(thread.state.running).queued(thread.queued.is_some()).handlers(handlers);
+    let composer = Composer::new("side-chat-composer", &side.input).without_attach().docked().running(thread.state.running).queued(thread.queued.is_some()).handlers(handlers);
     let error = thread.error.clone().map(|e| {
         div().px_1().text_size(text::SM).text_color(color::red()).child(space_ui::format::clean_error(&e))
     });
@@ -339,6 +340,12 @@ pub(crate) fn side_chat_content(app: &mut SpaceApp, main: u64, window: &mut Wind
             }
         }))
         .child(body)
-        .child(div().flex_none().p_2().flex().flex_col().gap_1().children(error).child(composer))
+        // Docked along the bottom: a hairline across the pane, the input in the transcript's column.
+        .child(
+            div().flex_none().border_t_1().border_color(color::border()).child(
+                // px_3: the editor's own 4px inset lines its text up with the transcript's (px_4).
+                div().w_full().max_w(size::CONTENT_MAX_W).mx_auto().px_3().flex().flex_col().gap_1().children(error).child(composer),
+            ),
+        )
         .into_any_element()
 }
