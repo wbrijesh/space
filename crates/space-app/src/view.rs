@@ -81,8 +81,10 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
     app.terminals.set_visible(terminal_key.and_then(|k| app.terminals.selected(k)).map(|s| s.id.clone()).as_deref());
     let terminal_open = terminal_key.is_some();
     app.terminal_slide(cx);
+    app.maximize_slide(window, cx);
     let (terminal_shown, terminal_moving) = app.terminal_shown.at(now, pinned);
-    if terminal_moving && clock_running {
+    let (_, maximize_moving) = app.pane_max.at(now, pinned);
+    if (terminal_moving || maximize_moving) && clock_running {
         window.request_animation_frame();
     }
     // Drawn while open, and while it slides away after hiding.
@@ -372,7 +374,9 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
 
 /// The thread's body with the terminal pane beside it (or instead of it, maximized). `shown`:
 /// how far the pane has slid in (0..1); its column grows to its width while the pane inside
-/// keeps that width, so it slides in from the right without its terminal resizing.
+/// keeps that width, so it slides in from the right without its terminal resizing. While it
+/// maximizes or restores, the pane lies over the chat, its left edge moving across it (as a drag
+/// of its divider would), and the chat keeps its width beneath so its text doesn't reflow.
 fn with_terminal(
     app: &mut SpaceApp,
     key: u64,
@@ -381,10 +385,15 @@ fn with_terminal(
     window: &mut Window,
     cx: &mut Context<SpaceApp>,
 ) -> AnyElement {
-    let Some(pane) = app.terminals.pane(key) else { return body };
-    let maximized = pane.maximized;
+    if app.terminals.pane(key).is_none() {
+        return body;
+    }
+    let (max, _) = app.pane_max_at(cx);
+    // Settled over the chat, or beside it; anything between is the maximize slide.
+    let (full, beside) = (max >= 1., max <= 0.);
     let width = px(app.pane_width(window));
-    let sliding = !maximized && shown < 1.;
+    let chat = px(app.main_width(window)) - width;
+    let sliding = beside && shown < 1.;
     let pane = terminal_pane(app, key, window, cx);
     let pane = if sliding {
         div().absolute().top_0().left_0().h_full().w(width).flex().flex_col().child(pane).into_any_element()
@@ -395,19 +404,35 @@ fn with_terminal(
         .flex_1()
         .min_h_0()
         .flex()
-        .child(div().flex_1().min_w_0().flex().flex_col().when(maximized, |d| d.hidden()).child(body))
+        .relative()
         .child(
             div()
-                .relative()
+                .flex()
+                .flex_col()
+                .map(|d| if beside { d.flex_1().min_w_0() } else { d.flex_none().w(chat).overflow_hidden() })
+                .when(full, |d| d.hidden())
+                .child(body),
+        )
+        .child(
+            div()
                 .h_full()
                 .flex()
                 .flex_col()
-                .map(|d| if maximized { d.flex_1().min_w_0() } else { d.flex_none().w(width * shown) })
+                .map(|d| {
+                    if full {
+                        d.relative().flex_1().min_w_0()
+                    } else if beside {
+                        d.relative().flex_none().w(width * shown)
+                    } else {
+                        d.absolute().top_0().right_0().w(width + chat * max).bg(color::bg())
+                    }
+                })
                 .when(sliding, |d| d.overflow_hidden())
                 .child(pane)
                 // Beside the chat: a hairline like the title bar's, and a handle on it to resize.
-                .when(!maximized, |d| {
-                    d.border_l_1().border_color(color::border()).child(
+                .when(!full, |d| d.border_l_1().border_color(color::border()))
+                .when(beside, |d| {
+                    d.child(
                         div()
                             .id("terminal-divider")
                             .absolute()
@@ -457,7 +482,9 @@ fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Con
     // The pane's width, for the header (a narrow one shows the other modes as icons).
     let sidebar = f32::from(size::SIDEBAR_W) * app.sidebar_shown.target();
     let main = f32::from(window.viewport_size().width) - sidebar;
-    let width = px(if maximized { main } else { app.pane_width(window) });
+    // Mid-slide, the width it has reached.
+    let pane = app.pane_width(window);
+    let width = px(pane + (main - pane) * app.pane_max_at(cx).0);
     let action = (view == Some(PaneView::SideChat)).then(|| crate::side_chat::side_chat_header_action(app, key, cx)).flatten();
     div().size_full().flex().flex_col().bg(color::bg()).child(header(view, maximized, width, action, on_view, on_maximize)).child(content).into_any_element()
 }

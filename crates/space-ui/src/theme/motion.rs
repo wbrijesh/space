@@ -3,6 +3,8 @@
 
 use std::time::Duration;
 
+use gpui::Pixels;
+
 /// Spoke spinner: one rotation per cycle, eased in and out (so it speeds up and slows down).
 pub const SPINNER_CYCLE: Duration = Duration::from_millis(1600);
 pub const SPINNER_SPOKES: usize = 8;
@@ -36,10 +38,19 @@ pub const TIP_FADE: Duration = Duration::from_millis(120);
 /// Sidebar show/hide, start to settled: a critically damped spring (no overshoot), like the
 /// spring macOS and SwiftUI use for split views. Most of the travel happens in the first half;
 /// the rest settles softly. See [`Spring`].
+///
+/// It times every panel: the sidebar covers its fixed width in this time, and any other panel
+/// move (the right pane sliding in or out, maximizing or restoring it) is timed from it by its
+/// distance ([`panel_duration`]), so all of them move alike.
 pub const SIDEBAR_SLIDE: Duration = Duration::from_millis(250);
 
-/// The terminal pane slides in from the right edge and out again, on the same kind of spring.
-pub const TERMINAL_SLIDE: Duration = Duration::from_millis(350);
+/// How long a panel takes to move `distance`: [`SIDEBAR_SLIDE`] for the sidebar's width, growing
+/// with the square root of the distance. At one constant speed a long move (maximizing across a
+/// wide chat) reads as sluggish, since motion is judged by its time more than its speed; the
+/// square root lets a longer move take longer, but faster (twice as far: 1.4× as long).
+pub fn panel_duration(distance: Pixels) -> Duration {
+    SIDEBAR_SLIDE.mul_f32((f32::from(distance).abs() / f32::from(super::size::SIDEBAR_W)).sqrt())
+}
 
 /// Fast start, gentle stop (cubic). Used for the toggle knob.
 pub fn ease_out(t: f32) -> f32 {
@@ -59,37 +70,49 @@ pub fn pulse(t: f32) -> f32 {
 /// ωt at which a critically damped move from rest is within 0.1% of its target (settled).
 const SETTLE: f64 = 9.3;
 
-/// A value (usually 0..1) moving toward a target on a critically damped spring, timed on the
-/// animation clock. Retargeting mid-flight keeps the current position and velocity, so a
-/// reversal turns smoothly instead of jumping.
+/// A panel's position (0..1, a fraction of its width) moving toward a target on a critically
+/// damped spring, timed on the animation clock. Each move says how far the panel travels, which
+/// times it like every other panel ([`panel_duration`]); there's no other way to start one.
+/// Retargeting mid-flight keeps the current position and velocity, so a reversal turns smoothly
+/// instead of jumping.
 #[derive(Debug, Clone, Copy)]
 pub struct Spring {
-    duration: Duration,
     target: f32,
-    /// Position and velocity when the current motion began, and when it began (clock time);
-    /// `None` once settled at `target`.
-    start: Option<(f32, f32, f64)>,
+    /// The motion under way; `None` once settled at `target`.
+    start: Option<Motion>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Motion {
+    /// Position and velocity when it began, and when (clock time).
+    x0: f32,
+    v0: f32,
+    since: f64,
+    /// Start to settled.
+    duration: Duration,
+}
+
+impl Motion {
+    fn omega(&self) -> f64 {
+        SETTLE / self.duration.as_secs_f64().max(1e-3)
+    }
 }
 
 impl Spring {
-    /// Settled at `value`; a move takes `duration` from start to settled.
-    pub fn new(value: f32, duration: Duration) -> Self {
-        Self { duration, target: value, start: None }
+    /// Settled at `value`.
+    pub fn new(value: f32) -> Self {
+        Self { target: value, start: None }
     }
 
     pub fn target(&self) -> f32 {
         self.target
     }
 
-    fn omega(&self) -> f64 {
-        SETTLE / self.duration.as_secs_f64().max(1e-3)
-    }
-
     /// Position and velocity at clock time `now` (`pinned`: the dev clock's pinned phase, read
     /// as a fraction of the settle time).
     fn state(&self, now: f64, pinned: Option<f32>) -> (f32, f32) {
-        let Some((x0, v0, since)) = self.start else { return (self.target, 0.) };
-        let w = self.omega();
+        let Some(motion) = self.start else { return (self.target, 0.) };
+        let (Motion { x0, v0, since, .. }, w) = (motion, motion.omega());
         let t = match pinned {
             Some(p) => p.clamp(0., 1.) as f64 * SETTLE / w,
             None => (now - since).max(0.),
@@ -107,11 +130,12 @@ impl Spring {
         (if moving { x } else { self.target }, moving)
     }
 
-    /// Head for `target` from wherever it is at `now`.
-    pub fn set(&mut self, target: f32, now: f64, pinned: Option<f32>) {
+    /// Head for `target` from wherever it is at `now`; a whole move (0 to 1) covers `distance`,
+    /// so it takes [`panel_duration`] of that, timed like every other panel.
+    pub fn slide_to(&mut self, target: f32, distance: Pixels, now: f64, pinned: Option<f32>) {
         let (x, v) = self.state(now, pinned);
         self.target = target;
-        self.start = Some((x, v, now));
+        self.start = Some(Motion { x0: x, v0: v, since: now, duration: panel_duration(distance) });
     }
 
     /// Jump to `value` (reduced motion).
@@ -127,8 +151,7 @@ pub const ALL: &[(&str, Duration, &str)] = &[
     ("DOTS_CYCLE", DOTS_CYCLE, "sin² pulse, 16% stagger, 50% pulse window"),
     ("SCROLL_GLIDE", SCROLL_GLIDE, "ease_out glide to the bottom (scroll-to-bottom button, ⌘↓)"),
     ("POP", POP, "ease_out fade + scale from 0.92 (scroll-to-bottom button)"),
-    ("SIDEBAR_SLIDE", SIDEBAR_SLIDE, "critically damped spring, start to settled: sidebar slides in/out, content resizes"),
-    ("TERMINAL_SLIDE", TERMINAL_SLIDE, "critically damped spring: the terminal pane slides in/out from the right, the chat resizes"),
+    ("SIDEBAR_SLIDE", SIDEBAR_SLIDE, "critically damped spring, start to settled: the sidebar's width; other panel moves by √distance (panel_duration)"),
 ];
 
 #[cfg(test)]
@@ -137,8 +160,8 @@ mod tests {
 
     #[test]
     fn spring_settles_without_overshoot_and_reverses_smoothly() {
-        let mut s = Spring::new(0., SIDEBAR_SLIDE);
-        s.set(1., 0., None);
+        let mut s = Spring::new(0.);
+        s.slide_to(1., super::super::size::SIDEBAR_W, 0., None);
         let mut last = 0.;
         for i in 1..=30 {
             let (x, _) = s.at(i as f64 * 0.01, None);
@@ -150,8 +173,28 @@ mod tests {
 
         // Reverse at 100ms: no jump in position.
         let (x, _) = s.at(0.1, None);
-        s.set(0., 0.1, None);
+        s.slide_to(0., super::super::size::SIDEBAR_W, 0.1, None);
         assert!((s.at(0.1, None).0 - x).abs() < 1e-4);
         assert_eq!(s.at(2.0, None), (0., false));
+    }
+
+    #[test]
+    fn every_panel_is_timed_from_the_sidebar() {
+        let sidebar = super::super::size::SIDEBAR_W;
+        assert_eq!(panel_duration(sidebar), SIDEBAR_SLIDE);
+        assert_eq!(panel_duration(sidebar * 4.), SIDEBAR_SLIDE * 2, "4× as far: 2× as long");
+        let ms = |w: f32| panel_duration(gpui::px(w)).as_secs_f64() * 1000.;
+        assert!((ms(520.) - 320.7).abs() < 0.5, "a 520px pane: {}", ms(520.));
+        assert!((ms(764.) - 388.7).abs() < 0.5, "maximizing over a 764px chat: {}", ms(764.));
+        assert_eq!(panel_duration(gpui::px(0.)), Duration::ZERO);
+
+        // A move four times as far settles twice as late.
+        let (mut near, mut far) = (Spring::new(0.), Spring::new(0.));
+        near.slide_to(1., gpui::px(300.), 0., None);
+        far.slide_to(1., gpui::px(1200.), 0., None);
+        let settle = panel_duration(gpui::px(300.)).as_secs_f64();
+        assert_eq!(near.at(settle, None), (1., false));
+        assert!(far.at(settle, None).1, "still moving");
+        assert_eq!(far.at(2. * settle + 1e-6, None), (1., false));
     }
 }

@@ -375,14 +375,34 @@ impl SpaceApp {
             !self.show_settings && self.terminals.pane(k).is_some_and(|p| p.open)
         });
         let target = if open { 1. } else { 0. };
-        if self.terminal_shown_for != self.selected || cx.reduce_motion() {
+        if self.terminal_shown_for != self.selected {
             self.terminal_shown.snap(target);
             self.terminal_shown_for = self.selected;
         } else if self.terminal_shown.target() != target {
-            let clock = space_ui::clock::AnimationClock::global(cx);
-            let (now, pinned) = (clock.now(), clock.pinned());
-            self.terminal_shown.set(target, now, pinned);
+            // It travels its own width.
+            crate::app::slide(&mut self.terminal_shown, target, px(self.terminals.width), cx);
         }
+    }
+
+    /// Bring the maximize slide in line with the current thread's pane: it grows over the chat
+    /// as it maximizes and shrinks back as it's restored, travelling the chat's width (timed like
+    /// every panel); it snaps when the thread changes. Called on every render.
+    pub(crate) fn maximize_slide(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let maximized = self.selected.and_then(|k| self.terminals.pane(k)).is_some_and(|p| p.open && p.maximized);
+        let target = if maximized { 1. } else { 0. };
+        if self.pane_max_for != self.selected {
+            self.pane_max.snap(target);
+            self.pane_max_for = self.selected;
+        } else if self.pane_max.target() != target {
+            let chat = self.main_width(window) - self.pane_width(window);
+            crate::app::slide(&mut self.pane_max, target, px(chat.max(0.)), cx);
+        }
+    }
+
+    /// How far the current thread's pane is maximized now (0..1), and whether it's moving.
+    pub(crate) fn pane_max_at(&self, cx: &App) -> (f32, bool) {
+        let clock = space_ui::clock::AnimationClock::global(cx);
+        self.pane_max.at(clock.now(), clock.pinned())
     }
 
     pub(crate) fn hide_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {

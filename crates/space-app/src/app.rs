@@ -389,6 +389,10 @@ pub struct SpaceApp {
     /// switching threads snaps it instead of sliding.
     pub(crate) terminal_shown: space_ui::theme::motion::Spring,
     pub(crate) terminal_shown_for: Option<u64>,
+    /// How far the current thread's pane is maximized (0: beside the chat, 1: over it), and the
+    /// thread it's for (switching threads snaps it).
+    pub(crate) pane_max: space_ui::theme::motion::Spring,
+    pub(crate) pane_max_for: Option<u64>,
     pub(crate) banner: Option<String>,
     /// The image viewer: a message's pictures and the one shown.
     pub(crate) viewer: Option<(Vec<space_ui::components::images::Pic>, usize)>,
@@ -690,9 +694,11 @@ impl SpaceApp {
             sidebar_open: true,
             window_width: f32::from(window.viewport_size().width),
             auto_closed: Vec::new(),
-            sidebar_shown: space_ui::theme::motion::Spring::new(1., space_ui::theme::motion::SIDEBAR_SLIDE),
-            terminal_shown: space_ui::theme::motion::Spring::new(0., space_ui::theme::motion::TERMINAL_SLIDE),
+            sidebar_shown: space_ui::theme::motion::Spring::new(1.),
+            terminal_shown: space_ui::theme::motion::Spring::new(0.),
             terminal_shown_for: None,
+            pane_max: space_ui::theme::motion::Spring::new(0.),
+            pane_max_for: None,
             banner,
             closed_threads: Vec::new(),
             sidebar_scroll: ScrollHandle::new(),
@@ -1319,13 +1325,7 @@ impl SpaceApp {
     pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_open = !self.sidebar_open;
         let target = if self.sidebar_open { 1. } else { 0. };
-        if cx.reduce_motion() {
-            self.sidebar_shown.snap(target);
-        } else {
-            let clock = space_ui::clock::AnimationClock::global(cx);
-            let (now, pinned) = (clock.now(), clock.pinned());
-            self.sidebar_shown.set(target, now, pinned);
-        }
+        slide(&mut self.sidebar_shown, target, space_ui::theme::size::SIDEBAR_W, cx);
         cx.notify();
     }
 
@@ -1387,6 +1387,17 @@ pub(crate) fn claude_cli_installed() -> bool {
 
 fn dirs_home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
+}
+
+/// Move a panel's `spring` to `target`, a whole move covering `distance`, timed like every
+/// panel (`motion::panel_duration`); a jump under reduced motion.
+pub(crate) fn slide(spring: &mut space_ui::theme::motion::Spring, target: f32, distance: Pixels, cx: &App) {
+    if cx.reduce_motion() {
+        spring.snap(target);
+    } else {
+        let clock = space_ui::clock::AnimationClock::global(cx);
+        spring.slide_to(target, distance, clock.now(), clock.pinned());
+    }
 }
 
 #[cfg(test)]
