@@ -20,6 +20,7 @@ mod app;
 mod attach;
 mod check;
 mod find;
+mod fit;
 mod idle;
 mod images;
 mod jump;

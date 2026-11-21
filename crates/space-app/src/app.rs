@@ -379,6 +379,10 @@ pub struct SpaceApp {
     /// The selected thread's transcript; every thread opens at the bottom.
     pub(crate) transcript_scroll: FollowScroll,
     pub(crate) sidebar_open: bool,
+    /// The window's width when last resized: only narrowing closes panels (`fit`).
+    pub(crate) window_width: f32,
+    /// What narrowing closed, in order, to reopen on widening (`fit`).
+    pub(crate) auto_closed: Vec<crate::fit::Closed>,
     /// The sidebar's shown fraction, sliding toward `sidebar_open`.
     pub(crate) sidebar_shown: space_ui::theme::motion::Spring,
     /// How far the current thread's terminal pane is shown (0..1), and the thread it's for:
@@ -586,6 +590,9 @@ impl SpaceApp {
             cx.notify();
         });
 
+        // Narrowing the window makes room for the chat: the right pane closes, then the sidebar.
+        let resize = cx.observe_window_bounds(window, |this, window, cx| this.window_resized(window, cx));
+
         // A ⌘ shortcut that isn't a thread number (⌘J, ⌘N…): the sidebar's numbers go at once,
         // before the shortcut runs (bindings run before the window's key listeners see it).
         let shortcuts = {
@@ -678,6 +685,8 @@ impl SpaceApp {
             usage_open: None,
             transcript_scroll: FollowScroll::new(),
             sidebar_open: true,
+            window_width: f32::from(window.viewport_size().width),
+            auto_closed: Vec::new(),
             sidebar_shown: space_ui::theme::motion::Spring::new(1., space_ui::theme::motion::SIDEBAR_SLIDE),
             terminal_shown: space_ui::theme::motion::Spring::new(0., space_ui::theme::motion::TERMINAL_SLIDE),
             terminal_shown_for: None,
@@ -707,7 +716,7 @@ impl SpaceApp {
             agent_activity: std::time::Instant::now(),
             agent_asleep: false,
             claude_cli: claude_cli_installed(),
-            _subscriptions: vec![sub, activation, quit, shortcuts],
+            _subscriptions: vec![sub, activation, resize, quit, shortcuts],
             terminals: crate::terminal::Terminals::new(&host_for_terminals),
             next_pending: 0,
             cmd_held: false,

@@ -41,7 +41,7 @@ use crate::settings::SaveKind;
 use crate::threads::Thread;
 
 /// A click callback that runs `f` on the app.
-fn click(cx: &mut Context<SpaceApp>, f: impl Fn(&mut SpaceApp, &mut Window, &mut Context<SpaceApp>) + 'static) -> ClickHandler {
+pub(crate) fn click(cx: &mut Context<SpaceApp>, f: impl Fn(&mut SpaceApp, &mut Window, &mut Context<SpaceApp>) + 'static) -> ClickHandler {
     Rc::new(cx.listener(move |this, _: &ClickEvent, w, cx| f(this, w, cx)))
 }
 
@@ -106,6 +106,12 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
     } else {
         let streaming = app.prepare_transcript(window, cx);
         let body = body(app, streaming, window, cx);
+        // A sidebar or pane opened by hand that leaves the chat too narrow: say so over it.
+        let body = if app.chat_too_narrow(window) {
+            div().relative().flex_1().min_h_0().flex().flex_col().child(body).child(app.too_narrow_overlay(cx)).into_any_element()
+        } else {
+            body
+        };
         match terminal_drawn {
             Some(key) => with_terminal(app, key, body, shown, terminal_shown, window, cx),
             None => body,

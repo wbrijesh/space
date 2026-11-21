@@ -109,15 +109,53 @@ pub fn empty_heading() -> Div {
         .child("What should we work on?")
 }
 
+/// Over the chat when a sidebar or pane opened by hand leaves it narrower than
+/// [`size::CHAT_MIN_W`]: what's wrong, and a button to hide each one that's open.
+pub fn too_narrow(on_hide_sidebar: Option<ClickHandler>, on_hide_pane: Option<ClickHandler>) -> Div {
+    let button = |id: &'static str, label: &'static str, handler: ClickHandler| {
+        pill_button(id, label, false).on_click(move |e, w, cx| handler(e, w, cx))
+    };
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_3()
+        .px_6()
+        .text_center()
+        // Opaque: the squeezed chat under it is unreadable anyway, and showing through it would
+        // make this hard to read. Clicks stay on the overlay; scrolls pass, so a two-finger swipe
+        // still shows and hides a pane.
+        .bg(color::bg())
+        .block_mouse_except_scroll()
+        .child(Icon::new(IconName::PanelLeft).size(size::ICON_MD).text_color(color::text_3()))
+        .child(div().text_size(text::MD).font_weight(FontWeight::MEDIUM).text_color(color::text()).child("Not enough room for the chat"))
+        .child(div().text_size(text::SM).text_color(color::text_2()).child("Hide the sidebar or the right pane, or make the window wider."))
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .justify_center()
+                .gap_2()
+                .children(on_hide_sidebar.map(|h| button("narrow-hide-sidebar", "Hide sidebar", h)))
+                .children(on_hide_pane.map(|h| button("narrow-hide-pane", "Hide right pane", h))),
+        )
+}
+
 #[cfg(feature = "dev")]
 pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     use crate::preview::{Area, ComponentPreview, Example};
     let noop: ClickHandler = std::rc::Rc::new(|_, _, _| {});
     vec![
         ComponentPreview::new(Area::Shell, "Banners", "Problems and notices above the composer.").stacked().examples([
-            Example::new("agent problem", move |_, _| {
-                problem_card("The agent exited: exited with code 3: model request failed", Some(noop.clone()))
-                    .into_any_element()
+            Example::new("agent problem", {
+                let noop = noop.clone();
+                move |_, _| {
+                    problem_card("The agent exited: exited with code 3: model request failed", Some(noop.clone()))
+                        .into_any_element()
+                }
             })
             .width(size::CONTENT_MAX_W),
             Example::new("notice", |_, _| {
@@ -135,6 +173,12 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             })
             .width(size::CONTENT_MAX_W),
         ]),
+        ComponentPreview::new(Area::Shell, "Too narrow", "Over the chat when the sidebar or pane leaves it under 600 px.").example(
+            Example::new("both open", {
+                let noop = noop.clone();
+                move |_, _| div().relative().w(px(420.)).h(px(260.)).child(too_narrow(Some(noop.clone()), Some(noop.clone()))).into_any_element()
+            }),
+        ),
         ComponentPreview::new(Area::Shell, "Empty state", "New thread: heading over the centered composer.")
             .example(Example::new("heading", |_, _| empty_heading().into_any_element()).width(size::CONTENT_MAX_W)),
     ]

@@ -180,6 +180,8 @@ pub mod size {
     /// the first title-bar button.
     pub const TRAFFIC_LIGHTS_W: Pixels = px(92.);
     pub const CONTENT_MAX_W: Pixels = px(760.);
+    /// The chat's narrowest: a narrowing window closes the right pane, then the sidebar, to keep it.
+    pub const CHAT_MIN_W: Pixels = px(600.);
     /// Your messages' bubbles take at most 82% of the column, and never more than this.
     pub const USER_BUBBLE_MAX_W: Pixels = px(560.);
 

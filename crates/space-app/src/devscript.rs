@@ -253,11 +253,12 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                 }
                 "shot" | "shotnow" => {
                     // Let a frame render before capturing (`shotnow`: capture immediately). A
-                    // hidden window (another workspace) draws no frames, but a resize draws one.
+                    // hidden window (another workspace) draws no frames, but a resize draws one (a taller one:
+                    // narrowing would close panels, see `fit`).
                     if cmd == "shot" {
                         let shown = window.update(cx, |_, window, _| window.viewport_size()).ok();
                         if let Some(s) = shown {
-                            let _ = window.update(cx, |_, window, _| window.resize(size(s.width + px(1.), s.height)));
+                            let _ = window.update(cx, |_, window, _| window.resize(size(s.width, s.height + px(1.))));
                             cx.background_executor().timer(Duration::from_millis(100)).await;
                             let _ = window.update(cx, |_, window, _| window.resize(s));
                         }
