@@ -583,6 +583,9 @@ impl SpaceApp {
 
         // Back from System Settings (or anywhere): the notification permission may have changed.
         // Either way, re-render so the host knows whether you're watching a thread.
+        let settings = SettingsStore::load(options.settings_path);
+        let pane_width = settings.settings.pane_width.unwrap_or(crate::terminal::WIDTH_DEFAULT);
+
         let activation = cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 this.refresh_permission(cx);
@@ -701,7 +704,7 @@ impl SpaceApp {
             keep_closed_input: None,
             find: None,
             replies: Default::default(),
-            settings: SettingsStore::load(options.settings_path),
+            settings,
             show_settings: false,
             agent_models: None,
             agent_levels: None,
@@ -717,7 +720,7 @@ impl SpaceApp {
             agent_asleep: false,
             claude_cli: claude_cli_installed(),
             _subscriptions: vec![sub, activation, resize, quit, shortcuts],
-            terminals: crate::terminal::Terminals::new(&host_for_terminals),
+            terminals: crate::terminal::Terminals::new(&host_for_terminals, pane_width),
             next_pending: 0,
             cmd_held: false,
             slash: Default::default(),

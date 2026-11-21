@@ -26,10 +26,9 @@ use crate::terminal_view::{TerminalView, TerminalViewEvent};
 /// Shells: a tab whose title is one of these has nothing running in it.
 const SHELLS: &[&str] = &["zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "csh", "nu", "login", "xonsh", "elvish"];
 
-/// Pane width as a share of the main column.
-const WIDTH_DEFAULT: f32 = 0.45;
-const WIDTH_MIN: f32 = 0.2;
-const WIDTH_MAX: f32 = 0.8;
+/// The pane's width in px: it stays put as the window resizes; dragging its edge sets it.
+pub(crate) const WIDTH_DEFAULT: f32 = 520.;
+const WIDTH_MIN: f32 = 320.;
 
 #[derive(Default)]
 pub(crate) struct SessionState {
@@ -170,24 +169,25 @@ pub(crate) struct Terminals {
     pub(crate) views: HashMap<String, Entity<TerminalView>>,
     /// By thread key.
     pub(crate) panes: HashMap<u64, Pane>,
-    /// The pane's share of the main column.
+    /// The pane's width in px (beside the chat; maximized it fills the main column).
     pub(crate) width: f32,
-    /// The divider is being dragged.
-    pub(crate) dragging: bool,
+    /// The divider is being dragged: where the pointer went down (window x) and the pane's
+    /// width then. The pane follows the pointer from there, so a drag never jumps.
+    pub(crate) drag: Option<(f32, f32)>,
     /// Focus this terminal once its view exists.
     focus_next: Option<String>,
 }
 
 impl Terminals {
     /// Route the host's terminal output to the screens.
-    pub(crate) fn new(host: &Host) -> Self {
+    pub(crate) fn new(host: &Host, width: f32) -> Self {
         let sessions: Arc<Mutex<HashMap<String, Arc<Session>>>> = Arc::default();
         let (map, h) = (sessions.clone(), host.clone());
         host.set_terminal_sink(Arc::new(move |id, seq, data| {
             let session = map.lock().unwrap().get(id).cloned();
             session.is_some_and(|s| s.receive(seq, data, &h))
         }));
-        Self { sessions, views: HashMap::new(), panes: HashMap::new(), width: WIDTH_DEFAULT, dragging: false, focus_next: None }
+        Self { sessions, views: HashMap::new(), panes: HashMap::new(), width: width.max(WIDTH_MIN), drag: None, focus_next: None }
     }
 
     pub(crate) fn session(&self, id: &str) -> Option<Arc<Session>> {
@@ -227,8 +227,14 @@ impl Terminals {
         }
     }
 
-    pub(crate) fn set_width(&mut self, width: f32) {
-        self.width = width.clamp(WIDTH_MIN, WIDTH_MAX);
+    /// The divider dragged to window x `x`, with `room` the widest the pane can be and leave the
+    /// chat its minimum. The pane follows the pointer, from [`WIDTH_MIN`] up to `room`, or up to
+    /// its width when the drag began if that's wider (the chat was already too narrow: dragging
+    /// shrinks the pane smoothly, and never snaps it).
+    pub(crate) fn drag_to(&mut self, x: f32, room: f32) {
+        let Some((from_x, from_width)) = self.drag else { return };
+        let max = room.max(from_width).max(WIDTH_MIN);
+        self.width = (from_width + from_x - x).clamp(WIDTH_MIN, max).round();
     }
 
     /// Terminals with something running (asked about before quitting).

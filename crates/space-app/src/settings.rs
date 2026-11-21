@@ -30,6 +30,8 @@ pub struct Settings {
     pub threads: Threads,
     pub trackpad: Trackpad,
     pub plugins: Plugins,
+    /// The right pane's width in px, as last dragged.
+    pub pane_width: Option<f32>,
     /// The app "Open in" used last (a bundle id); Finder when unset or uninstalled.
     pub open_in: Option<String>,
     /// Older files: the alerts switches, before they were the alerts plugin's settings. Moved

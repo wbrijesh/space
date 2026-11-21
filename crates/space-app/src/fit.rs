@@ -23,10 +23,21 @@ impl SpaceApp {
         !self.show_settings && self.selected.and_then(|k| self.terminals.pane(k)).is_some_and(|p| p.open && !p.maximized)
     }
 
+    /// The main column (chat and pane) beside the sidebar, where the sidebar is headed.
+    pub(crate) fn main_width(&self, window: &Window) -> f32 {
+        f32::from(window.viewport_size().width) - f32::from(size::SIDEBAR_W) * self.sidebar_shown.target()
+    }
+
+    /// The pane's width as drawn: its set width, but never wider than the main column (a window
+    /// narrower than the pane). The set width stays for when there's room again.
+    pub(crate) fn pane_width(&self, window: &Window) -> f32 {
+        self.terminals.width.min(self.main_width(window)).max(0.)
+    }
+
     /// How wide the chat column is, with the sidebar and pane where they're headed.
     fn chat_width(&self, window: &Window) -> f32 {
-        let main = f32::from(window.viewport_size().width) - f32::from(size::SIDEBAR_W) * self.sidebar_shown.target();
-        if self.pane_beside() { main * (1. - self.terminals.width) } else { main }
+        let main = self.main_width(window);
+        if self.pane_beside() { main - self.pane_width(window) } else { main }
     }
 
     /// The window was resized. Narrower, with the chat under its minimum: close the pane, then

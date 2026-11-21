@@ -30,7 +30,8 @@
 //! title               print the selected thread's title
 //! editmenu            print the Edit menu's items: AppKit action and key equivalent
 //! sidechat            print the selected thread's side chat: focused, its input, the composer's, items, running
-//! terminals           print the selected thread's right pane: open, its view, tabs, shells starting, how far it's shown
+//! terminals           print the selected thread's right pane: open, its view, tabs, shells starting, how far it's
+//!                     shown, its set width; and whether the sidebar is open
 //! open src/main.rs    show a file (relative to the thread's folder) in the Files view, as a click on its row would
 //! changes             print the selected thread's Changes bar: status, main step, ▾ steps, files, the open one, error, done
 //! shot name           capture this window to `$SPACE_SHOT_DIR/name.png` (or run `$SPACE_SHOT_CMD name`)
@@ -374,7 +375,12 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                             let pane = app.selected.and_then(|k| app.terminals.panes.get(&k));
                             let clock = space_ui::clock::AnimationClock::global(cx);
                             let (shown, _) = app.terminal_shown.at(clock.now(), clock.pinned());
-                            eprintln!("script: terminals {:?} shown {shown:.2}", pane.map(|p| (p.open, p.view, p.tabs.len(), p.opening)));
+                            eprintln!(
+                                "script: terminals {:?} shown {shown:.2} width {} sidebar {}",
+                                pane.map(|p| (p.open, p.view, p.tabs.len(), p.opening)),
+                                app.terminals.width,
+                                app.sidebar_open,
+                            );
                         }
                     });
                 }

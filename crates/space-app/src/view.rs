@@ -113,7 +113,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
             body
         };
         match terminal_drawn {
-            Some(key) => with_terminal(app, key, body, shown, terminal_shown, window, cx),
+            Some(key) => with_terminal(app, key, body, terminal_shown, window, cx),
             None => body,
         }
     };
@@ -213,21 +213,42 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
                 cx.stop_propagation();
             }
         }))
-        // Dragging the terminal pane's divider.
-        .when(app.terminals.dragging, |d| {
-            d.cursor_col_resize()
-                .on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, window, cx| {
-                    let left = f32::from(size::SIDEBAR_W) * this.sidebar_shown.target();
-                    let width = f32::from(window.viewport_size().width) - left;
-                    if width > 0. {
-                        this.terminals.set_width((f32::from(window.viewport_size().width) - f32::from(e.position.x)) / width);
-                        cx.notify();
-                    }
-                }))
-                .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                    this.terminals.dragging = false;
-                    cx.notify();
-                }))
+        // Dragging the pane's divider: window-level listeners, so the drag follows the pointer
+        // wherever it goes (over the pane, the chat's too-narrow overlay, or out of the window).
+        .when(app.terminals.drag.is_some(), |d| {
+            let this = cx.entity().downgrade();
+            d.cursor_col_resize().child(
+                canvas(
+                    |_, _, _| {},
+                    move |_, _, window, _| {
+                        let moved = this.clone();
+                        window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
+                            if phase != DispatchPhase::Bubble {
+                                return;
+                            }
+                            let _ = moved.update(cx, |this, cx| {
+                                let room = this.main_width(window) - f32::from(size::CHAT_MIN_W);
+                                this.terminals.drag_to(f32::from(e.position.x), room);
+                                cx.notify();
+                            });
+                        });
+                        let released = this.clone();
+                        window.on_mouse_event(move |e: &MouseUpEvent, phase, _, cx| {
+                            if phase != DispatchPhase::Bubble || e.button != MouseButton::Left {
+                                return;
+                            }
+                            let _ = released.update(cx, |this, cx| {
+                                this.terminals.drag = None;
+                                let width = this.terminals.width;
+                                this.settings.update(|s| s.pane_width = Some(width));
+                                cx.notify();
+                            });
+                        });
+                    },
+                )
+                .absolute()
+                .size_0(),
+            )
         })
         // Esc closes a message's usage panel, the context panel or a composer menu (the model
         // picker steps back from one of its lists first).
@@ -341,15 +362,13 @@ fn with_terminal(
     app: &mut SpaceApp,
     key: u64,
     body: AnyElement,
-    sidebar: f32,
     shown: f32,
     window: &mut Window,
     cx: &mut Context<SpaceApp>,
 ) -> AnyElement {
     let Some(pane) = app.terminals.pane(key) else { return body };
     let maximized = pane.maximized;
-    let main_width = f32::from(window.viewport_size().width) - f32::from(size::SIDEBAR_W) * sidebar;
-    let width = px((main_width * app.terminals.width).round());
+    let width = px(app.pane_width(window));
     let sliding = !maximized && shown < 1.;
     let pane = terminal_pane(app, key, window, cx);
     let pane = if sliding {
@@ -382,8 +401,8 @@ fn with_terminal(
                             .w(px(7.))
                             .h_full()
                             .cursor_col_resize()
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                this.terminals.dragging = true;
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                                this.terminals.drag = Some((f32::from(e.position.x), this.terminals.width));
                                 cx.stop_propagation();
                                 cx.notify();
                             })),
@@ -423,7 +442,7 @@ fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Con
     // The pane's width, for the header (a narrow one shows the other modes as icons).
     let sidebar = f32::from(size::SIDEBAR_W) * app.sidebar_shown.target();
     let main = f32::from(window.viewport_size().width) - sidebar;
-    let width = px(if maximized { main } else { main * app.terminals.width });
+    let width = px(if maximized { main } else { app.pane_width(window) });
     div().size_full().flex().flex_col().bg(color::bg()).child(header(view, maximized, width, on_view, on_maximize)).child(content).into_any_element()
 }
 
