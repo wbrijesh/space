@@ -15,7 +15,7 @@ use gpui::*;
 use space_core::protocol::service::ThreadMeta;
 use space_ui::components::composer::{Composer, ComposerHandlers, MAX_LINES};
 use space_ui::components::follow_scroll::{FollowScroll, FollowScrollArea};
-use space_ui::components::right_pane::{PaneView, side_chat_bar, side_chat_empty};
+use space_ui::components::right_pane::{PaneView, side_chat_empty, side_chat_new};
 use space_ui::components::message_actions::ActionHandlers;
 use space_ui::components::transcript::{TranscriptView, transcript_items};
 use space_ui::theme::{color, size, text};
@@ -220,6 +220,19 @@ impl SpaceApp {
 }
 
 /// The side chat in the pane: its bar, the conversation (or what it's for), and its composer.
+/// The side chat's ↺ for the pane's header, once it has something to start over from.
+pub(crate) fn side_chat_header_action(app: &SpaceApp, main: u64, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
+    let side = app.side_chats.get(&main)?;
+    if side.thread.state.items.is_empty() {
+        return None;
+    }
+    let this = cx.entity().downgrade();
+    let on_new = Rc::new(move |w: &mut Window, cx: &mut App| {
+        let _ = this.update(cx, |this, cx| this.new_side_chat(main, w, cx));
+    });
+    Some(side_chat_new(on_new).into_any_element())
+}
+
 pub(crate) fn side_chat_content(app: &mut SpaceApp, main: u64, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
     if app.ensure_side_chat(main, window, cx).is_none() {
         return div().flex_1().into_any_element();
@@ -230,12 +243,6 @@ pub(crate) fn side_chat_content(app: &mut SpaceApp, main: u64, window: &mut Wind
     let side = app.side_chats.get(&main).expect("made above");
     let thread = &side.thread;
     let weak = cx.entity().downgrade();
-    let on_new = (!thread.state.items.is_empty()).then(|| {
-        let this = weak.clone();
-        Rc::new(move |w: &mut Window, cx: &mut App| {
-            let _ = this.update(cx, |this, cx| this.new_side_chat(main, w, cx));
-        }) as Rc<dyn Fn(&mut Window, &mut App)>
-    });
     let body = if thread.state.items.is_empty() && thread.queued.is_none() {
         side_chat_empty().into_any_element()
     } else {
@@ -331,7 +338,6 @@ pub(crate) fn side_chat_content(app: &mut SpaceApp, main: u64, window: &mut Wind
                 cx.stop_propagation();
             }
         }))
-        .child(side_chat_bar(on_new))
         .child(body)
         .child(div().flex_none().p_2().flex().flex_col().gap_1().children(error).child(composer))
         .into_any_element()

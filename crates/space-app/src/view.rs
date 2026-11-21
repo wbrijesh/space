@@ -458,7 +458,8 @@ fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Con
     let sidebar = f32::from(size::SIDEBAR_W) * app.sidebar_shown.target();
     let main = f32::from(window.viewport_size().width) - sidebar;
     let width = px(if maximized { main } else { app.pane_width(window) });
-    div().size_full().flex().flex_col().bg(color::bg()).child(header(view, maximized, width, on_view, on_maximize)).child(content).into_any_element()
+    let action = (view == Some(PaneView::SideChat)).then(|| crate::side_chat::side_chat_header_action(app, key, cx)).flatten();
+    div().size_full().flex().flex_col().bg(color::bg()).child(header(view, maximized, width, action, on_view, on_maximize)).child(content).into_any_element()
 }
 
 /// The Terminal mode's tabs: the terminals, then a new one.

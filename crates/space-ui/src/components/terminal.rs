@@ -350,7 +350,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         div()
             .flex()
             .flex_col()
-            .child(header(Some(PaneView::Terminal), maximized, px(560.), Rc::new(|_, _, _| {}), Rc::new(|_, _| {})))
+            .child(header(Some(PaneView::Terminal), maximized, px(560.), None, Rc::new(|_, _, _| {}), Rc::new(|_, _| {})))
             .child(sub_bar(tab_strip(tabs, Some(selected), &StripHandlers::default())))
     }
     let tabs = vec![
