@@ -72,6 +72,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         on_forward: click(cx, |this, w, cx| this.go_forward(w, cx)),
         on_new_thread: click(cx, |this, w, cx| this.new_thread(None, w, cx)),
         new_thread_active: !app.show_settings && app.current().is_some_and(Thread::is_empty),
+        back_pinned: app.show_settings,
     };
 
     // The terminal pane, when the current thread has it open (and a terminal plugin runs).
@@ -94,7 +95,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         })
     });
     let title_bar = MainTitleBar::new(if app.show_settings {
-        "Settings".to_string()
+        format!("Settings · {}", app.current_settings_tab().label())
     } else {
         app.current().map(|t| t.title()).unwrap_or_default()
     })
@@ -328,6 +329,23 @@ fn queued_pic(p: &crate::images::Prepared) -> Pic {
 }
 
 fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceApp>) -> impl IntoElement {
+    // Settings lists its sections here instead of the threads.
+    if app.show_settings {
+        let current = app.current_settings_tab();
+        let rows = app
+            .settings_tabs()
+            .into_iter()
+            .enumerate()
+            .map(|(ix, tab)| {
+                let selected = tab == current;
+                ThreadRow::new(("settings-tab", ix), tab.label())
+                    .selected(selected)
+                    .on_click(cx.listener(move |this, _, _, cx| this.pick_settings_tab(tab.clone(), cx)))
+                    .into_any_element()
+            })
+            .collect();
+        return sidebar_column(SidebarTitleBar::new(nav).shown(shown), rows, &app.sidebar_scroll);
+    }
     let shortcuts = app.row_shortcuts();
     // Pinned threads first, then by day (`listed_sections`); a new thread isn't listed until
     // its first message is sent (the new-thread button shows it's the current one). A section's
@@ -980,6 +998,7 @@ fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>)
         .modes(app.permission_modes.clone(), s.new_threads.permission_mode.clone())
         .plugin_settings(plugin_sections)
         .plugins(plugin_rows)
+        .tab(app.current_settings_tab())
         .handlers(handlers);
     div()
         .id("settings")

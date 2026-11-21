@@ -208,6 +208,52 @@ pub struct SettingsPage {
     keep_closed: Option<Entity<InputState>>,
     /// What a two-finger swipe shows and hides (an index of [`SWIPE_CHOICES`]).
     swipe: usize,
+    /// The section shown (the sidebar lists them).
+    tab: SettingsTab,
+}
+
+/// One section of Settings: the sidebar lists them while Settings is open, and the page shows
+/// the chosen one.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum SettingsTab {
+    #[default]
+    NewThreads,
+    /// Shown while threads are saved (they can be kept after closing).
+    Threads,
+    Trackpad,
+    /// A service plugin's own settings, by its name.
+    Plugin(SharedString),
+    Notifications,
+    Plugins,
+}
+
+impl SettingsTab {
+    pub fn label(&self) -> SharedString {
+        match self {
+            SettingsTab::NewThreads => "New threads".into(),
+            SettingsTab::Threads => "Threads".into(),
+            SettingsTab::Trackpad => "Trackpad".into(),
+            SettingsTab::Plugin(name) => name.clone(),
+            SettingsTab::Notifications => "Notifications".into(),
+            SettingsTab::Plugins => "Plugins".into(),
+        }
+    }
+
+    /// The sections there are, in order: Threads while threads are saved, a section per
+    /// service plugin with settings (by name), Plugins when any are installed.
+    pub fn all(threads: bool, plugins: impl IntoIterator<Item = SharedString>, any_plugins: bool) -> Vec<SettingsTab> {
+        let mut tabs = vec![SettingsTab::NewThreads];
+        if threads {
+            tabs.push(SettingsTab::Threads);
+        }
+        tabs.push(SettingsTab::Trackpad);
+        tabs.extend(plugins.into_iter().map(SettingsTab::Plugin));
+        tabs.push(SettingsTab::Notifications);
+        if any_plugins {
+            tabs.push(SettingsTab::Plugins);
+        }
+        tabs
+    }
 }
 
 impl SettingsPage {
@@ -224,7 +270,13 @@ impl SettingsPage {
             handlers: SettingsHandlers::default(),
             keep_closed: None,
             swipe: 0,
+            tab: SettingsTab::default(),
         }
+    }
+
+    pub fn tab(mut self, tab: SettingsTab) -> Self {
+        self.tab = tab;
+        self
     }
 
     pub fn swipe(mut self, choice: usize) -> Self {
@@ -286,7 +338,7 @@ fn model_name(m: &ModelInfo) -> String {
 
 impl RenderOnce for SettingsPage {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        let Self { catalog, model, thinking, permission, modes, mode, plugin_settings, plugins, handlers: h, keep_closed, swipe } = self;
+        let Self { catalog, model, thinking, permission, modes, mode, plugin_settings, plugins, handlers: h, keep_closed, swipe, tab } = self;
 
         // Model: "Agent default" + the agent's models.
         let (model_row, thinking_row) = match &catalog {
@@ -343,33 +395,32 @@ impl RenderOnce for SettingsPage {
 
         // What to be told about is the alerts plugin's (its own section); whether macOS lets
         // Space post notifications at all is Space's.
-        let notifications = vec![permission_row(permission, &h).into_any_element()];
-
-        let mut new_threads = vec![model_row.into_any_element(), thinking_row.into_any_element()];
-        if !modes.is_empty() {
-            new_threads.push(mode_row(&modes, mode.as_deref(), h.on_mode.clone(), window).into_any_element());
-        }
-        let plugin_sections = plugin_settings.into_iter().map(|p| {
-            let rows = p.fields.iter().map(|f| field_row(f, &h, window).into_any_element()).collect();
-            section(p.title, None, rows)
-        });
-        let plugin_rows: Vec<AnyElement> =
-            plugins.iter().map(|p| plugin_row(p, &h, window).into_any_element()).collect();
-
-        div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap_8()
-            .child(div().text_size(text::HEADING).font_weight(FontWeight::SEMIBOLD).child("Settings"))
-            .child(section("New threads", Some("Applies to threads you start from now on."), new_threads))
-            .when_some(keep_closed, |d, input| d.child(section("Threads", None, vec![keep_closed_row(&input).into_any_element()])))
-            .child(section("Trackpad", None, vec![swipe_row(swipe, h.on_swipe.clone(), window).into_any_element()]))
-            .children(plugin_sections)
-            .child(section("Notifications", None, notifications))
-            .when(!plugin_rows.is_empty(), |d| {
-                d.child(section("Plugins", Some("Turning a plugin off removes what it adds, at once."), plugin_rows))
-            })
+        // Only the chosen section: its name is in the sidebar and the title bar.
+        let (hint, rows): (Option<&'static str>, Vec<AnyElement>) = match &tab {
+            SettingsTab::NewThreads => {
+                let mut rows = vec![model_row.into_any_element(), thinking_row.into_any_element()];
+                if !modes.is_empty() {
+                    rows.push(mode_row(&modes, mode.as_deref(), h.on_mode.clone(), window).into_any_element());
+                }
+                (Some("Applies to threads you start from now on."), rows)
+            }
+            SettingsTab::Threads => (None, keep_closed.iter().map(|input| keep_closed_row(input).into_any_element()).collect()),
+            SettingsTab::Trackpad => (None, vec![swipe_row(swipe, h.on_swipe.clone(), window).into_any_element()]),
+            SettingsTab::Plugin(name) => (
+                None,
+                plugin_settings
+                    .iter()
+                    .filter(|p| &p.title == name)
+                    .flat_map(|p| p.fields.iter().map(|f| field_row(f, &h, window).into_any_element()))
+                    .collect(),
+            ),
+            SettingsTab::Notifications => (None, vec![permission_row(permission, &h).into_any_element()]),
+            SettingsTab::Plugins => (
+                Some("Turning a plugin off removes what it adds, at once."),
+                plugins.iter().map(|p| plugin_row(p, &h, window).into_any_element()).collect(),
+            ),
+        };
+        section(hint, rows)
     }
 }
 
@@ -615,7 +666,9 @@ pub fn swipe_row(choice: usize, on_swipe: IndexHandler, window: &Window) -> Div 
 }
 
 /// A titled card of rows, with an optional hint under the title.
-pub fn section(title: impl Into<SharedString>, hint: Option<&'static str>, rows: Vec<AnyElement>) -> Div {
+/// A section's rows in one card, under its hint when it has one (its name is the sidebar's and
+/// the title bar's).
+pub fn section(hint: Option<&'static str>, rows: Vec<AnyElement>) -> Div {
     // Hairlines between rows.
     let rows = rows
         .into_iter()
@@ -625,15 +678,7 @@ pub fn section(title: impl Into<SharedString>, hint: Option<&'static str>, rows:
         .flex()
         .flex_col()
         .gap_3()
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_0p5()
-                .px_1()
-                .child(div().text_size(text::MD).font_weight(FontWeight::SEMIBOLD).child(title.into()))
-                .when_some(hint, |d, hint| d.child(div().text_size(text::SM).text_color(color::text_3()).child(hint))),
-        )
+        .when_some(hint, |d, hint| d.child(div().px_1().text_size(text::SM).text_color(color::text_3()).child(hint)))
         .child(
             div()
                 .flex()
@@ -648,6 +693,7 @@ pub fn section(title: impl Into<SharedString>, hint: Option<&'static str>, rows:
 
 /// One setting: label and one-line description on the left, `control` on the right.
 pub fn row(label: impl Into<SharedString>, description: impl Into<SharedString>, control: Option<AnyElement>) -> Div {
+    let description: SharedString = description.into();
     div()
         .min_h(size::SETTINGS_ROW_H)
         .flex()
@@ -663,7 +709,7 @@ pub fn row(label: impl Into<SharedString>, description: impl Into<SharedString>,
                 .flex_col()
                 .gap_0p5()
                 .child(div().text_size(text::MD).child(label.into()))
-                .child(div().text_size(text::SM).text_color(color::text_2()).child(description.into())),
+                .when(!description.is_empty(), |d| d.child(div().text_size(text::SM).text_color(color::text_2()).child(description))),
         )
         .children(control.map(|c| div().flex_none().flex().items_center().child(c)))
 }
@@ -786,7 +832,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     }
     fn permission(name: &'static str, p: NotificationPermission) -> Example {
         Example::new(name, move |_, _| {
-            section("Notifications", None, vec![permission_row(p, &SettingsHandlers::default()).into_any_element()])
+            section(None, vec![permission_row(p, &SettingsHandlers::default()).into_any_element()])
                 .into_any_element()
         })
         .width(size::CONTENT_MAX_W)
@@ -816,7 +862,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 check: check(),
                 status: status.map(|(t, ok)| (t.into(), ok)),
             };
-            section("Guard", None, vec![field_row(&field, &SettingsHandlers::default(), window).into_any_element()])
+            section(None, vec![field_row(&field, &SettingsHandlers::default(), window).into_any_element()])
                 .into_any_element()
         })
         .width(size::CONTENT_MAX_W)
@@ -884,7 +930,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                         switch("sound", "Play a sound", "When an agent finishes.", false),
                     ];
                     let h = SettingsHandlers::default();
-                    section("Alerts", None, fields.iter().map(|f| field_row(f, &h, window).into_any_element()).collect())
+                    section(None, fields.iter().map(|f| field_row(f, &h, window).into_any_element()).collect())
                         .into_any_element()
                 })
                 .width(size::CONTENT_MAX_W),
@@ -907,7 +953,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                     let h = SettingsHandlers::default();
                     let haiku = models.iter().find(|m| m.id.contains("haiku")).map(|m| format!("{}/{}", m.provider, m.id));
                     let rows = [field(None), field(haiku.as_deref())].iter().map(|f| field_row(f, &h, window).into_any_element()).collect();
-                    section("Titles", None, rows).into_any_element()
+                    section(None, rows).into_any_element()
                 })
                 .width(size::CONTENT_MAX_W),
                 key_section("key not set", false, || FieldCheck::Idle, None),
@@ -967,7 +1013,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 rows.push(asks("titles", "Titles", "Not approved", true));
                 let h = SettingsHandlers::default();
                 let rows = rows.iter().map(|p| plugin_row(p, &h, window).into_any_element()).collect();
-                section("Plugins", None, rows).into_any_element()
+                section(None, rows).into_any_element()
             })
             .width(size::CONTENT_MAX_W)]),
         ComponentPreview::new(Area::Settings, "Permission row", "macOS notification permission, per state.")

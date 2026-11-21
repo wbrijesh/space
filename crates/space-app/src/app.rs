@@ -451,6 +451,9 @@ pub struct SpaceApp {
     pub(crate) settings: SettingsStore,
     /// The Settings page replaces the thread view.
     pub(crate) show_settings: bool,
+    /// The Settings section shown (the sidebar lists them while Settings is open); kept for the
+    /// next time it opens.
+    pub(crate) settings_tab: space_ui::components::settings::SettingsTab,
     /// Models, thinking levels and slash commands from the latest `_space/status` that listed them.
     pub(crate) agent_models: Option<Vec<ModelInfo>>,
     pub(crate) agent_levels: Option<Vec<String>>,
@@ -712,6 +715,7 @@ impl SpaceApp {
             replies: Default::default(),
             settings,
             show_settings: false,
+            settings_tab: Default::default(),
             agent_models: None,
             agent_levels: None,
             agent_commands: None,

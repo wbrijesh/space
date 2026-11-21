@@ -50,6 +50,8 @@ pub struct TitleBarNav {
     pub on_new_thread: ClickHandler,
     /// The current thread is a new one (nothing sent yet): the button shows it's where you are.
     pub new_thread_active: bool,
+    /// Back stays even with the sidebar hidden (Settings: the way back to the thread).
+    pub back_pinned: bool,
 }
 
 impl TitleBarNav {
@@ -65,12 +67,14 @@ impl TitleBarNav {
             on_forward: noop.clone(),
             on_new_thread: noop,
             new_thread_active: false,
+            back_pinned: false,
         }
     }
 
     /// The sidebar toggle, then back/forward while the sidebar shows. With the sidebar hidden
     /// only the toggle stays (you're working in one thread; ⌘[ / ⌘] still go back and forth):
-    /// the arrows fade as it slides away, gone before the title glides over their place.
+    /// the arrows fade as it slides away, gone before the title glides over their place. Back
+    /// stays when it's pinned (Settings), so the way back is always in sight.
     fn buttons(&self, shown: f32) -> Div {
         let (toggle, back, fwd) = (self.on_toggle_sidebar.clone(), self.on_back.clone(), self.on_forward.clone());
         let toggle_tip = if self.sidebar_open { "Hide sidebar" } else { "Show sidebar" };
@@ -84,21 +88,19 @@ impl TitleBarNav {
                     .tip_action(toggle_tip, &ToggleSidebar)
                     .on_click(move |e, w, cx| toggle(e, w, cx)),
             )
-            .when(arrows > 0., |d| {
+            .when(self.back_pinned || arrows > 0., |d| {
                 d.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_0p5()
-                        .opacity(arrows)
-                        .child(icon_button("go-back", IconName::ArrowLeft, self.can_back, false).when(self.can_back, |b| {
-                            b.tip_action("Back", &GoBack).on_click(move |e, w, cx| back(e, w, cx))
-                        }))
-                        .child(icon_button("go-forward", IconName::ArrowRight, self.can_forward, false).when(
-                            self.can_forward,
-                            |b| b.tip_action("Forward", &GoForward).on_click(move |e, w, cx| fwd(e, w, cx)),
-                        )),
+                    div().opacity(if self.back_pinned { 1. } else { arrows }).child(
+                        icon_button("go-back", IconName::ArrowLeft, self.can_back, false)
+                            .when(self.can_back, |b| b.tip_action("Back", &GoBack).on_click(move |e, w, cx| back(e, w, cx))),
+                    ),
                 )
+            })
+            .when(arrows > 0., |d| {
+                d.child(div().opacity(arrows).child(icon_button("go-forward", IconName::ArrowRight, self.can_forward, false).when(
+                    self.can_forward,
+                    |b| b.tip_action("Forward", &GoForward).on_click(move |e, w, cx| fwd(e, w, cx)),
+                )))
             })
     }
 
@@ -206,7 +208,10 @@ impl RenderOnce for MainTitleBar {
         // Positions in window x, made relative to this bar's left edge (the sidebar's width).
         let edge = f32::from(size::SIDEBAR_W) * self.sidebar;
         let shown_title_x = f32::from(size::SIDEBAR_W) + 16.;
-        let title_x = HIDDEN_TITLE_X + (shown_title_x - HIDDEN_TITLE_X) * self.sidebar;
+        // A pinned back button stays beside the toggle: the title starts after it.
+        let pinned = self.nav.as_ref().is_some_and(|n| n.back_pinned);
+        let hidden_title_x = HIDDEN_TITLE_X + if pinned { f32::from(size::ICON_BUTTON) + 2. } else { 0. };
+        let title_x = hidden_title_x + (shown_title_x - hidden_title_x) * self.sidebar;
         drag_region(div().id("titlebar-main"), "main", window, cx)
             .relative()
             .overflow_hidden()

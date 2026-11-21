@@ -17,6 +17,8 @@ use space_core::protocol::ModelInfo;
 use space_core::{PluginStatus, SettingError};
 use space_ui::components::settings::FieldCheck;
 
+use space_ui::components::settings::SettingsTab;
+
 use crate::app::SpaceApp;
 use crate::notify;
 
@@ -215,6 +217,27 @@ impl SpaceApp {
         }
         let host = self.host.clone();
         cx.spawn(async move |_, _| host.start_services().await).detach();
+    }
+
+    /// The Settings sections there are now (see `SettingsTab::all`).
+    pub(crate) fn settings_tabs(&self) -> Vec<SettingsTab> {
+        let plugins = self
+            .plugin_settings
+            .iter()
+            .filter(|(id, states)| !states.is_empty() && !self.host.is_disabled(id))
+            .map(|(id, _)| self.host.plugin(id).map_or_else(|| id.clone(), |p| p.manifest.name).into());
+        SettingsTab::all(self.saving_threads(), plugins, !self.host.plugins().is_empty())
+    }
+
+    /// The section shown: the one picked last while it's still there, else the first.
+    pub(crate) fn current_settings_tab(&self) -> SettingsTab {
+        let tabs = self.settings_tabs();
+        if tabs.contains(&self.settings_tab) { self.settings_tab.clone() } else { tabs.into_iter().next().unwrap_or_default() }
+    }
+
+    pub(crate) fn pick_settings_tab(&mut self, tab: SettingsTab, cx: &mut Context<Self>) {
+        self.settings_tab = tab;
+        cx.notify();
     }
 
     pub(crate) fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
