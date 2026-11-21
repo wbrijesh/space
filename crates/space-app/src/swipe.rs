@@ -3,6 +3,10 @@
 //! a swipe to the left and goes with one to the right; the sidebar the other way round. Each
 //! direction only ever shows or only ever hides, so it works wherever the pointer is.
 //!
+//! The right pane has three steps, one per swipe: hidden, beside the chat, maximized. Swiping
+//! left goes up a step (shows it, then maximizes it); swiping right goes down (restores it beside
+//! the chat, then hides it).
+//!
 //! A swipe is one gesture (fingers down to fingers up) that travels sideways far enough before it
 //! travels as far up or down; it acts once. A swipe's scrolling is the swipe's: its events, and
 //! the momentum after the fingers lift, are taken before anything scrolls (the transcript doesn't
@@ -127,9 +131,16 @@ impl SpaceApp {
         };
         match pane {
             SwipePane::RightPane => {
-                let open = self.selected.is_some_and(|key| self.pane_open(key));
-                if open != (swipe == Swipe::Left) {
-                    self.toggle_right_pane(window, cx);
+                let pane = self.selected.and_then(|key| self.terminals.pane(key));
+                let (open, maximized) = pane.map_or((false, false), |p| (p.open, p.maximized));
+                match (swipe, open, maximized) {
+                    // Up a step: show it, then maximize it.
+                    (Swipe::Left, false, _) => self.toggle_right_pane(window, cx),
+                    (Swipe::Left, true, false) => self.toggle_pane_maximized(cx),
+                    // Down a step: back beside the chat, then hide it.
+                    (Swipe::Right, true, true) => self.toggle_pane_maximized(cx),
+                    (Swipe::Right, true, false) => self.toggle_right_pane(window, cx),
+                    _ => {}
                 }
             }
             SwipePane::Sidebar => {
