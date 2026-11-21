@@ -286,7 +286,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             pane(div().size_full().flex().flex_col().child(file_header(h1("crates/space-app/README.md", true))).child(content)).into_any_element()
         }),
         Example::new("can't preview", move |_, _| {
-            let body = unpreviewable("Assets.car", "This file isn't text, so it can't be shown here.", "Open in Finder".into(), n2.clone(), None);
+            let body = unpreviewable("Assets.car", "Binary file", "Open in Finder".into(), n2.clone(), None);
             pane(div().size_full().flex().flex_col().child(file_header(h2("crates/space-app/resources/Assets.car", false))).child(body)).into_any_element()
         }),
         Example::new("read failed", move |_, _| {

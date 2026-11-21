@@ -393,6 +393,9 @@ pub struct SpaceApp {
     /// thread it's for (switching threads snaps it).
     pub(crate) pane_max: space_ui::theme::motion::Spring,
     pub(crate) pane_max_for: Option<u64>,
+    /// The pane view used last, in any thread: a thread opening its pane the first time opens it
+    /// there.
+    pub(crate) last_pane_view: space_ui::components::right_pane::PaneView,
     pub(crate) banner: Option<String>,
     /// The image viewer: a message's pictures and the one shown.
     pub(crate) viewer: Option<(Vec<space_ui::components::images::Pic>, usize)>,
@@ -702,6 +705,7 @@ impl SpaceApp {
             terminal_shown_for: None,
             pane_max: space_ui::theme::motion::Spring::new(0.),
             pane_max_for: None,
+            last_pane_view: space_ui::components::right_pane::PaneView::Files,
             banner,
             closed_threads: Vec::new(),
             sidebar_scroll: ScrollHandle::new(),

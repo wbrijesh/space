@@ -427,7 +427,7 @@ impl RenderOnce for TrajectoryView {
                                     .justify_center()
                                     .text_size(text::SM)
                                     .text_color(color::text_3())
-                                    .child("Nothing recorded yet. Send a message to see what the agent does."),
+                                    .child("Nothing recorded yet"),
                             )
                         } else {
                             d.child(ledger_el)

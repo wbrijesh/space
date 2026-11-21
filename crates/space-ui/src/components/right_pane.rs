@@ -1,7 +1,6 @@
 //! The right pane beside a thread, in four modes: Files, Terminal, the side chat and Changes. Its header
-//! (the modes, then maximize; the title bar's pane button hides it), the bar under it with the
-//! mode's own tabs (the side chat's: what it is, and starting it over), and the chooser shown
-//! before a thread picks a mode.
+//! (the modes, then maximize; the title bar's pane button hides it) and the bar under it with the
+//! mode's own tabs.
 
 use std::rc::Rc;
 
@@ -10,11 +9,10 @@ use gpui::component::{Icon, IconName};
 use gpui::*;
 
 use super::file_viewer::pane_tab;
-use super::menu::shortcut_label;
 use super::tip::TipExt as _;
 use super::widgets::icon_button;
 use crate::actions::{MaximizePane, ShowChanges, ShowFiles, ShowSideChat, ShowTerminal};
-use crate::theme::{color, radius, size, text};
+use crate::theme::{color, size, text};
 
 /// The pane's views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,34 +112,6 @@ fn bar() -> Div {
     div().h(size::PANE_BAR_H).flex_none().flex().items_center().gap_1().px_2().border_b_1().border_color(color::border())
 }
 
-/// Before a thread picks a view: two large rows, centred, each with its icon and shortcut.
-pub fn chooser(on_view: ViewHandler, window: &Window) -> Div {
-    div().flex_1().min_h_0().flex().items_center().justify_center().p_6().child(
-        div().w_full().max_w(px(280.)).flex().flex_col().gap_2().children(PaneView::ALL.map(|v| {
-            let pick = on_view.clone();
-            let keys = shortcut_label(v.action().as_ref(), window);
-            div()
-                .id(("pane-choose", v as usize))
-                .h(px(52.))
-                .px_4()
-                .flex()
-                .items_center()
-                .gap_3()
-                .rounded(radius::XL)
-                .bg(color::surface())
-                .border_1()
-                .border_color(color::border())
-                .cursor_pointer()
-                .hover(|s| s.bg(color::hover()).border_color(color::border_strong()))
-                .child(v.icon().size(size::ICON_MD).text_color(color::text_2()))
-                .child(div().flex_1().text_size(text::MD).text_color(color::text()).child(v.label()))
-                .children(keys.map(|k| div().text_size(text::SM).text_color(color::text_3()).child(k)))
-                .on_click(move |_, w, cx| pick(v, w, cx))
-        })),
-    )
-}
-
-
 #[cfg(feature = "dev")]
 pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     use std::sync::Arc;
@@ -151,6 +121,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     use super::file_viewer::file_tabs;
     use super::terminal::{StripHandlers, TerminalTab, sample_frame, tab_strip, terminal_grid};
     use crate::preview::{Area, ComponentPreview, Example};
+    use crate::theme::radius;
 
     fn pane(child: impl IntoElement) -> Div {
         div().w(px(560.)).h(px(320.)).flex().flex_col().bg(color::bg()).border_1().border_color(color::border()).child(child)
@@ -173,10 +144,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         pane(div().size_full().flex().flex_col().child(header_for(Some(PaneView::Files))).child(sub_bar(tabs)).child(body)).into_any_element()
     };
     let (f1, f2) = (files.clone(), files);
-    vec![ComponentPreview::new(Area::Shell, "Right pane", "Beside a thread: Files, Terminal or the side chat, each with its own bar, and the chooser before one is picked.").stacked().examples([
-        Example::new("chooser", move |window, _| {
-            pane(div().size_full().flex().flex_col().child(header_for(None)).child(chooser(Rc::new(|_, _, _| {}), window))).into_any_element()
-        }),
+    vec![ComponentPreview::new(Area::Shell, "Right pane", "Beside a thread: Files, Terminal, the side chat or Changes, each with its own bar.").stacked().examples([
         Example::new("files: the tree, no file open", move |_, _| {
             pane(div().size_full().flex().flex_col().child(header_for(Some(PaneView::Files))).child(placeholder("Folder tree"))).into_any_element()
         }),

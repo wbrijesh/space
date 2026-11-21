@@ -446,8 +446,16 @@ impl SpaceApp {
         };
         let request = if thread.state.items.is_empty() {
             let d = &self.settings.settings.new_threads;
-            let (provider, model) =
-                d.model.clone().map_or((None, None), |ModelRef { provider, id }| (Some(provider), Some(id)));
+            // A saved model the agent no longer offers: its default instead (Settings marks it
+            // "unavailable").
+            let offered = |m: &ModelRef| {
+                self.agent_models.as_ref().is_none_or(|list| list.iter().any(|o| o.provider == m.provider && o.id == m.id))
+            };
+            let (provider, model) = d
+                .model
+                .clone()
+                .filter(offered)
+                .map_or((None, None), |ModelRef { provider, id }| (Some(provider), Some(id)));
             ConfigureSession { provider, model, thinking_level: d.thinking_level.clone(), ..Default::default() }
         } else {
             let s = &thread.state.status;

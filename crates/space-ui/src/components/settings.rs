@@ -344,15 +344,12 @@ impl RenderOnce for SettingsPage {
         let (model_row, thinking_row) = match &catalog {
             Catalog::Ready { models, levels } => {
                 let chosen = model.as_ref().map(|(p, id)| models.iter().position(|m| &m.provider == p && &m.id == id));
+                // A saved model the agent no longer offers: marked, and new threads use the
+                // agent's default (`session_defaults`).
                 let model_label = match (&model, chosen) {
                     (Some(_), Some(Some(ix))) => model_name(&models[ix]).into(),
-                    (Some((_, id)), _) => format::model_label(id, None).into(),
+                    (Some((_, id)), _) => format!("{} · unavailable", format::model_label(id, None)).into(),
                     (None, _) => SharedString::from(AGENT_DEFAULT),
-                };
-                let model_desc = if matches!(chosen, Some(None)) {
-                    "Not offered by the agent right now, so new threads use its default."
-                } else {
-                    "The model new threads start with."
                 };
                 let names = models.iter().map(|m| model_name(m).into());
                 let options = std::iter::once(AGENT_DEFAULT.into()).chain(names).collect();
@@ -365,7 +362,7 @@ impl RenderOnce for SettingsPage {
                 let on_model: IndexHandler =
                     Rc::new(move |ix, w, cx| f(ix.checked_sub(1).map(|i| list[i].clone()), w, cx));
                 let control = select("settings-model", model_label, options, selected, Some(on_model), window);
-                let model_row = row("Model", model_desc, Some(control));
+                let model_row = row("Model", "", Some(control));
 
                 let level_label = thinking.as_deref().map_or(AGENT_DEFAULT.into(), format::effort_label);
                 let names = levels.iter().map(|l| format::effort_label(l).into());
@@ -378,7 +375,7 @@ impl RenderOnce for SettingsPage {
                 let on_level: IndexHandler =
                     Rc::new(move |ix, w, cx| f(ix.checked_sub(1).map(|i| list[i].clone()), w, cx));
                 let control = select("settings-thinking", level_label, options, selected, Some(on_level), window);
-                (model_row, row("Thinking", "How much the model reasons first.", Some(control)))
+                (model_row, row("Thinking", "", Some(control)))
             }
             Catalog::Loading | Catalog::Unavailable => {
                 let desc = if catalog == Catalog::Loading { "Loading models…" } else { "Agent unavailable" };
@@ -416,7 +413,7 @@ impl RenderOnce for SettingsPage {
             ),
             SettingsTab::Notifications => (None, vec![permission_row(permission, &h).into_any_element()]),
             SettingsTab::Plugins => (
-                Some("Turning a plugin off removes what it adds, at once."),
+                None,
                 plugins.iter().map(|p| plugin_row(p, &h, window).into_any_element()).collect(),
             ),
         };
@@ -433,7 +430,7 @@ fn mode_row(modes: &[CatalogEntry], chosen: Option<&str>, on_mode: LevelHandler,
     let ids: Vec<String> = modes.iter().map(|e| e.id.clone()).collect();
     let on_select: IndexHandler = Rc::new(move |ix, w, cx| on_mode(ids.get(ix).cloned(), w, cx));
     let control = select_plain("settings-mode", label, options, Some(selected), Some(on_select), window);
-    row("Permission mode", "What the agent may do in a new thread.", Some(control))
+    row("Permission mode", "", Some(control))
 }
 
 /// One plugin setting: its label, whether it's set, a field, Save and (when set) Remove; under
@@ -450,15 +447,14 @@ pub fn field_row(f: &FieldView, h: &SettingsHandlers, window: &Window) -> Div {
         return model_field_row(f, choice, h, window);
     }
     let stored = match (f.secret, f.set) {
-        (true, true) => "Saved in your Keychain.",
-        (true, false) => "Not set. Stored in your Keychain once saved.",
-        (false, true) => "Saved.",
-        (false, false) => "Not set.",
+        (true, true) => "Saved in your Keychain",
+        (true, false) | (false, false) => "Not set",
+        (false, true) => "Saved",
     };
     let description: SharedString = if f.description.is_empty() {
         stored.into()
     } else {
-        format!("{} {stored}", f.description).into()
+        format!("{} · {stored}", f.description).into()
     };
     let checking = f.check == FieldCheck::Checking;
     let (save, clear, anyway) = (h.on_save_field.clone(), h.on_clear_field.clone(), h.on_save_anyway.clone());
@@ -605,10 +601,10 @@ pub fn permission_row(permission: NotificationPermission, h: &SettingsHandlers) 
     let status = |label: &'static str, c: Hsla| div().text_size(text::MD).text_color(c).child(label);
     let (desc, control): (&str, Option<AnyElement>) = match permission {
         NotificationPermission::Checking => {
-            ("Lets Space show notifications.", Some(status("Checking…", color::text_3()).into_any_element()))
+            ("", Some(status("Checking…", color::text_3()).into_any_element()))
         }
         NotificationPermission::Allowed => {
-            ("Lets Space show notifications.", Some(status("Allowed", color::text_2()).into_any_element()))
+            ("", Some(status("Allowed", color::text_2()).into_any_element()))
         }
         NotificationPermission::Denied => {
             let f = h.on_open_system_settings.clone();
@@ -624,7 +620,7 @@ pub fn permission_row(permission: NotificationPermission, h: &SettingsHandlers) 
         NotificationPermission::NotAsked => {
             let f = h.on_allow.clone();
             (
-                "Space hasn't asked yet.",
+                "",
                 Some(
                     pill_button("settings-allow", "Allow…", false)
                         .on_click(move |_, w, cx| f(w, cx))
@@ -632,7 +628,7 @@ pub fn permission_row(permission: NotificationPermission, h: &SettingsHandlers) 
                 ),
             )
         }
-        NotificationPermission::Unbundled => ("Unavailable in this build. Launch Space with just run to turn them on.", None),
+        NotificationPermission::Unbundled => ("Unavailable in this build (launch it with just run)", None),
     };
     row("macOS permission", desc, control)
 }
@@ -647,7 +643,7 @@ pub fn keep_closed_row(input: &Entity<InputState>) -> Div {
         .child(div().text_size(text::MD).text_color(color::text_2()).child("days"));
     row(
         "Keep closed threads",
-        "Closed threads can be resumed from a new thread in their folder, then they're deleted.",
+        "Then deleted",
         Some(control.into_any_element()),
     )
 }
@@ -659,8 +655,7 @@ pub fn swipe_row(choice: usize, on_swipe: IndexHandler, window: &Window) -> Div 
     let control = select("settings-swipe", label, options, Some(choice), Some(on_swipe), window);
     row(
         "Two-finger swipe",
-        "Shows and hides this pane wherever the pointer is: swipe the way it moves to show it (to the left for the \
-         right pane, to the right for the sidebar), the other way to hide it.",
+        "Left shows, right hides; reversed for the sidebar",
         Some(control),
     )
 }

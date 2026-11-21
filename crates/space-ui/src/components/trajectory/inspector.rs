@@ -202,7 +202,7 @@ fn tab_body(subject: Subject, tab: &str, data: &InspectorData<'_>, d: &Trajector
         }
         (Subject::Request, "Usage") => match request.and_then(|r| r.usage.clone()) {
             Some(u) => (div().flex().child(usage_panel(&u)).into_any_element(), None),
-            None => (note("The agent didn't report usage for this request.").into_any_element(), None),
+            None => (note("Not reported").into_any_element(), None),
         },
         (_, "Timing") if subject == Subject::Request => (
             timing_view(&id, request, d.request.as_ref().map(|r| r.chunks.as_slice()).unwrap_or_default(), data.now_ms, window, cx).into_any_element(),
@@ -257,7 +257,7 @@ fn tab_body(subject: Subject, tab: &str, data: &InspectorData<'_>, d: &Trajector
         }
         (Subject::Row(RecordKind::Tool), "Input") => match &d.input {
             Some(v) => (json_tree(format!("{id}-input"), v, window, cx).into_any_element(), serde_json::to_string_pretty(v).ok()),
-            None => (note("No input recorded.").into_any_element(), None),
+            None => (note("—").into_any_element(), None),
         },
         (Subject::Row(RecordKind::Tool), "Output") => {
             let out = d.output.clone().unwrap_or_default();
@@ -288,7 +288,7 @@ fn tab_body(subject: Subject, tab: &str, data: &InspectorData<'_>, d: &Trajector
                     .child(field("Held", if g.held_ms > 0 { duration_label(g.held_ms) } else { "—".into() }));
                 (f.into_any_element(), g.reason.clone())
             }
-            None => (note("No guard checked this call.").into_any_element(), None),
+            None => (note("—").into_any_element(), None),
         },
         // ----- user, context
         (Subject::Row(kind @ (RecordKind::User | RecordKind::Context)), "Summary") => {
@@ -313,7 +313,7 @@ fn tab_body(subject: Subject, tab: &str, data: &InspectorData<'_>, d: &Trajector
             let json = raw_json();
             (mono(&json).into_any_element(), Some(json))
         }
-        _ => (note("Nothing to show.").into_any_element(), None),
+        _ => (note("—").into_any_element(), None),
     };
     let on_copy = h.on_copy.clone();
     div()
@@ -354,6 +354,7 @@ fn section(title: &str, body: AnyElement) -> Div {
     div().flex().flex_col().gap_2().child(div().text_size(text::SM).font_weight(FontWeight::MEDIUM).text_color(color::text()).child(title.to_string())).child(body)
 }
 
+/// A quiet line in a tab: "—" where there's nothing recorded, or a fact worth knowing (output cut short).
 fn note(s: &str) -> Div {
     div().text_size(text::XS).text_color(color::text_3()).child(s.to_string())
 }
@@ -429,7 +430,7 @@ fn source_fields(row: Option<&TrajectoryRow>, request: Option<&RequestSummary>, 
 }
 
 fn request_summary(r: Option<&RequestSummary>, stop: Option<String>) -> Div {
-    let Some(r) = r else { return note("No request.") };
+    let Some(r) = r else { return note("—") };
     let mut f = fields()
         .child(field_el("Status", status_text(r.status)))
         .child(field("Model", r.model.clone().unwrap_or_else(|| "—".into())))
@@ -448,7 +449,7 @@ fn request_summary(r: Option<&RequestSummary>, stop: Option<String>) -> Div {
 }
 
 fn options_view(opts: Option<(u32, space_core::protocol::trace::RequestOptions)>, _h: &InspectorHandlers, window: &mut Window, cx: &mut App) -> Div {
-    let Some((header_id, o)) = opts else { return note("No options recorded.") };
+    let Some((header_id, o)) = opts else { return note("—") };
     let json = |v: &Option<serde_json::Value>| v.as_ref().map_or_else(|| "—".to_string(), |v| v.to_string());
     let _ = (window, cx);
     fields()
@@ -464,7 +465,7 @@ fn options_view(opts: Option<(u32, space_core::protocol::trace::RequestOptions)>
 
 /// Started (click: Unix ms), total, TTFT, generation, throughput, and when chunks arrived.
 fn timing_view(id: &SharedString, r: Option<&RequestSummary>, chunks: &[ChunkRun], now_ms: u64, window: &mut Window, cx: &mut App) -> Div {
-    let Some(r) = r else { return note("No request.") };
+    let Some(r) = r else { return note("—") };
     let unix = window.use_keyed_state(ElementId::Name(format!("{id}-unix").into()), cx, |_, _| false);
     let show_unix = *unix.read(cx);
     let end = r.ended_ms;

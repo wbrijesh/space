@@ -287,8 +287,8 @@ impl SpaceApp {
         self.terminals.panes.get(&key).is_some_and(|p| p.open)
     }
 
-    /// The title bar's button: hide the pane, or open it on the view used last (the chooser,
-    /// the first time).
+    /// The title bar's button: hide the pane, or open it on the view this thread used last (the
+    /// one used last in any thread, for a thread that hasn't opened it; Files the first time).
     pub(crate) fn toggle_right_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.show_settings {
             return;
@@ -298,8 +298,8 @@ impl SpaceApp {
             self.hide_terminal(window, cx);
             return;
         }
-        let view = self.terminals.panes.get(&key).and_then(|p| p.view);
-        self.open_pane(key, view, window, cx);
+        let view = self.terminals.panes.get(&key).and_then(|p| p.view).unwrap_or(self.last_pane_view);
+        self.open_pane(key, Some(view), window, cx);
     }
 
     /// ⌘J / ⌃` (Terminal), ⌘P (Files, on its tree), ⌘⇧L (the side chat) and ⌃⇧G (Changes): open the pane on
@@ -329,20 +329,21 @@ impl SpaceApp {
         }
     }
 
-    /// One of the pane's mode tabs (or the chooser): switch to that mode.
+    /// One of the pane's mode tabs: switch to that mode.
     pub(crate) fn switch_pane_view(&mut self, view: PaneView, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected else { return };
         self.open_pane(key, Some(view), window, cx);
     }
 
-    /// Open thread `key`'s pane on `view` (`None`: the chooser). Terminal starts a shell the
+    /// Open thread `key`'s pane on `view` (`None`: as it was). Terminal starts a shell the
     /// first time and takes focus; the side chat takes focus at once (it's drawn on the next
     /// frame, but its input is focused now, so no key typed in between is lost).
     fn open_pane(&mut self, key: u64, view: Option<PaneView>, window: &mut Window, cx: &mut Context<Self>) {
         let pane = self.terminals.panes.entry(key).or_default();
         pane.open = true;
-        if view.is_some() {
-            pane.view = view;
+        if let Some(view) = view {
+            pane.view = Some(view);
+            self.last_pane_view = view;
         }
         if view == Some(PaneView::Files) {
             let focus = self.files.focus.clone();

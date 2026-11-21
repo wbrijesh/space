@@ -470,11 +470,12 @@ fn with_terminal(
         .into_any_element()
 }
 
-/// The right pane: its header (view switch, the view's controls, hide), then the view, or the
-/// chooser when the thread hasn't picked one.
+/// The right pane: its header (view switch, the view's controls, hide), then the view (Files
+/// when the thread hasn't picked one).
 fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
-    use space_ui::components::right_pane::{ViewHandler, chooser, header, sub_bar};
-    let view = app.terminals.pane(key).and_then(|p| p.view);
+    use space_ui::components::right_pane::{ViewHandler, header, sub_bar};
+    // A pane that hasn't picked a view yet shows Files.
+    let view = Some(app.terminals.pane(key).and_then(|p| p.view).unwrap_or(PaneView::Files));
     let on_view: ViewHandler = {
         let this = cx.entity().downgrade();
         Rc::new(move |v, w, cx| {
@@ -484,8 +485,7 @@ fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Con
     let on_maximize = handler(cx, |this, _, cx| this.toggle_pane_maximized(cx));
     let maximized = app.terminals.pane(key).is_some_and(|p| p.maximized);
     let content = match view {
-        None => chooser(on_view.clone(), window).into_any_element(),
-        Some(PaneView::Files) => app.files_content(key, cx),
+        None | Some(PaneView::Files) => app.files_content(key, cx),
         Some(PaneView::Terminal) => div()
             .flex_1()
             .min_h_0()
@@ -1084,7 +1084,7 @@ fn plugin_rows(app: &SpaceApp) -> Vec<PluginRow> {
                 (true, _) if approval == Approval::Pending => "Needs your approval".into(),
                 (true, _) if approval == Approval::Denied => "Not approved".into(),
                 (true, Some(PluginStatus::Running)) => "Running".into(),
-                (true, _) if agent && app.agent_asleep => "Asleep (starts when you write)".into(),
+                (true, _) if agent && app.agent_asleep => "Asleep".into(),
                 (true, Some(PluginStatus::Starting)) => "Starting…".into(),
                 (true, Some(PluginStatus::Crashed(m))) => format!("Exited: {}", format::one_line(m)),
                 (true, Some(PluginStatus::NotStarted(m))) => format!("Not started: {}", format::one_line(m)),

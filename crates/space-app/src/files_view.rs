@@ -599,8 +599,8 @@ impl SpaceApp {
                 TabContent::Text { editor, markdown, source, diff }
             }
             files::Preview::Image(size) => TabContent::Image(size),
-            files::Preview::Binary => TabContent::Unpreviewable("This file isn't text, so it can't be shown here.".into()),
-            files::Preview::TooLarge(n) => TabContent::Unpreviewable(format!("This file is {} MB, too large to show here.", (n as f64 / 1_048_576.).ceil())),
+            files::Preview::Binary => TabContent::Unpreviewable("Binary file".into()),
+            files::Preview::TooLarge(_) => TabContent::Unpreviewable("Too large to show".into()),
             files::Preview::Failed(why) => TabContent::Failed(why),
         };
         cx.notify();

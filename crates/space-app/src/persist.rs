@@ -245,15 +245,14 @@ impl SpaceApp {
             return;
         }
         let title = thread.title();
-        let folder = space_ui::format::dir_name(&thread.cwd);
         let mut detail = if self.saving_threads() {
             let days = self.settings.settings.threads.keep_closed_days;
-            format!("You can resume it from a new thread in {folder} for {days} {}.", if days == 1 { "day" } else { "days" })
+            format!("Resumable for {days} {}", if days == 1 { "day" } else { "days" })
         } else {
-            "Threads aren't being saved, so it can't be resumed.".to_string()
+            "Can't be resumed".to_string()
         };
         if thread.state.running {
-            detail = format!("Its turn is stopped. {detail}");
+            detail = format!("Its turn stops · {detail}");
         }
         let answer = window.prompt(PromptLevel::Warning, &format!("Close \u{201c}{title}\u{201d}?"), Some(&detail), &["Close Thread", "Cancel"], cx);
         cx.spawn_in(window, async move |this, cx| {

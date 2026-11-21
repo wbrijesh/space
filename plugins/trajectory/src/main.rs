@@ -216,7 +216,8 @@ impl Plugin for Plugged {
                 SettingField {
                     key: KEEP_DAYS.into(),
                     label: "Keep traces for (days)".into(),
-                    description: "Traces of threads that haven't changed for this long are deleted. Empty: keep them.".into(),
+                    // The placeholder ("Forever") says what empty means.
+                    description: String::new(),
                     kind: SettingKind::Text,
                     placeholder: Some("Forever".into()),
                     default: None,
@@ -224,7 +225,7 @@ impl Plugin for Plugged {
                 SettingField {
                     key: CHUNK_TIMING.into(),
                     label: "Record streamed chunk timing".into(),
-                    description: "When each part of a reply arrived, for the request's timing graph.".into(),
+                    description: "For the request's timing graph".into(),
                     kind: SettingKind::Switch,
                     placeholder: None,
                     default: Some("true".into()),

@@ -57,7 +57,7 @@ impl Plugin for Titles {
             fields: vec![SettingField {
                 key: MODEL.into(),
                 label: "Title model".into(),
-                description: "Names new threads after their first message.".into(),
+                description: String::new(),
                 kind: SettingKind::Model,
                 placeholder: None,
                 default: None,

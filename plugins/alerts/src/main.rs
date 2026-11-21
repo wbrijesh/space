@@ -93,8 +93,8 @@ impl Plugin for Alerts {
         };
         SettingsSchema {
             fields: vec![
-                switch(NOTIFY, "Notify when an agent finishes or needs you", "Shows a notification when you're not looking at the thread."),
-                switch(SOUND, "Play a sound", "When an agent finishes or needs you."),
+                switch(NOTIFY, "Notify when an agent finishes or needs you", "When you're not looking at the thread"),
+                switch(SOUND, "Play a sound", ""),
             ],
         }
     }

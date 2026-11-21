@@ -130,9 +130,7 @@ pub fn too_narrow(on_hide_sidebar: Option<ClickHandler>, on_hide_pane: Option<Cl
         // still shows and hides a pane.
         .bg(color::bg())
         .block_mouse_except_scroll()
-        .child(Icon::new(IconName::PanelLeft).size(size::ICON_MD).text_color(color::text_3()))
         .child(div().text_size(text::MD).font_weight(FontWeight::MEDIUM).text_color(color::text()).child("Not enough room for the chat"))
-        .child(div().text_size(text::SM).text_color(color::text_2()).child("Hide the sidebar or the right pane, or make the window wider."))
         .child(
             div()
                 .flex()

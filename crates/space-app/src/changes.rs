@@ -1139,7 +1139,7 @@ fn file_diff(root: &Path, f: &ChangedFile) -> Result<Diff, String> {
         match crate::files::read_preview(&root.join(&f.path)) {
             crate::files::Preview::Text(t) => t,
             crate::files::Preview::Image(_) | crate::files::Preview::Binary => return Err("Binary file".into()),
-            crate::files::Preview::TooLarge(n) => return Err(format!("{} MB, too large to show", (n as f64 / 1_048_576.).ceil())),
+            crate::files::Preview::TooLarge(_) => return Err("Too large to show".into()),
             crate::files::Preview::Failed(why) => return Err(why),
         }
     };
