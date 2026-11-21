@@ -194,8 +194,23 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
                 cx.stop_propagation();
             }
         }))
-        // Two-finger swipes show and hide a pane (Settings ▸ Trackpad).
-        .on_scroll(cx.listener(|this, e: &ScrollEvent, window, cx| this.scrolled(e, window, cx)))
+        // Two-finger swipes show and hide a pane (Settings ▸ Trackpad): seen before anything
+        // scrolls (capture phase, wherever the pointer is), so a swipe's scrolling is taken.
+        .child({
+            let this = cx.entity().downgrade();
+            canvas(
+                |_, _, _| {},
+                move |_, _, window, _| {
+                    window.on_mouse_event(move |e: &ScrollEvent, phase, window, cx| {
+                        if phase == DispatchPhase::Capture {
+                            let _ = this.update(cx, |this, cx| this.scrolled(e, window, cx));
+                        }
+                    });
+                },
+            )
+            .absolute()
+            .size_0()
+        })
         // Esc in the composer closes the `/` menu, then stops the agent
         // while it works (open panels and menus close first).
         .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {

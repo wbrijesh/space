@@ -16,8 +16,9 @@
 //! release 400 300     left mouse up
 //! selection           print the window's selected text and where it ends, and the quote state
 //! scroll 400 300 -120 trackpad scroll at (400, 300) moving the view 120 px (negative: up)
-//! swipe 400 300 -200  a two-finger trackpad gesture at (400, 300): began, moved 200 px across as
-//!                     the platform reports it (with natural scrolling, negative: fingers to the left), ended
+//! swipe 400 300 -200 [30]  a two-finger trackpad gesture at (400, 300): began, moved 200 px across
+//!                     (and 30 down) as the platform reports it (with natural scrolling, negative:
+//!                     fingers to the left), ended, then a little momentum
 //! key cmd-n           dispatch a keystroke
 //! modifiers cmd       hold these modifiers (`cmd`, `alt`, `ctrl`, `shift`, joined by `-`; `none` lets go)
 //! type some text      type text into the focused element
@@ -200,15 +201,18 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                 "swipe" => {
                     let position = point(px(num(0)), px(num(1)));
                     let steps = 8;
-                    let mut phases = vec![(TouchPhase::Started, 0.)];
-                    phases.extend((0..steps).map(|_| (TouchPhase::Moved, num(2) / steps as f32)));
-                    phases.push((TouchPhase::Ended, 0.));
-                    for (touch_phase, dx) in phases {
+                    let (dx, dy) = (num(2) / steps as f32, num(3) / steps as f32);
+                    let mut phases = vec![(TouchPhase::Started, 0., 0.)];
+                    phases.extend((0..steps).map(|_| (TouchPhase::Moved, dx, dy)));
+                    phases.push((TouchPhase::Ended, 0., 0.));
+                    // Momentum after the fingers lift (macOS sends it without a phase: `Moved`).
+                    phases.extend((1..=4).map(|i| (TouchPhase::Moved, dx / (i as f32 * 2.), dy / (i as f32 * 2.))));
+                    for (touch_phase, dx, dy) in phases {
                         let _ = window.update(cx, |_, window, cx| {
                             window.dispatch_event(
                                 PlatformInput::Scroll(ScrollEvent {
                                     position,
-                                    delta: ScrollDelta::Pixels(point(px(dx), px(0.))),
+                                    delta: ScrollDelta::Pixels(point(px(dx), px(dy))),
                                     modifiers: Modifiers::default(),
                                     touch_phase,
                                     source: ScrollSource::Pointer,
