@@ -545,11 +545,12 @@ impl SpaceApp {
         // `/btw …` goes to the side chat (also while a turn runs).
         let plain = thread.attachments.is_empty() && thread.images.is_empty() && thread.pastes.is_empty() && thread.quote.is_none();
         if plain && let Some(rest) = crate::slash::side_text(&text, &self.commands()).map(str::to_string) {
-            self.open_side_chat_with("", window, cx);
-            if let Some(side) = self.side_chats.get(&key) {
-                side.input.update(cx, |s, cx| s.set_value(rest, window, cx));
+            if let Some(side) = self.open_side_chat_with("", window, cx) {
+                if let Some(s) = self.side_chats.get(&side) {
+                    s.input.update(cx, |s, cx| s.set_value(rest, window, cx));
+                }
+                self.send_side(side, window, cx);
             }
-            self.send_side(key, window, cx);
             return;
         }
         let Some(thread) = self.thread_mut(key) else { return };
@@ -631,7 +632,6 @@ impl SpaceApp {
         let Some(session) = thread.session.clone() else { return };
         // A thread that was saved already had its first message.
         let first = thread.name.is_none()
-            && thread.side_of.is_none()
             && thread.meta.is_none()
             && !thread.state.items.iter().any(|i| matches!(i, TranscriptItem::User { .. }));
         if first && !message.text.trim().is_empty() {

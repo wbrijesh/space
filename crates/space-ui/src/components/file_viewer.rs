@@ -1,5 +1,4 @@
-//! The Files view's tabs and file preview: a strip with the tree's toggle and one tab per open
-//! file; a file's header (its path, the viewer choice, wrap, Open in); and the states a
+//! A file's tab in the right pane: its header (its path, the viewer choice, wrap, Open in); and the states a
 //! preview can be in.
 
 use std::path::Path;
@@ -13,86 +12,12 @@ use gpui::*;
 use super::file_tree::file_icon;
 use super::tip::TipExt as _;
 use super::widgets::{icon_button, pill_button};
-use crate::theme::{color, radius, size, text};
+use crate::theme::{color, radius, text};
 
 pub type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 pub type TabHandler = Rc<dyn Fn(Option<usize>, &mut Window, &mut App)>;
 pub type IndexHandler = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 pub type BoolHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
-
-/// A tab in the pane's strip: an icon, an optional label, filled when shown, and × (on hover;
-/// always on the shown one) when it can close.
-pub fn pane_tab(id: ElementId, label: Option<SharedString>, icon: Icon, on: bool, close: Option<Handler>, select: Handler) -> Stateful<Div> {
-    let group: SharedString = format!("{id}").into();
-    let close_id = ElementId::Name(format!("{id}-close").into());
-    div()
-        .id(id)
-        .group(group.clone())
-        .flex_none()
-        .max_w(px(180.))
-        .h(px(24.))
-        .pl_2()
-        .when(close.is_none(), |d| d.pr_2())
-        .when(close.is_some(), |d| d.pr_1())
-        .flex()
-        .items_center()
-        .gap_1p5()
-        .rounded(radius::MD)
-        .text_size(text::SM)
-        .cursor_pointer()
-        .map(|d| if on { d.bg(color::hover()).text_color(color::text()) } else { d.text_color(color::text_3()) })
-        .hover(|s| s.bg(color::hover()).text_color(color::text()))
-        .child(icon.size(size::ICON).text_color(color::text_2()))
-        .children(label.map(|l| div().min_w_0().truncate().child(l)))
-        .when_some(close, |d, close| {
-            d.child(
-                div()
-                    .id(close_id)
-                    .size(px(18.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(radius::SM)
-                    .text_color(color::text_3())
-                    .when(!on, |d| d.invisible().group_hover(group, |s| s.visible()))
-                    .hover(|s| s.bg(color::pressed()).text_color(color::text()))
-                    .child(Icon::new(Lucide::X).size(size::ICON_SM))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(move |_, w, cx| {
-                        cx.stop_propagation();
-                        close(w, cx)
-                    }),
-            )
-        })
-        .on_click(move |_, w, cx| select(w, cx))
-}
-
-/// Shows or hides the folder's tree beside the open files: first in the strip, just its icon.
-pub fn tree_toggle(shown: bool, toggle: Handler) -> Stateful<Div> {
-    pane_tab("files-tree-toggle".into(), None, Icon::new(Lucide::ListTree), shown, None, toggle)
-        .tip(if shown { "Hide the folder tree" } else { "Show the folder tree" })
-}
-
-/// An open file's tab: its icon and name.
-pub fn file_tab(ix: usize, name: &SharedString, on: bool, select: Handler, close: Handler) -> Stateful<Div> {
-    pane_tab(ElementId::NamedInteger("file-tab".into(), ix as u64), Some(name.clone()), Icon::new(file_icon(name)), on, Some(close), select)
-}
-
-/// The tree's toggle (`tree`: it's shown), then the open files' tabs (`active`: the one shown).
-pub fn file_tabs(names: &[SharedString], active: Option<usize>, tree: bool, on_tree: Handler, on_select: IndexHandler, on_close: IndexHandler) -> Div {
-    div()
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .items_center()
-        .gap_1()
-        .child(tree_toggle(tree, on_tree))
-        .child(div().id("file-tabs").flex_1().min_w_0().flex().items_center().gap_1().overflow_x_scroll().children(names.iter().enumerate().map(|(ix, name)| {
-            let (select, close) = (on_select.clone(), on_close.clone());
-            file_tab(ix, name, active == Some(ix), Rc::new(move |w, cx| select(ix, w, cx)), Rc::new(move |w, cx| close(ix, w, cx)))
-        })))
-}
 
 /// One of a file's views (Preview, Changes, Full file…): its label, shown or not, and picking it.
 #[derive(Clone)]
@@ -274,13 +199,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     };
     let pane = |child: Div| div().w(px(620.)).h(px(260.)).flex().flex_col().bg(color::bg()).border_1().border_color(color::border()).child(child);
     let (h1, h2) = (header.clone(), header);
-    vec![ComponentPreview::new(Area::Shell, "File viewer", "Tabs, a file's header, and the preview's states.").stacked().examples([
-        Example::new("tabs", |_, _| {
-            let names: Vec<SharedString> = vec!["files_view.rs".into(), "README.md".into(), "logo.png".into()];
-            div().w(px(620.)).h(px(34.)).px_2().flex().items_center().bg(color::bg()).border_1().border_color(color::border())
-                .child(file_tabs(&names, Some(0), true, Rc::new(|_, _| {}), Rc::new(|_, _, _| {}), Rc::new(|_, _, _| {})))
-                .into_any_element()
-        }),
+    vec![ComponentPreview::new(Area::Shell, "File viewer", "A file's header, and the preview's states.").stacked().examples([
         Example::new("header: a changed file", move |_, _| {
             let content = div().flex_1().p_4().text_size(text::SM).text_color(color::text_2()).child("Its changes here.").into_any_element();
             pane(div().size_full().flex().flex_col().child(file_header(h1("crates/space-app/README.md", true))).child(content)).into_any_element()

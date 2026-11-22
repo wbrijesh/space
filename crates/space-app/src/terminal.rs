@@ -21,6 +21,7 @@ use space_ui::components::right_pane::PaneView;
 use space_ui::components::terminal::{FONT_SIZE, TerminalTab};
 
 use crate::app::SpaceApp;
+use crate::pane::{Pane, PaneTab, STARTING};
 use crate::terminal_view::{TerminalView, TerminalViewEvent};
 
 /// Shells: a tab whose title is one of these has nothing running in it.
@@ -147,22 +148,6 @@ impl Session {
     }
 }
 
-/// A thread's pane.
-#[derive(Default)]
-pub(crate) struct Pane {
-    pub(crate) open: bool,
-    pub(crate) maximized: bool,
-    /// The view shown (the one used last); `None`: never chosen, so the pane offers both.
-    pub(crate) view: Option<PaneView>,
-    /// Terminal ids, in tab order.
-    pub(crate) tabs: Vec<String>,
-    pub(crate) selected: usize,
-    /// Shells being started.
-    pub(crate) opening: usize,
-    /// Why the last one couldn't start.
-    pub(crate) error: Option<String>,
-}
-
 pub(crate) struct Terminals {
     /// By terminal id; shared with the output thread.
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
@@ -176,6 +161,8 @@ pub(crate) struct Terminals {
     pub(crate) drag: Option<(f32, f32)>,
     /// Focus this terminal once its view exists.
     focus_next: Option<String>,
+    /// Terminals started, to name each starting tab.
+    starting: u64,
 }
 
 impl Terminals {
@@ -187,7 +174,7 @@ impl Terminals {
             let session = map.lock().unwrap().get(id).cloned();
             session.is_some_and(|s| s.receive(seq, data, &h))
         }));
-        Self { sessions, views: HashMap::new(), panes: HashMap::new(), width: width.max(WIDTH_MIN), drag: None, focus_next: None }
+        Self { sessions, views: HashMap::new(), panes: HashMap::new(), width: width.max(WIDTH_MIN), drag: None, focus_next: None, starting: 0 }
     }
 
     pub(crate) fn session(&self, id: &str) -> Option<Arc<Session>> {
@@ -202,22 +189,22 @@ impl Terminals {
         self.panes.get(&key)
     }
 
-    /// The pane's selected terminal.
+    /// The terminal the pane shows (its shown tab is a terminal).
     pub(crate) fn selected(&self, key: u64) -> Option<Arc<Session>> {
-        let pane = self.panes.get(&key)?;
-        self.session(pane.tabs.get(pane.selected)?)
+        match self.panes.get(&key)?.active_tab()? {
+            PaneTab::Terminal(id) => self.session(id),
+            _ => None,
+        }
     }
 
     pub(crate) fn selected_view(&self, key: u64) -> Option<Entity<TerminalView>> {
-        let pane = self.panes.get(&key)?;
-        self.views.get(pane.tabs.get(pane.selected)?).cloned()
+        let id = self.selected(key)?.id.clone();
+        self.views.get(&id).cloned()
     }
 
     /// A thread has a terminal with something running, or output it hasn't seen.
     pub(crate) fn active(&self, key: u64) -> bool {
-        self.panes.get(&key).is_some_and(|p| {
-            p.tabs.iter().filter_map(|id| self.session(id)).any(|s| s.busy() || s.unread.load(Ordering::SeqCst))
-        })
+        self.panes.get(&key).is_some_and(|p| p.terminals().filter_map(|id| self.session(id)).any(|s| s.busy() || s.unread.load(Ordering::SeqCst)))
     }
 
     /// Mark which terminal is on screen (the rest wait to be drawn).
@@ -248,14 +235,18 @@ impl SpaceApp {
         self.terminals.selected_view(key).is_some_and(|v| v.read(cx).focus.contains_focused(window, cx))
     }
 
-    fn focus_terminal(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn focus_terminal(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
         match self.terminals.selected_view(key) {
             Some(view) => {
                 let focus = view.read(cx).focus.clone();
                 window.focus(&focus, cx);
             }
-            // Its view is made when the pane is drawn.
-            None => self.terminals.focus_next = self.terminals.selected(key).map(|s| s.id.clone()),
+            // Its view is made when the pane is drawn; a terminal still starting has none.
+            None => {
+                self.terminals.focus_next = self.terminals.selected(key).map(|s| s.id.clone());
+                let focus = self.pane_focus.clone();
+                window.focus(&focus, cx);
+            }
         }
     }
 
@@ -287,8 +278,7 @@ impl SpaceApp {
         self.terminals.panes.get(&key).is_some_and(|p| p.open)
     }
 
-    /// The title bar's button: hide the pane, or open it on the view this thread used last (the
-    /// one used last in any thread, for a thread that hasn't opened it; Files the first time).
+    /// The title bar's button: hide the pane, or show it as it was (a new tab the first time).
     pub(crate) fn toggle_right_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.show_settings {
             return;
@@ -298,73 +288,54 @@ impl SpaceApp {
             self.hide_terminal(window, cx);
             return;
         }
-        let view = self.terminals.panes.get(&key).and_then(|p| p.view).unwrap_or(self.last_pane_view);
-        self.open_pane(key, Some(view), window, cx);
+        let pane = self.terminals.panes.entry(key).or_default();
+        pane.open = true;
+        if pane.tabs.is_empty() {
+            pane.add(PaneTab::Launcher);
+        }
+        self.pane_tab_shown(key, window, cx);
     }
 
-    /// ⌘J / ⌃` (Terminal), ⌘P (Files, on its tree), ⌘⇧L (the side chat) and ⌃⇧G (Changes): open the pane on
-    /// that view; when it's shown already (Terminal or the side chat focused, or the tree
-    /// showing), hide the pane and go back to the composer.
+    /// ⌘J / ⌃` (a terminal), ⌘P (the tree), ⌘⇧L (a side chat) and ⌃⇧G (Changes): show that
+    /// tab; when it's shown and focused already, hide the pane and go back to the composer.
+    /// ⌘J goes to the terminal shown last, or starts one; ⌘⇧L starts a new side chat.
     pub(crate) fn show_pane_view(&mut self, view: PaneView, window: &mut Window, cx: &mut Context<Self>) {
         if self.show_settings {
             return;
         }
         let Some(key) = self.selected else { return };
-        let shown = self.terminals.panes.get(&key).is_some_and(|p| p.open && p.view == Some(view));
-        let tree_shown = self.file_tabs.get(&key).is_none_or(|t| t.active.is_none() || !t.tree_hidden);
-        let in_use = match view {
-            PaneView::Files => tree_shown,
-            PaneView::Terminal => self.terminal_focused(key, window, cx),
-            PaneView::SideChat => self.side_chat_focused(key, window, cx),
-            PaneView::Changes => self.changes_focus.contains_focused(window, cx),
+        let pane = self.terminals.panes.get(&key).filter(|p| p.open);
+        let active = pane.and_then(|p| p.active_tab()).cloned();
+        let in_use = match (view, &active) {
+            (PaneView::Files, Some(PaneTab::Files)) => self.files.focus.contains_focused(window, cx),
+            (PaneView::Terminal, Some(PaneTab::Terminal(_))) => self.terminal_focused(key, window, cx),
+            (PaneView::SideChat, Some(PaneTab::SideChat(side))) => self.side_chat_focused(*side, window, cx),
+            (PaneView::Changes, Some(PaneTab::Changes)) => self.changes_focus.contains_focused(window, cx),
+            _ => false,
         };
-        if shown && in_use {
+        if in_use {
             self.hide_terminal(window, cx);
             return;
         }
-        self.open_pane(key, Some(view), window, cx);
-        // Files opens with the tree showing.
-        if view == PaneView::Files {
-            self.reveal_file_tree(window, cx);
-        }
-    }
-
-    /// One of the pane's mode tabs: switch to that mode.
-    pub(crate) fn switch_pane_view(&mut self, view: PaneView, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(key) = self.selected else { return };
-        self.open_pane(key, Some(view), window, cx);
-    }
-
-    /// Open thread `key`'s pane on `view` (`None`: as it was). Terminal starts a shell the
-    /// first time and takes focus; the side chat takes focus at once (it's drawn on the next
-    /// frame, but its input is focused now, so no key typed in between is lost).
-    fn open_pane(&mut self, key: u64, view: Option<PaneView>, window: &mut Window, cx: &mut Context<Self>) {
-        let pane = self.terminals.panes.entry(key).or_default();
-        pane.open = true;
-        if let Some(view) = view {
-            pane.view = Some(view);
-            self.last_pane_view = view;
-        }
-        if view == Some(PaneView::Files) {
-            let focus = self.files.focus.clone();
-            window.focus(&focus, cx);
-        }
-        if view == Some(PaneView::Terminal) {
-            let start = pane.tabs.is_empty() && pane.opening == 0;
-            if start && self.host.has_terminal() {
-                self.open_terminal(key, None, window, cx);
+        let tab = match view {
+            PaneView::Files => PaneTab::Files,
+            PaneView::SideChat => {
+                self.new_side_chat(window, cx);
+                return;
             }
-            self.focus_terminal(key, window, cx);
-        }
-        if view == Some(PaneView::SideChat) {
-            self.focus_side_chat(key, window, cx);
-        }
-        if view == Some(PaneView::Changes) {
-            let focus = self.changes_focus.clone();
-            window.focus(&focus, cx);
-        }
-        self.terminal_slide(cx);
-        cx.notify();
+            PaneView::Changes => PaneTab::Changes,
+            PaneView::Terminal => {
+                let pane = self.terminals.panes.get(&key);
+                let shown = active.clone().filter(|t| matches!(t, PaneTab::Terminal(_)));
+                let last = pane.and_then(|p| p.last_terminal.clone()).map(PaneTab::Terminal).filter(|t| pane.is_some_and(|p| p.position(t).is_some()));
+                let first = pane.and_then(|p| p.terminals().next()).map(|id| PaneTab::Terminal(id.to_string()));
+                match shown.or(last).or(first) {
+                    Some(tab) => tab,
+                    None => return self.new_terminal(window, cx),
+                }
+            }
+        };
+        self.show_pane_tab(key, tab, window, cx);
     }
 
     /// Point the pane's slide at whether the current thread's pane is open: it slides in and
@@ -417,29 +388,38 @@ impl SpaceApp {
         cx.notify();
     }
 
-    /// ⌘T or `+`: another shell in the thread's pane.
+    /// A new terminal tab in the thread's pane (the launcher's Terminal, or ⌘J with none open).
     pub(crate) fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.show_settings || !self.host.has_terminal() {
+        if self.show_settings {
             return;
         }
         let Some(key) = self.selected else { return };
-        let pane = self.terminals.panes.entry(key).or_default();
-        pane.open = true;
-        pane.view = Some(PaneView::Terminal);
-        self.terminal_slide(cx);
+        self.terminals.panes.entry(key).or_default().open = true;
         self.open_terminal(key, None, window, cx);
-        cx.notify();
+        self.pane_tab_shown(key, window, cx);
     }
 
-    /// Start a shell for thread `key` (in place of tab `replace`, else as a new tab), attach to
-    /// it, select it and focus it.
-    fn open_terminal(&mut self, key: u64, replace: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+    /// Start a shell for thread `key` (in place of terminal tab `replace`, else as a new tab,
+    /// shown), attach to it, and focus it if it's shown.
+    fn open_terminal(&mut self, key: u64, replace: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(thread) = self.thread(key) else { return };
         let (cols, rows) = self.terminals.selected(key).map_or((80, 24), |s| s.size());
         let open = TerminalOpen { thread_id: thread.id.clone(), cwd: thread.cwd.display().to_string(), cols, rows };
+        self.terminals.starting += 1;
+        let placeholder = PaneTab::Terminal(format!("{STARTING}{}", self.terminals.starting));
         let pane = self.terminals.panes.entry(key).or_default();
-        pane.opening += 1;
-        pane.error = None;
+        match replace {
+            Some(old) => {
+                if !pane.replace(&PaneTab::Terminal(old), placeholder.clone()) {
+                    pane.add(placeholder.clone());
+                }
+            }
+            None => pane.add(placeholder.clone()),
+        }
+        if !self.host.has_terminal() {
+            pane.failed.insert(tab_id(&placeholder), "The terminal plugin isn't running.".into());
+            return;
+        }
         let host = self.host.clone();
         cx.spawn_in(window, async move |this, cx| {
             let opened = host.terminal_open(open.clone()).await;
@@ -447,12 +427,14 @@ impl SpaceApp {
                 Ok(o) => {
                     let session = Arc::new(Session::new(o.terminal_id, o.title, cols, rows));
                     let _ = this.update_in(cx, |this, window, cx| {
-                        this.add_session(key, session.clone(), replace);
-                        if let Some(pane) = this.terminals.panes.get_mut(&key) {
-                            pane.opening = pane.opening.saturating_sub(1);
-                        }
-                        if this.selected == Some(key) && this.terminals.pane(key).is_some_and(|p| p.open) {
-                            this.focus_terminal(key, window, cx);
+                        match this.add_session(key, session.clone(), Some(&placeholder)) {
+                            Some(true) if this.selected == Some(key) && this.pane_open(key) => this.focus_terminal(key, window, cx),
+                            Some(_) => {}
+                            // Its tab closed while it started.
+                            None => {
+                                let (host, id) = (this.host.clone(), session.id.clone());
+                                cx.background_spawn(async move { host.terminal_close(&id).await }).detach();
+                            }
                         }
                         cx.notify();
                     });
@@ -460,9 +442,9 @@ impl SpaceApp {
                 }
                 Err(e) => {
                     let _ = this.update(cx, |this, cx| {
-                        let pane = this.terminals.panes.entry(key).or_default();
-                        pane.opening = pane.opening.saturating_sub(1);
-                        pane.error = Some(format!("Couldn't start a terminal: {e:#}"));
+                        if let Some(pane) = this.terminals.panes.get_mut(&key) {
+                            pane.failed.insert(tab_id(&placeholder), format!("Couldn't start a terminal: {e:#}"));
+                        }
                         cx.notify();
                     });
                     return;
@@ -480,21 +462,29 @@ impl SpaceApp {
         .detach();
     }
 
-    /// A session's tab (the output thread knows it from here on; its view is made when shown).
-    fn add_session(&mut self, key: u64, session: Arc<Session>, replace: Option<usize>) {
+    /// A session's tab (the output thread knows it from here on; its view is made when shown):
+    /// in place of its starting tab, or at the end (found running when the plugin started).
+    /// Returns whether it's the tab shown; `None` when its starting tab was closed meanwhile.
+    fn add_session(&mut self, key: u64, session: Arc<Session>, replace: Option<&PaneTab>) -> Option<bool> {
         let id = session.id.clone();
-        self.terminals.sessions.lock().unwrap().insert(id.clone(), session);
         let pane = self.terminals.panes.entry(key).or_default();
-        match replace.filter(|ix| *ix < pane.tabs.len()) {
-            Some(ix) => {
-                pane.tabs[ix] = id;
-                pane.selected = ix;
+        let tab = PaneTab::Terminal(id.clone());
+        match replace {
+            Some(old) => {
+                if !pane.replace(old, tab.clone()) {
+                    return None;
+                }
             }
             None => {
-                pane.tabs.push(id);
-                pane.selected = pane.tabs.len() - 1;
+                pane.tabs.push(tab.clone());
+                if pane.tabs.len() == 1 {
+                    pane.select(0);
+                }
             }
         }
+        let shown = pane.active_tab() == Some(&tab);
+        self.terminals.sessions.lock().unwrap().insert(id, session);
+        Some(shown)
     }
 
     /// Forget a terminal here (its shell is closed separately).
@@ -503,110 +493,27 @@ impl SpaceApp {
         self.terminals.views.remove(id);
     }
 
-    /// A new shell in place of an ended (or stopped) one.
+    /// A new shell in place of an ended (or stopped) one, or one that couldn't start.
     pub(crate) fn restart_terminal(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((key, ix)) = self.terminals.panes.iter().find_map(|(k, p)| p.tabs.iter().position(|t| t == id).map(|ix| (*k, ix))) else {
+        let Some(key) = self.terminals.panes.iter().find_map(|(k, p)| p.terminals().any(|t| t == id).then_some(*k)) else {
             return;
         };
-        let (host, old) = (self.host.clone(), id.to_string());
-        cx.background_spawn(async move { host.terminal_close(&old).await }).detach();
-        self.drop_session(id);
-        self.open_terminal(key, Some(ix), window, cx);
+        self.close_shell(id, cx);
+        if let Some(pane) = self.terminals.panes.get_mut(&key) {
+            pane.failed.remove(id);
+        }
+        self.open_terminal(key, Some(id.to_string()), window, cx);
         cx.notify();
     }
 
-    /// Close tab `ix` of the current thread's pane, asking first when something runs in it.
-    pub(crate) fn close_terminal(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(key) = self.selected else { return };
-        let Some(id) = self.terminals.panes.get(&key).and_then(|p| p.tabs.get(ix)).cloned() else { return };
-        let Some(session) = self.terminals.session(&id) else {
-            return self.remove_tab(key, &id, true, window, cx);
-        };
-        if !session.busy() {
-            return self.remove_tab(key, &id, true, window, cx);
+    /// Close a terminal's shell and forget it here.
+    pub(crate) fn close_shell(&mut self, id: &str, cx: &mut Context<Self>) {
+        if id.starts_with(STARTING) {
+            return;
         }
-        let title = session.state.lock().unwrap().title.clone();
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &format!("Close the terminal running {title}?"),
-            Some("Closing it stops what's running in it."),
-            &["Close", "Cancel"],
-            cx,
-        );
-        cx.spawn_in(window, async move |this, cx| {
-            if answer.await == Ok(0) {
-                let _ = this.update_in(cx, |this, window, cx| this.remove_tab(key, &id, true, window, cx));
-            }
-        })
-        .detach();
-    }
-
-    /// ⌘W in the terminal: close its tab; the only one stays (its shell keeps running) and
-    /// the pane hides instead.
-    pub(crate) fn close_current_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(key) = self.selected else { return };
-        match self.terminals.panes.get(&key) {
-            Some(pane) if pane.tabs.len() > 1 => self.close_terminal(pane.selected, window, cx),
-            _ => self.hide_terminal(window, cx),
-        }
-    }
-
-    /// Close the tab and its shell; with `refocus`, focus goes to the pane's next tab, or the
-    /// composer once the pane closes.
-    fn remove_tab(&mut self, key: u64, id: &str, refocus: bool, window: &mut Window, cx: &mut Context<Self>) {
         let (host, gone) = (self.host.clone(), id.to_string());
         cx.background_spawn(async move { host.terminal_close(&gone).await }).detach();
         self.drop_session(id);
-        let Some(pane) = self.terminals.panes.get_mut(&key) else { return };
-        if let Some(ix) = pane.tabs.iter().position(|t| t == id) {
-            pane.tabs.remove(ix);
-            if pane.selected >= ix && pane.selected > 0 {
-                pane.selected -= 1;
-            }
-        }
-        // The last terminal closes the pane, when it's showing the terminal and no file is open
-        // beside it (else the pane goes to the files).
-        let last = pane.tabs.is_empty() && pane.view == Some(PaneView::Terminal);
-        let files_open = self.file_tabs.get(&key).is_some_and(|t| !t.tabs.is_empty());
-        let Some(pane) = self.terminals.panes.get_mut(&key) else { return };
-        if last && files_open {
-            pane.view = Some(PaneView::Files);
-        }
-        let closed = last && !files_open;
-        if closed {
-            pane.open = false;
-            pane.maximized = false;
-            self.terminal_slide(cx);
-        }
-        if refocus && self.selected == Some(key) {
-            if closed {
-                self.focus_composer(window, cx);
-            } else {
-                self.focus_terminal(key, window, cx);
-            }
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn select_terminal(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(key) = self.selected else { return };
-        if let Some(pane) = self.terminals.panes.get_mut(&key)
-            && ix < pane.tabs.len()
-        {
-            pane.selected = ix;
-            pane.view = Some(PaneView::Terminal);
-            self.focus_terminal(key, window, cx);
-            cx.notify();
-        }
-    }
-
-    /// ⌃Tab / ⌃⇧Tab.
-    pub(crate) fn step_terminal(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(key) = self.selected else { return };
-        let Some(pane) = self.terminals.panes.get(&key).filter(|p| !p.tabs.is_empty()) else { return };
-        let n = pane.tabs.len() as isize;
-        let ix = (pane.selected as isize + by).rem_euclid(n) as usize;
-        self.select_terminal(ix, window, cx);
     }
 
     /// Maximize the open pane (it fills the window beside the sidebar), or restore it.
@@ -658,10 +565,10 @@ impl SpaceApp {
     }
 
     fn close_exited_terminal(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(key) = self.terminals.panes.iter().find_map(|(k, p)| p.tabs.iter().any(|t| t == id).then_some(*k)) else { return };
+        let Some(key) = self.terminals.panes.iter().find_map(|(k, p)| p.terminals().any(|t| t == id).then_some(*k)) else { return };
         // Focus moves only if it was in this terminal: a shell ending elsewhere doesn't take it.
         let had_focus = self.terminals.views.get(id).is_some_and(|v| v.read(cx).focus.is_focused(window));
-        self.remove_tab(key, id, had_focus, window, cx);
+        self.remove_pane_tab(key, &PaneTab::Terminal(id.to_string()), had_focus, window, cx);
     }
 
     /// The terminal plugin's status changed: attach to what it runs once it's up; mark its
@@ -716,16 +623,14 @@ impl SpaceApp {
     /// Stop a thread's terminals (it was closed) and forget them.
     pub(crate) fn close_thread_terminals(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(pane) = self.terminals.panes.remove(&key) else { return };
-        for id in pane.tabs {
-            self.drop_session(&id);
-            let host = self.host.clone();
-            cx.background_spawn(async move { host.terminal_close(&id).await }).detach();
+        for id in pane.terminals() {
+            self.close_shell(id, cx);
         }
     }
 
     /// The thread has terminals open.
     pub(crate) fn has_terminals(&self, key: u64) -> bool {
-        self.terminals.panes.get(&key).is_some_and(|p| !p.tabs.is_empty())
+        self.terminals.panes.get(&key).is_some_and(|p| p.terminals().next().is_some())
     }
 
     /// ⌘Q and Space ▸ Quit Space: always ask first, saying what quitting stops. A second ⌘Q
@@ -769,6 +674,14 @@ pub(crate) fn quit_detail(working_threads: usize, programs: &[String]) -> Option
         (None, None) => None,
         (Some(t), None) | (None, Some(t)) => Some(format!("{t}.")),
         (Some(t), Some(p)) => Some(format!("{t}, and {p}.")),
+    }
+}
+
+/// A terminal tab's id.
+fn tab_id(tab: &PaneTab) -> String {
+    match tab {
+        PaneTab::Terminal(id) => id.clone(),
+        _ => String::new(),
     }
 }
 

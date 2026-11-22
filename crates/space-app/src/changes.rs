@@ -334,19 +334,17 @@ impl SpaceApp {
         cx.notify();
     }
 
-    /// ⌘W in Changes: close the open file; with none open, hide the pane.
-    pub(crate) fn close_changes_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// ⌘W in Changes: close the open file (or the pull request's editor); `false` when none
+    /// is open (the tab closes instead).
+    pub(crate) fn close_changes_item(&mut self, cx: &mut Context<Self>) -> bool {
         let open = self.changes_dir().and_then(|d| self.changes.get_mut(&d)).filter(|s| s.expanded.is_some() || s.editor.is_some());
-        match open {
-            Some(state) => {
-                if state.editor.take().is_none() {
-                    state.expanded = None;
-                    state.diff = None;
-                }
-                cx.notify();
-            }
-            None => self.hide_terminal(window, cx),
+        let Some(state) = open else { return false };
+        if state.editor.take().is_none() {
+            state.expanded = None;
+            state.diff = None;
         }
+        cx.notify();
+        true
     }
 
     // ----- menus --------------------------------------------------------------------------
