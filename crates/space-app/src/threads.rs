@@ -45,8 +45,8 @@ pub struct Thread {
     pub renamed: bool,
     /// When you pinned it (Unix ms): listed at the top of the sidebar.
     pub pinned_ms: Option<u64>,
-    /// The agent session to load to continue a saved conversation: (agent plugin, session id).
-    pub resume: Option<(String, String)>,
+    /// The agent session to load to continue a saved conversation.
+    pub resume: Option<String>,
     pub cwd: PathBuf,
     pub branch: Option<String>,
     pub session: Option<Session>,
@@ -356,8 +356,8 @@ impl SpaceApp {
         let Some(thread) = self.thread_mut(key) else { return };
         thread.creating = true;
         thread.error = None;
-        // Continue the saved conversation if this agent can; else start over in a new session.
-        let resume = thread.resume.take().filter(|(plugin, _)| plugin == agent.plugin_id() && can_load);
+        // Continue the saved conversation (a new session when it can't be loaded).
+        let resume = thread.resume.take().filter(|_| can_load);
         if resume.is_none() && !thread.state.items.is_empty() {
             thread.state.items.push(TranscriptItem::divider("new-session"));
         }
@@ -370,8 +370,8 @@ impl SpaceApp {
                 }
             });
             let result = match (&resume, &side_of) {
-                (Some((_, session_id)), Some(main)) => agent.load_side_session(session_id, main, cwd, Some(&id)).await,
-                (Some((_, session_id)), None) => agent.load_session(session_id, cwd, Some(&id)).await,
+                (Some(session_id), Some(main)) => agent.load_side_session(session_id, main, cwd, Some(&id)).await,
+                (Some(session_id), None) => agent.load_session(session_id, cwd, Some(&id)).await,
                 (None, Some(main)) => agent.new_side_session(main, cwd, Some(&id)).await,
                 (None, None) => agent.new_session_in(cwd, Some(&id)).await,
             };
@@ -594,7 +594,7 @@ impl SpaceApp {
             // No session yet (agent starting) or its agent exited: send once there is one (the
             // old session is loaded again if the agent can).
             if let Some(old) = thread.session.take() {
-                thread.resume = Some((old.agent().plugin_id().to_string(), old.id().to_string()));
+                thread.resume = Some(old.id().to_string());
             }
             thread.queued = Some(message);
             thread.error = None;

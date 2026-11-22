@@ -101,7 +101,7 @@ impl SpaceApp {
         tracing::info!("the agent was idle for {:?}: stopping it", idle_limit());
         for t in self.threads.iter_mut().chain(self.side_chats.values_mut().map(|s| &mut s.thread)) {
             if let Some(old) = t.session.take() {
-                t.resume = Some((old.agent().plugin_id().to_string(), old.id().to_string()));
+                t.resume = Some(old.id().to_string());
             }
         }
         self.agent_asleep = true;

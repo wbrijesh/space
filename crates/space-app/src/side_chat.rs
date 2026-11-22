@@ -66,7 +66,7 @@ impl SpaceApp {
     /// follow.
     pub(crate) fn main_session_id(&self, main: u64) -> Option<String> {
         let t = self.threads.iter().find(|t| t.key == main)?;
-        t.session.as_ref().map(|s| s.id().to_string()).or_else(|| t.resume.as_ref().map(|r| r.1.clone()))
+        t.session.as_ref().map(|s| s.id().to_string()).or_else(|| t.resume.clone())
     }
 
     /// Thread `main`'s side chats, newest first (the saved ones read in first).
