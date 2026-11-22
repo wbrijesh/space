@@ -80,7 +80,7 @@ async fn host_facts_reach_tracers_with_the_thread_and_only_them() {
     let (host, mut events) = host(bundled.path(), user.path(), space.path());
     host.start_services().await;
     let agent = host.start_agent("stub").await.unwrap();
-    let session = agent.new_session_in(bundled.path(), None, Some("t1")).await.unwrap();
+    let session = agent.new_session_in(bundled.path(), Some("t1")).await.unwrap();
     assert_eq!(session.prompt("hello").await.unwrap(), "end_turn");
 
     let mut got: Vec<TraceEvent> = Vec::new();
@@ -123,7 +123,7 @@ async fn trajectory_calls_reach_the_provider_and_changes_come_back() {
     assert_eq!(page.rows[0].preview, "t9");
 
     let agent = host.start_agent("stub").await.unwrap();
-    let session = agent.new_session_in(bundled.path(), None, Some("t9")).await.unwrap();
+    let session = agent.new_session_in(bundled.path(), Some("t9")).await.unwrap();
     session.prompt("hi").await.unwrap();
     let changed = next(&mut events, |e| matches!(e, HostEvent::TrajectoryChanged { .. })).await;
     assert!(matches!(changed, HostEvent::TrajectoryChanged { thread_id, .. } if thread_id == "t9"));

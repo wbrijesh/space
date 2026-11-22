@@ -1,6 +1,6 @@
 // Generated from crates/space-protocol by `just protocol`. Do not edit: change the Rust types.
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 export const PROTOCOL_VERSION_META_KEY = "space/protocolVersion";
 export const STATUS_METHOD = "_space/status";
 export const CONFIGURE_METHOD = "_space/session/configure";
@@ -13,7 +13,6 @@ export const STEERED_METHOD = "_space/steered";
 export const RETRY_METHOD = "_space/retry";
 export const STEER_META_KEY = "space/steer";
 export const CONTEXT_META_KEY = "space/context";
-export const DATA_DIR_META_KEY = "space/dataDir";
 export const SIDE_OF_META_KEY = "space/sideOf";
 export const USAGE_META_KEY = "space/usage";
 export const TRACE_METHOD = "_space/trace";

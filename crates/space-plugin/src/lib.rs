@@ -114,10 +114,10 @@ pub trait Plugin: Send + Sync + 'static {
         async { Err(RpcError::method_not_found(STORE_DELETE)) }
     }
 
-    /// `provides = ["session-store"]`: the folder the thread's agent may keep files in.
-    fn store_data_dir(&self, thread: ThreadRef) -> impl Future<Output = Result<DataDir, RpcError>> + Send {
+    /// `provides = ["session-store"]`: the folder the thread's attached images are kept in.
+    fn store_attachments_dir(&self, thread: ThreadRef) -> impl Future<Output = Result<AttachmentsDir, RpcError>> + Send {
         let _ = thread;
-        async { Err(RpcError::method_not_found(STORE_DATA_DIR)) }
+        async { Err(RpcError::method_not_found(STORE_ATTACHMENTS_DIR)) }
     }
 
     /// `provides = ["session-title"]`: a title for the thread that starts with this message.
@@ -296,7 +296,7 @@ async fn handle<P: Plugin>(plugin: &P, host: &OnceLock<Host>, method: &str, para
         STORE_LOAD => rpc::result(plugin.store_load(rpc::params(params)?).await?),
         STORE_WRITE => rpc::result(plugin.store_write(rpc::params(params)?).await?),
         STORE_DELETE => rpc::result(plugin.store_delete(rpc::params(params)?).await?),
-        STORE_DATA_DIR => rpc::result(plugin.store_data_dir(rpc::params(params)?).await?),
+        STORE_ATTACHMENTS_DIR => rpc::result(plugin.store_attachments_dir(rpc::params(params)?).await?),
         TITLE_GENERATE => rpc::result(plugin.title(rpc::params(params)?).await?),
         TRACE_RECORD => rpc::result(plugin.trace_record(rpc::params(params)?).await?),
         TRAJECTORY_READ => rpc::result(plugin.trajectory_read(rpc::params(params)?).await?),

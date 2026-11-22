@@ -30,10 +30,6 @@ pub const RETRY_METHOD: &str = "_space/retry";
 pub const STEER_META_KEY: &str = "space/steer";
 /// `_meta` key of a `session/prompt` carrying the prompt's hidden [`ContextSection`]s.
 pub const CONTEXT_META_KEY: &str = "space/context";
-/// `_meta` key of ACP `session/new` and `session/load` carrying a folder the agent may keep the
-/// session's own files in (to load it again later). It belongs to the thread and is deleted
-/// with it; the agent may not have been given one (then it keeps the session in memory).
-pub const DATA_DIR_META_KEY: &str = "space/dataDir";
 /// `_meta` key of ACP `session/new` and `session/load` making the session a side chat of the
 /// session it names: it starts from a copy of that conversation, follows what's added to it
 /// after (each prompt is told what's new there), and can only read, never change anything.
