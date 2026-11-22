@@ -5,7 +5,7 @@ restarts. It provides `session-store` and uses `read:transcript`.
 
 ```
 ~/.space/threads/<thread id>/
-  meta.json      the summary the sidebar lists (title, project, mode, model, agent and session, times)
+  meta.json      the summary the sidebar lists (title, project, mode, model, session, times)
   events.jsonl   the thread's session events, appended as Space saves them
   attachments/   images sent in the thread (`<sha256>.jpg|png`), named by their bytes
 ```

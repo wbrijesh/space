@@ -562,9 +562,7 @@ pub struct ThreadMeta {
     pub mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// The agent plugin, and its session to load to continue the conversation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent: Option<String>,
+    /// The agent's session to load to continue the conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     /// Unix milliseconds.

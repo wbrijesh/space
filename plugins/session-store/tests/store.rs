@@ -62,7 +62,6 @@ fn meta(id: &str, session_id: &str, root: &Path) -> ThreadMeta {
         id: id.into(),
         title: "hello".into(),
         project: root.display().to_string(),
-        agent: Some("stub".into()),
         session_id: Some(session_id.into()),
         ..Default::default()
     }

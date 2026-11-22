@@ -214,7 +214,7 @@ Images are normalized before they're sent (oriented, 8-bit sRGB, at most 1568 px
 metadata stripped; JPEG, or PNG when they have transparency), written there as `<sha256>.<ext>` before
 the message that refers to them, and the message event keeps only their path, type and size. `plugin/initialize` tells every plugin Space's folder (`spaceDir`; absent in tests and
 scenarios, when nothing is kept). A thread is its summary (`ThreadMeta`: title, project, mode, model,
-agent and session, times) and its session events, which the store keeps without reading them. The app
+session, times) and its session events, which the store keeps without reading them. The app
 saves the user's messages, finished agent messages and thoughts (chunks merged), tool calls and
 results, permission and guardrail decisions, status changes and turn starts and ends, not held calls:
 when a turn ends, when the thread's mode changes, and on quit (up to 2 s). One save at a time per
@@ -224,8 +224,8 @@ and an older summary never replaces a newer one. A thread deleted during a save 
 failed save keeps the events for the next one and says so in the banner; the conversation goes on. A
 thread that fails to open is read again when next opened, and nothing is sent into it meanwhile. At launch the sidebar lists
 saved threads; opening one reads its events and replays them through `SessionState::apply` (a turn cut
-short ends as cancelled, so no card waits). Writing in it loads its session again (`session/load`) when
-the agent can; otherwise the composer offers "Continue in new session". Closing a thread (⌘W) stops
+short ends as cancelled, so no card waits). Writing in it loads its session again (`session/load`); if
+that fails, it goes on in a new session (a divider says so). Closing a thread (⌘W) stops
 its turn and terminals and saves it with `closedMs`; it's listed under Resume (a pin,
 `pinnedMs`, stays through closing and resuming), and deleted
 (`store/delete`, observers get `thread/deleted`) once older than Settings ▸ Threads allows. A new thread

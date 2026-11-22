@@ -62,8 +62,7 @@ impl SpaceApp {
             mode: self.effective_mode(thread),
             // Not over what was saved while the thread (or its status) is still on its way.
             model: state.status.model.clone().or_else(|| thread.meta.as_ref().and_then(|m| m.model.clone())),
-            agent: Some(state.plugin_id.clone()).filter(|p| !p.is_empty()).or_else(|| thread.resume.as_ref().map(|r| r.0.clone())),
-            session_id: session_id.or_else(|| thread.resume.as_ref().map(|r| r.1.clone())),
+            session_id: session_id.or_else(|| thread.resume.clone()),
             created_ms: thread.created_ms,
             updated_ms: now_ms(),
             titled: thread.name.is_some(),
@@ -383,7 +382,7 @@ impl SpaceApp {
         thread.id.clone_from(&meta.id);
         thread.created_ms = meta.created_ms;
         thread.mode.clone_from(&meta.mode);
-        thread.resume = meta.agent.clone().zip(meta.session_id.clone());
+        thread.resume = meta.session_id.clone();
         thread.name = (meta.titled || meta.renamed).then(|| meta.title.clone());
         thread.renamed = meta.renamed;
         thread.pinned_ms = meta.pinned_ms;
