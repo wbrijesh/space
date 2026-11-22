@@ -98,27 +98,29 @@ pub fn user_message(id: impl Into<SharedString>, text_: &str, extras: UserExtras
         .chain(unsaved_texts.iter().enumerate().map(|(ix, chars)| paste_chip(format!("{id}-draft-text-{ix}"), *chars, None, None)))
         .collect();
     let has_bubble = !text_.trim().is_empty() || !attachments.is_empty() || !pastes.is_empty();
-    let quote = quote.map(str::trim).filter(|q| !q.is_empty()).map(|q| {
-        // Right-aligned with the bubble, no wider than it can be.
-        div().flex().justify_end().child(
-            div().w(relative(BUBBLE_SHARE)).flex().justify_end().child(
-                div().max_w(size::USER_BUBBLE_MAX_W).px_1().child(SentQuote::new(format!("{id}-quote"), q.to_string())),
-            ),
-        )
-    });
+    let quote = quote.map(str::trim).filter(|q| !q.is_empty()).map(|q| div().px_1().child(SentQuote::new(format!("{id}-quote"), q.to_string())));
+    // Over a bubble, the quote takes its width (shortened to fit); over pictures alone, as wide
+    // as a bubble could be.
+    let (over_bubble, alone) = if has_bubble && pics.is_empty() { (quote, None) } else { (None, quote) };
+    let alone = alone.map(|q| div().flex().justify_end().child(div().w(relative(BUBBLE_SHARE)).flex().justify_end().child(div().max_w(size::USER_BUBBLE_MAX_W).child(q))));
     div()
         .flex()
         .flex_col()
         .gap_1p5()
-        .children(quote)
+        .children(alone)
         .when(!pics.is_empty(), |d| d.child(message_images(id.clone(), pics, on_open)))
-        .when(has_bubble, |d| d.child(user_bubble(id, text_, attachments, pastes, fold, marks)))
+        .when(has_bubble, |d| {
+            let (quote, bubble) = bubble_with(id, text_, attachments, pastes, fold, marks, over_bubble);
+            d.children(quote).child(bubble)
+        })
 }
 
 /// Share of the column a bubble may take (and never more than [`size::USER_BUBBLE_MAX_W`]).
 const BUBBLE_SHARE: f32 = 0.82;
 
 thread_local! {
+    /// Quoted bubbles' widths as last laid out, by their text's id: the quote over each takes it.
+    static QUOTED_WIDTHS: std::cell::RefCell<std::collections::HashMap<SharedString, Pixels>> = std::cell::RefCell::default();
     /// The widest a bubble can be right now (82% of the column, as last laid out); until the
     /// first layout, the cap.
     static BUBBLE_ROOM: std::cell::Cell<Pixels> = const { std::cell::Cell::new(size::USER_BUBBLE_MAX_W) };
@@ -194,7 +196,22 @@ pub fn user_bubble(
     fold: Option<UserFold>,
     marks: Option<BubbleMarks>,
 ) -> Div {
+    bubble_with(id, text_, attachments, pastes, fold, marks, None).1
+}
+
+/// [`user_bubble`], with `quote` over it at its width: the bubble's width is measured as it's
+/// laid out and the quote takes it (its text shortened to fit), so the two line up.
+fn bubble_with(
+    id: impl Into<SharedString>,
+    text_: &str,
+    attachments: &[PathBuf],
+    pastes: Vec<Stateful<Div>>,
+    fold: Option<UserFold>,
+    marks: Option<BubbleMarks>,
+    quote: Option<Div>,
+) -> (Option<Div>, Div) {
     let text_id: SharedString = format!("{}-text", id.into()).into();
+    let quote_key = text_id.clone();
     let mut bubble = div()
         .min_w_0()
         .max_w(size::USER_BUBBLE_MAX_W)
@@ -263,9 +280,32 @@ pub fn user_bubble(
     )
     .absolute()
     .size_full();
-    div().flex().justify_end().child(
-        div().relative().w(relative(BUBBLE_SHARE)).flex().justify_end().child(room).child(bubble),
-    )
+    let bubble = match quote {
+        None => (None, bubble),
+        Some(quote) => {
+            let key = quote_key;
+            let width = QUOTED_WIDTHS.with(|w| w.borrow().get(&key).copied());
+            let measure = canvas(
+                move |bounds, window, _| {
+                    let width = bounds.size.width;
+                    let changed = QUOTED_WIDTHS.with(|w| w.borrow_mut().insert(key.clone(), width)) != Some(width);
+                    if width > px(0.) && changed {
+                        window.refresh();
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full();
+            let quote = match width {
+                Some(w) => div().flex_none().w(w).child(quote),
+                None => div().max_w(size::USER_BUBBLE_MAX_W).child(quote),
+            };
+            let quote = div().flex().justify_end().child(div().w(relative(BUBBLE_SHARE)).flex().justify_end().child(quote));
+            (Some(quote), bubble.relative().child(measure))
+        }
+    };
+    (bubble.0, div().flex().justify_end().child(div().relative().w(relative(BUBBLE_SHARE)).flex().justify_end().child(room).child(bubble.1)))
 }
 
 pub fn attachment_chip(path: &Path) -> Div {
