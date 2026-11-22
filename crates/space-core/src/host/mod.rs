@@ -37,7 +37,7 @@
 //! * After a thread's first message the `session-title` provider may name it ([`titles`]); it
 //!   asks the thread's agent model through `agent/complete` (`_space/complete`).
 //! * Agents' `_space/trace` batches, with the host's own facts, go in order to the plugins that
-//!   observe `trace`; the `trajectory` provider answers the app's Trajectory tab ([`traces`]).
+//!   observe `trace`; the `trajectory` provider answers the app's trajectory view ([`traces`]).
 //!
 //! Files: [`registry`] (who is discovered, turned off, provides what), [`services`] (service
 //! processes, settings, catalogs, seams, host services), [`pipeline`] (the hook chain and held

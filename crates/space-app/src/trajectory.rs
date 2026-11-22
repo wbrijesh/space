@@ -1,5 +1,6 @@
-//! The Trajectory tab: a thread's trace as the trajectory plugin lays it out. The plugin keeps
-//! the data; the app keeps what the tab shows (the loaded rows, the selected row and its detail,
+//! The trajectory view: a thread's trace as the trajectory plugin lays it out, shown in place of
+//! the chat (the title bar's button or ⇧⌘T; Esc goes back). The plugin keeps the data; the app
+//! keeps what the view shows (the loaded rows, the selected row and its detail,
 //! folds, the time filter, search matches) and reloads when the plugin says the thread changed.
 
 use std::collections::{HashMap, HashSet};
@@ -10,7 +11,7 @@ use gpui::*;
 use space_core::protocol::trace::{TrajectoryDetail, TrajectoryDetailRequest, TrajectoryPage, TrajectoryRead, TrajectoryStats};
 use space_ui::components::images::Pic;
 use space_ui::components::trajectory::{
-    DurationMode, FoldKey, FoldScope, LedgerScroll, TimeRange, ViewTab, all_fold_keys, all_folded,
+    DurationMode, FoldKey, FoldScope, LedgerScroll, TimeRange, all_fold_keys, all_folded,
 };
 
 use crate::app::SpaceApp;
@@ -18,7 +19,7 @@ use crate::app::SpaceApp;
 /// Rows per page.
 const PAGE: u32 = 200;
 
-/// What the Trajectory tab of the thread it shows holds.
+/// What the trajectory view of the thread it shows holds.
 pub(crate) struct TrajectoryState {
     pub thread: String,
     pub page: Rc<TrajectoryPage>,
@@ -54,10 +55,11 @@ impl TrajectoryState {
     }
 }
 
-/// The app's Trajectory state: which threads show the tab, the shown one's data, the search
-/// field, and each thread's totals for the context panel.
+/// The app's Trajectory state: which threads show it in place of the chat, the shown one's
+/// data, the search field, its focus (for Esc), and each thread's totals for the context panel.
 pub(crate) struct Trajectories {
     pub open: HashSet<u64>,
+    pub focus: FocusHandle,
     pub state: Option<TrajectoryState>,
     pub search: Entity<InputState>,
     pub stats: HashMap<String, TrajectoryStats>,
@@ -72,31 +74,32 @@ impl Trajectories {
                 this.search_trajectory(cx);
             }
         });
-        Self { open: HashSet::new(), state: None, search, stats: HashMap::new(), _search_sub: sub }
+        Self { open: HashSet::new(), focus: cx.focus_handle(), state: None, search, stats: HashMap::new(), _search_sub: sub }
     }
 }
 
 impl SpaceApp {
-    /// The selected thread's tab (Chat unless it shows the Trajectory).
-    pub(crate) fn view_tab(&self) -> ViewTab {
-        match self.selected {
-            Some(key) if self.host.has_trajectory() && self.trajectories.open.contains(&key) => ViewTab::Trajectory,
-            _ => ViewTab::Chat,
-        }
+    /// The selected thread shows its trajectory in place of the chat (it has one: a trajectory
+    /// plugin runs, and the thread has started).
+    pub(crate) fn trajectory_shown(&self) -> bool {
+        self.host.has_trajectory()
+            && !self.show_settings
+            && self.selected.is_some_and(|k| self.trajectories.open.contains(&k))
+            && self.current().is_some_and(|t| !t.is_empty())
     }
 
-    pub(crate) fn show_tab(&mut self, tab: ViewTab, window: &mut Window, cx: &mut Context<Self>) {
+    /// The title bar's trajectory button, ⇧⌘T, or Esc in the trajectory: show the selected
+    /// thread's trajectory in place of the chat, or go back to the chat (and its composer).
+    pub(crate) fn toggle_trajectory(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected else { return };
-        match tab {
-            ViewTab::Chat => {
-                self.trajectories.open.remove(&key);
-                self.focus_composer(window, cx);
-            }
-            ViewTab::Trajectory if self.host.has_trajectory() => {
-                self.trajectories.open.insert(key);
-                self.ensure_trajectory(cx);
-            }
-            ViewTab::Trajectory => {}
+        if self.trajectory_shown() {
+            self.trajectories.open.remove(&key);
+            self.focus_composer(window, cx);
+        } else if self.host.has_trajectory() && !self.show_settings && self.current().is_some_and(|t| !t.is_empty()) {
+            self.trajectories.open.insert(key);
+            self.ensure_trajectory(cx);
+            let focus = self.trajectories.focus.clone();
+            window.focus(&focus, cx);
         }
         cx.notify();
     }
@@ -107,7 +110,7 @@ impl SpaceApp {
         if !self.host.has_trajectory() {
             return;
         }
-        if self.view_tab() == ViewTab::Trajectory {
+        if self.trajectory_shown() {
             self.ensure_trajectory(cx);
         } else if let Some(id) = self.current().map(|t| t.id.clone()) {
             self.trajectory_changed(id, cx);
@@ -199,7 +202,7 @@ impl SpaceApp {
     /// The plugin says a thread's trajectory changed: reload it if it's shown, refresh its totals.
     pub(crate) fn trajectory_changed(&mut self, thread_id: String, cx: &mut Context<Self>) {
         // The tab was opened before the plugin was up (or for another thread).
-        if self.view_tab() == ViewTab::Trajectory && self.current().is_some_and(|t| t.id == thread_id) {
+        if self.trajectory_shown() && self.current().is_some_and(|t| t.id == thread_id) {
             self.ensure_trajectory(cx);
             return;
         }
