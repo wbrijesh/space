@@ -17,3 +17,18 @@
   sentence (`Right pane: Files and Terminal modes`, `Ride out a bad network: wait, retry,
   resume`), no trailing period; then a body in plain prose saying what changed and why, wrapped
   at ~72 columns; then the `Co-Authored-By:` line. Release commits are just `Space 0.1.x`.
+
+## Disk use
+
+Build output grows fast here (GPUI is a large dependency graph), so:
+
+- **One way to build:** `just build`, `just test`, `just lint` (or `just check` while iterating).
+  No ad-hoc `cargo build -p … --features …` or `--target`: each new combination compiles another
+  full copy of the affected crates next to the old ones.
+- **Worktrees only when parallel work needs them.** Each has its own `target/` (several GB).
+  Remove it (`git worktree remove`, then `git branch -d` once merged) as soon as its work lands.
+  Don't run subagents in isolated worktrees by default.
+- **Test copies of the app:** reuse one copy (it's ~190 MB); clean scratch folders when a task
+  ends.
+- **Release builds only from the main checkout**; `just install` removes the built bundle.
+- **When `just build` warns** that `target/` is past 40 GB, run `just clean`.
