@@ -56,6 +56,7 @@ mod repo_state;
 mod files;
 mod files_view;
 mod open_in;
+mod pane;
 mod pin;
 mod quote;
 mod rename;

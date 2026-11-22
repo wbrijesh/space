@@ -1,30 +1,37 @@
-//! The side chat: a conversation about a thread, in its right pane. It's a thread of its own,
-//! kept with the saved threads but off the sidebar, whose session is a side chat of the thread's
-//! (`space/sideOf`): a copy of the conversation that can only read, told before each message
-//! what the thread added since. One per thread; ↺ starts it over.
+//! Side chats: conversations about a thread, in its right pane. Each is a thread of its own,
+//! kept with the saved threads but off the sidebar, whose session is a side chat of the
+//! thread's (`space/sideOf`): a copy of the conversation that can only read, told before each
+//! message what the thread added since. A thread can have any number; each is named after its
+//! first message, like a thread, and kept (and resumable after a restart) until it's deleted
+//! from the launcher, or its thread is. Closing its tab only closes the tab.
 //!
-//! `/btw` and a space in the composer open it with its input focused at once, and whatever is
-//! typed after goes there: keys that arrive before the side chat's first frame (its input isn't
+//! `/btw` and a space in the composer open a new one with its input focused at once, and whatever
+//! is typed after goes there: keys that arrive before the side chat's first frame (its input isn't
 //! drawn yet, so they land in the composer) are moved across (see [`SideChat::handoff`]).
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::component::input::{InputEvent, TextareaState};
 use gpui::*;
 use space_core::protocol::service::ThreadMeta;
 use space_ui::components::composer::{Composer, ComposerHandlers, MAX_LINES};
 use space_ui::components::follow_scroll::{FollowScroll, FollowScrollArea};
-use space_ui::components::right_pane::{PaneView, side_chat_empty, side_chat_new};
+use space_ui::components::right_pane::side_chat_empty;
 use space_ui::components::message_actions::ActionHandlers;
 use space_ui::components::transcript::{TranscriptView, transcript_items};
 use space_ui::theme::{color, size, text};
 
 use crate::app::SpaceApp;
+use crate::pane::PaneTab;
 use crate::threads::{Outgoing, Thread};
 
-/// Key context around the side chat (its own ⌘W: hide the pane, not close the thread).
+/// Key context around the side chat.
 pub(crate) const SIDE_CHAT_CONTEXT: &str = "SideChat";
+
+/// How long a deleted side chat can be brought back.
+const UNDO_FOR: Duration = Duration::from_secs(6);
 
 pub(crate) struct SideChat {
     pub thread: Thread,
@@ -37,31 +44,49 @@ pub(crate) struct SideChat {
     _input_events: Subscription,
 }
 
-/// The side chats saved for threads not opened yet, by their thread's id.
-pub(crate) type SavedSides = HashMap<String, ThreadMeta>;
+impl SideChat {
+    /// Its name: its title once it has one, else "New side chat".
+    pub(crate) fn title(&self) -> String {
+        if self.thread.is_empty() { "New side chat".into() } else { self.thread.title() }
+    }
+}
+
+/// The side chats saved for threads whose side chats aren't loaded yet, by their thread's id.
+pub(crate) type SavedSides = HashMap<String, Vec<ThreadMeta>>;
+
+/// A side chat just deleted, kept a moment for Undo.
+pub(crate) struct Deleted {
+    pub(crate) side: SideChat,
+    pub(crate) tab_at: Option<usize>,
+    _timer: Task<()>,
+}
 
 impl SpaceApp {
-    /// The session id of thread `main` (live, or the one it would load), which its side chat
-    /// follows.
+    /// The session id of thread `main` (live, or the one it would load), which its side chats
+    /// follow.
     pub(crate) fn main_session_id(&self, main: u64) -> Option<String> {
         let t = self.threads.iter().find(|t| t.key == main)?;
         t.session.as_ref().map(|s| s.id().to_string()).or_else(|| t.resume.as_ref().map(|r| r.1.clone()))
     }
 
-    /// Thread `main`'s side chat, made (or read from what was saved) the first time.
-    pub(crate) fn ensure_side_chat(&mut self, main: u64, window: &mut Window, cx: &mut Context<Self>) -> Option<u64> {
-        if let Some(side) = self.side_chats.get(&main) {
-            return Some(side.thread.key);
+    /// Thread `main`'s side chats, newest first (the saved ones read in first).
+    pub(crate) fn side_chats_of(&mut self, main: u64, window: &mut Window, cx: &mut Context<Self>) -> Vec<u64> {
+        self.load_side_chats(main, window, cx);
+        let mut sides: Vec<_> = self.side_chats.values().filter(|s| s.thread.side_of == Some(main)).map(|s| (s.thread.created_ms, s.thread.key)).collect();
+        sides.sort_by(|a, b| b.cmp(a));
+        sides.into_iter().map(|(_, k)| k).collect()
+    }
+
+    /// Bring thread `main`'s saved side chats in (not their conversations: those load when shown).
+    fn load_side_chats(&mut self, main: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(main_id) = self.threads.iter().find(|t| t.key == main).map(|t| t.id.clone()) else { return };
+        for meta in self.saved_sides.remove(&main_id).unwrap_or_default() {
+            let thread = self.saved_thread(meta);
+            self.add_side_chat(main, thread, window, cx);
         }
-        let (main_id, cwd) = self.threads.iter().find(|t| t.key == main).map(|t| (t.id.clone(), t.cwd.clone()))?;
-        let mut thread = match self.saved_sides.remove(&main_id) {
-            Some(meta) => self.saved_thread(meta),
-            None => {
-                let key = self.next_key;
-                self.next_key += 1;
-                Thread::new(key, cwd)
-            }
-        };
+    }
+
+    fn add_side_chat(&mut self, main: u64, mut thread: Thread, window: &mut Window, cx: &mut Context<Self>) -> u64 {
         thread.side_of = Some(main);
         let key = thread.key;
         let input = cx.new(|cx| {
@@ -71,7 +96,7 @@ impl SpaceApp {
             state
         });
         let events = cx.subscribe_in(&input, window, move |this, _, event: &InputEvent, window, cx| match event {
-            InputEvent::PressEnter { shift: false, .. } => this.send_side(main, window, cx),
+            InputEvent::PressEnter { shift: false, .. } => this.send_side(key, window, cx),
             InputEvent::Change => {
                 this.touch_agent();
                 this.wake_agent(cx);
@@ -81,11 +106,8 @@ impl SpaceApp {
             _ => {}
         });
         let side = SideChat { thread, input, scroll: FollowScroll::new(), handoff: false, replies: HashMap::new(), _input_events: events };
-        self.side_chats.insert(main, side);
-        self.ensure_loaded(key, cx);
-        // Its session starts now, so the first answer doesn't wait for it.
-        self.start_side_session(key, cx);
-        Some(key)
+        self.side_chats.insert(key, side);
+        key
     }
 
     /// Start the side chat's session unless it has one (or a saved one, loaded when it's used).
@@ -95,32 +117,50 @@ impl SpaceApp {
         }
     }
 
-    /// ⌘⇧L or the pane's tab: open the side chat, focused.
-    pub(crate) fn open_side_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.switch_pane_view(PaneView::SideChat, window, cx);
+    /// ⌘⇧L, the launcher or `/btw`: a new side chat about the current thread, in a tab of its
+    /// own, focused. One that's still empty is reused rather than another made.
+    pub(crate) fn new_side_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<u64> {
+        let main = self.selected?;
+        let empty = self.side_chats_of(main, window, cx).into_iter().find(|k| self.side_chats.get(k).is_some_and(|s| s.thread.is_empty() && !s.thread.state.running));
+        let key = match empty {
+            Some(key) => key,
+            None => {
+                let cwd = self.threads.iter().find(|t| t.key == main)?.cwd.clone();
+                let key = self.next_key;
+                self.next_key += 1;
+                let key = self.add_side_chat(main, Thread::new(key, cwd), window, cx);
+                // Its session starts now, so the first answer doesn't wait for it.
+                self.start_side_session(key, cx);
+                key
+            }
+        };
+        self.show_pane_tab(main, PaneTab::SideChat(key), window, cx);
+        Some(key)
     }
 
-    /// Focus thread `main`'s side chat input (made if need be).
-    pub(crate) fn focus_side_chat(&mut self, main: u64, window: &mut Window, cx: &mut Context<Self>) {
-        if self.ensure_side_chat(main, window, cx).is_none() {
-            return;
-        }
-        if let Some(side) = self.side_chats.get(&main) {
+    /// Show side chat `key` in its thread's pane (a launcher row).
+    pub(crate) fn open_side_chat(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(main) = self.side_chats.get(&key).and_then(|s| s.thread.side_of) else { return };
+        self.show_pane_tab(main, PaneTab::SideChat(key), window, cx);
+    }
+
+    /// Focus side chat `key`'s input.
+    pub(crate) fn focus_side_chat(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(side) = self.side_chats.get(&key) {
             side.input.update(cx, |s, cx| s.focus(window, cx));
         }
     }
 
-    pub(crate) fn side_chat_focused(&self, main: u64, window: &Window, cx: &App) -> bool {
-        self.side_chats.get(&main).is_some_and(|s| s.input.read(cx).focus_handle(cx).is_focused(window))
+    pub(crate) fn side_chat_focused(&self, key: u64, window: &Window, cx: &App) -> bool {
+        self.side_chats.get(&key).is_some_and(|s| s.input.read(cx).focus_handle(cx).is_focused(window))
     }
 
-    /// `/btw ` typed in the composer: open the side chat focused, with what came after it.
-    pub(crate) fn open_side_chat_with(&mut self, rest: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(main) = self.selected else { return };
+    /// `/btw ` typed in the composer: open a new side chat focused, with what came after it.
+    pub(crate) fn open_side_chat_with(&mut self, rest: &str, window: &mut Window, cx: &mut Context<Self>) -> Option<u64> {
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
         self.slash.edited("");
-        self.open_side_chat(window, cx);
-        let Some(side) = self.side_chats.get_mut(&main) else { return };
+        let key = self.new_side_chat(window, cx)?;
+        let side = self.side_chats.get_mut(&key)?;
         side.handoff = true;
         if !rest.is_empty() {
             let input = side.input.clone();
@@ -130,13 +170,14 @@ impl SpaceApp {
             });
         }
         cx.notify();
+        Some(key)
     }
 
-    /// The composer changed while the side chat opened by `/btw` isn't drawn yet: those keys
+    /// The composer changed while a side chat opened by `/btw` isn't drawn yet: those keys
     /// were meant for it. `true`: they were moved across.
     pub(crate) fn hand_off_to_side(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(main) = self.selected else { return false };
-        let Some(side) = self.side_chats.get(&main).filter(|s| s.handoff) else { return false };
+        let Some(side) = self.side_chats.values().find(|s| s.handoff && s.thread.side_of == Some(main)) else { return false };
         let typed = self.input.read(cx).value().to_string();
         if typed.is_empty() {
             return true;
@@ -151,10 +192,10 @@ impl SpaceApp {
         true
     }
 
-    /// ⏎ in the side chat: send what's typed (not while it answers).
-    pub(crate) fn send_side(&mut self, main: u64, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(side) = self.side_chats.get(&main) else { return };
-        let (key, input, scroll) = (side.thread.key, side.input.clone(), side.scroll.clone());
+    /// ⏎ in side chat `key`: send what's typed (not while it answers).
+    pub(crate) fn send_side(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(side) = self.side_chats.get(&key) else { return };
+        let (input, scroll) = (side.input.clone(), side.scroll.clone());
         let text = input.read(cx).value().trim().to_string();
         let t = &side.thread;
         if text.is_empty() || t.state.running || t.queued.is_some() || t.loading || t.unloaded {
@@ -166,8 +207,8 @@ impl SpaceApp {
         self.dispatch(key, crate::queue::When::Done, false, Outgoing { text, ..Default::default() }, cx);
     }
 
-    fn stop_side(&mut self, main: u64, cx: &mut Context<Self>) {
-        if let Some(session) = self.side_chats.get(&main).and_then(|s| s.thread.session.clone())
+    fn stop_side(&mut self, key: u64, cx: &mut Context<Self>) {
+        if let Some(session) = self.side_chats.get(&key).and_then(|s| s.thread.session.clone())
             && let Err(e) = session.cancel()
         {
             self.banner = Some(format!("{e:#}"));
@@ -175,31 +216,72 @@ impl SpaceApp {
         cx.notify();
     }
 
-    /// ↺: a new side chat, from the thread as it is now; the old one is deleted.
-    pub(crate) fn new_side_chat(&mut self, main: u64, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(old) = self.take_side_chat(main)
-            && old.thread.meta.is_some()
-        {
-            self.remove_saved(old.thread.id.clone(), cx);
+    /// The launcher's 🗑: delete side chat `key` (its tab closes). It can be brought back for a
+    /// moment ([`Self::undo_delete_side_chat`]); then it's gone for good.
+    pub(crate) fn delete_side_chat(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.finish_deleting_side_chat(cx);
+        let Some(main) = self.side_chats.get(&key).and_then(|s| s.thread.side_of) else { return };
+        let tab = PaneTab::SideChat(key);
+        let tab_at = self.terminals.pane(main).and_then(|p| p.position(&tab));
+        if tab_at.is_some() {
+            self.remove_pane_tab(main, &tab, true, window, cx);
         }
-        self.focus_side_chat(main, window, cx);
+        let Some(side) = self.take_side_chat(key) else { return };
+        let timer = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(UNDO_FOR).await;
+            let _ = this.update(cx, |this, cx| this.finish_deleting_side_chat(cx));
+        });
+        self.deleted_side = Some(Deleted { side, tab_at, _timer: timer });
         cx.notify();
     }
 
-    /// Thread `main` is going (closed): its side chat stops, and is kept to open again with it.
-    pub(crate) fn put_away_side_chat(&mut self, main: u64, main_id: &str, cx: &mut Context<Self>) {
-        let Some(key) = self.side_chats.get(&main).map(|s| s.thread.key) else { return };
-        self.save_thread(key, cx);
-        let meta = self.thread(key).filter(|t| !t.state.items.is_empty() || t.meta.is_some()).map(|t| self.thread_meta(t));
-        self.take_side_chat(main);
-        if let Some(meta) = meta {
-            self.saved_sides.insert(main_id.to_string(), meta);
+    /// The deleted side chat's Undo: it's back, in its tab if it had one.
+    pub(crate) fn undo_delete_side_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Deleted { side, tab_at, .. }) = self.deleted_side.take() else { return };
+        let (key, main) = (side.thread.key, side.thread.side_of);
+        if let Some(session) = &side.thread.session {
+            self.session_threads.insert(session.id().to_string(), key);
+        }
+        self.side_chats.insert(key, side);
+        if let (Some(main), Some(at)) = (main, tab_at)
+            && let Some(pane) = self.terminals.panes.get_mut(&main)
+        {
+            pane.tabs.insert(at.min(pane.tabs.len()), PaneTab::SideChat(key));
+            pane.select(at.min(pane.tabs.len() - 1));
+            pane.open = true;
+            self.pane_tab_shown(main, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// The deleted side chat's moment passed: delete what was saved of it.
+    fn finish_deleting_side_chat(&mut self, cx: &mut Context<Self>) {
+        let Some(Deleted { side, .. }) = self.deleted_side.take() else { return };
+        if side.thread.meta.is_some() || side.thread.saved > 0 {
+            self.remove_saved(side.thread.id.clone(), cx);
+        }
+        cx.notify();
+    }
+
+    /// Thread `main` is going (closed): its side chats stop, and are kept to open again with it.
+    pub(crate) fn put_away_side_chats(&mut self, main: u64, main_id: &str, cx: &mut Context<Self>) {
+        if self.deleted_side.as_ref().is_some_and(|d| d.side.thread.side_of == Some(main)) {
+            self.finish_deleting_side_chat(cx);
+        }
+        let keys: Vec<u64> = self.side_chats.values().filter(|s| s.thread.side_of == Some(main)).map(|s| s.thread.key).collect();
+        for key in keys {
+            self.save_thread(key, cx);
+            let meta = self.thread(key).filter(|t| !t.state.items.is_empty() || t.meta.is_some()).map(|t| self.thread_meta(t));
+            self.take_side_chat(key);
+            if let Some(meta) = meta {
+                self.saved_sides.entry(main_id.to_string()).or_default().push(meta);
+            }
         }
     }
 
-    /// Take thread `main`'s side chat away, stopping its turn.
-    fn take_side_chat(&mut self, main: u64) -> Option<SideChat> {
-        let side = self.side_chats.remove(&main)?;
+    /// Take side chat `key` away, stopping its turn.
+    fn take_side_chat(&mut self, key: u64) -> Option<SideChat> {
+        let side = self.side_chats.remove(&key)?;
         if let Some(session) = &side.thread.session {
             if session.is_running() {
                 let _ = session.cancel();
@@ -209,38 +291,28 @@ impl SpaceApp {
         Some(side)
     }
 
-    /// The thread's session started: a side chat waiting for it can start too.
+    /// The thread's session started: side chats waiting for it can start too.
     pub(crate) fn main_session_started(&mut self, main: u64, cx: &mut Context<Self>) {
-        let Some(t) = self.side_chats.get(&main).map(|s| &s.thread) else { return };
-        if t.session.is_none() && !t.creating {
-            let key = t.key;
+        let waiting: Vec<u64> = self
+            .side_chats
+            .values()
+            .filter(|s| s.thread.side_of == Some(main) && !s.thread.unloaded && s.thread.session.is_none() && !s.thread.creating)
+            .map(|s| s.thread.key)
+            .collect();
+        for key in waiting {
             self.create_session(key, cx);
         }
     }
 }
 
-/// The side chat in the pane: its bar, the conversation (or what it's for), and its composer.
-/// The side chat's ↺ for the pane's header, once it has something to start over from.
-pub(crate) fn side_chat_header_action(app: &SpaceApp, main: u64, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
-    let side = app.side_chats.get(&main)?;
-    if side.thread.state.items.is_empty() {
-        return None;
-    }
-    let this = cx.entity().downgrade();
-    let on_new = Rc::new(move |w: &mut Window, cx: &mut App| {
-        let _ = this.update(cx, |this, cx| this.new_side_chat(main, w, cx));
-    });
-    Some(side_chat_new(on_new).into_any_element())
-}
-
-pub(crate) fn side_chat_content(app: &mut SpaceApp, main: u64, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
-    if app.ensure_side_chat(main, window, cx).is_none() {
-        return div().flex_1().into_any_element();
-    }
-    let side = app.side_chats.get_mut(&main).expect("made above");
+/// The side chat in the pane: the conversation (or what it's for), and its composer.
+pub(crate) fn side_chat_content(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
+    // A saved one's conversation loads the first time it's shown.
+    app.ensure_loaded(key, cx);
+    let Some(side) = app.side_chats.get_mut(&key) else { return div().flex_1().into_any_element() };
     // Drawn now: its input takes the keys from here on.
     side.handoff = false;
-    let side = app.side_chats.get(&main).expect("made above");
+    let side = app.side_chats.get(&key).expect("just there");
     let thread = &side.thread;
     let weak = cx.entity().downgrade();
     let body = if thread.state.items.is_empty() && thread.queued.is_none() {
@@ -250,7 +322,7 @@ pub(crate) fn side_chat_content(app: &mut SpaceApp, main: u64, window: &mut Wind
             let this = weak.clone();
             Rc::new(move |ix: usize, _: &mut Window, cx: &mut App| {
                 let _ = this.update(cx, |this, cx| {
-                    if let Some(side) = this.side_chats.get_mut(&main) {
+                    if let Some(side) = this.side_chats.get_mut(&key) {
                         let set = if turns { &mut side.thread.open_turns } else { &mut side.thread.expanded };
                         if !set.remove(&ix) {
                             set.insert(ix);
@@ -304,19 +376,19 @@ pub(crate) fn side_chat_content(app: &mut SpaceApp, main: u64, window: &mut Wind
         on_send: {
             let this = weak.clone();
             Rc::new(move |w, cx| {
-                let _ = this.update(cx, |this, cx| this.send_side(main, w, cx));
+                let _ = this.update(cx, |this, cx| this.send_side(key, w, cx));
             })
         },
         on_stop: {
             let this = weak.clone();
             Rc::new(move |_, cx| {
-                let _ = this.update(cx, |this, cx| this.stop_side(main, cx));
+                let _ = this.update(cx, |this, cx| this.stop_side(key, cx));
             })
         },
         on_focus: {
             let this = weak.clone();
             Rc::new(move |w, cx| {
-                let _ = this.update(cx, |this, cx| this.focus_side_chat(main, w, cx));
+                let _ = this.update(cx, |this, cx| this.focus_side_chat(key, w, cx));
             })
         },
         ..Default::default()
@@ -335,7 +407,7 @@ pub(crate) fn side_chat_content(app: &mut SpaceApp, main: u64, window: &mut Wind
         // Esc stops its answer.
         .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {
             if running && e.keystroke.key == "escape" && !e.keystroke.modifiers.modified() {
-                this.stop_side(main, cx);
+                this.stop_side(key, cx);
                 cx.stop_propagation();
             }
         }))

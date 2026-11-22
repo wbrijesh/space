@@ -164,7 +164,11 @@ impl SpaceApp {
                 }
                 // Side chats wait for their thread to open them.
                 let (sides, saved): (Vec<_>, Vec<_>) = saved.into_iter().partition(|m| m.side_of.is_some());
-                this.saved_sides = sides.into_iter().filter_map(|m| Some((m.side_of.clone()?, m))).collect();
+                for m in sides {
+                    if let Some(main) = m.side_of.clone() {
+                        this.saved_sides.entry(main).or_default().push(m);
+                    }
+                }
                 let (closed, open): (Vec<_>, Vec<_>) = saved.into_iter().partition(|m| m.closed_ms.is_some());
                 this.closed_threads = closed;
                 this.purge_closed_threads(cx);
@@ -315,7 +319,7 @@ impl SpaceApp {
     pub(crate) fn drop_thread(&mut self, key: u64, cx: &mut Context<Self>) -> Option<Thread> {
         let id = self.threads.iter().find(|t| t.key == key)?.id.clone();
         // While the thread is still there: the side chat's summary names it.
-        self.put_away_side_chat(key, &id, cx);
+        self.put_away_side_chats(key, &id, cx);
         let ix = self.threads.iter().position(|t| t.key == key)?;
         let thread = self.threads.remove(ix);
         self.close_thread_terminals(key, cx);
@@ -415,7 +419,7 @@ fn expired(meta: &ThreadMeta, cutoff: u64) -> bool {
 impl SpaceApp {
     /// Delete what was saved of thread `id`, and of its side chat.
     pub(crate) fn remove_saved(&mut self, id: String, cx: &mut Context<Self>) {
-        if let Some(side) = self.saved_sides.remove(&id) {
+        for side in self.saved_sides.remove(&id).unwrap_or_default() {
             self.remove_saved(side.id, cx);
         }
         let host = self.host.clone();

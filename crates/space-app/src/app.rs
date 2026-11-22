@@ -31,8 +31,8 @@ pub use space_ui::actions::{
     CloseSettings, CloseThread, CyclePermissionMode, FocusComposer, NextThread, PreviousThread, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious, CompleteCommand,
     ScrollToBottom,
     ToggleSidebar,
-    ShowChat, ShowTrajectory, CloseFile, OpenInLastApp,
-    CloseTerminal, MaximizePane, NewTerminal, NextTerminal, PreviousTerminal, TerminalClear, TerminalCopy, TerminalPaste,
+    ShowChat, ShowTrajectory, OpenInLastApp,
+    ClosePaneTab, MaximizePane, NewPaneTab, NextPaneTab, PreviousPaneTab, TerminalClear, TerminalCopy, TerminalPaste,
     ToggleRightPane, ShowTerminal, ShowFiles, ShowSideChat, ShowChanges, OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
 };
 use space_ui::assets::SpaceAssets;
@@ -182,25 +182,45 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             // Maximize the right pane, from anywhere (the terminal would take the key otherwise).
             KeyBinding::new("cmd-shift-enter", MaximizePane, None),
             KeyBinding::new("cmd-shift-enter", MaximizePane, Some("Terminal")),
-            KeyBinding::new("cmd-t", NewTerminal, Some("Terminal")),
             KeyBinding::new("cmd-w", CloseThread, None),
             KeyBinding::new("cmd-r", RenameThread, None),
             KeyBinding::new("cmd-alt-down", NextThread, None),
             KeyBinding::new("cmd-alt-up", PreviousThread, None),
-            // In the pane, ⌘W closes its terminal tab or open file, or with only one terminal
-            // or no file open, hides the pane.
-            KeyBinding::new("cmd-w", CloseTerminal, Some("Terminal")),
-            // ⌘W in the Files view, also from what's focused inside it (a binding without a
-            // context matches at the focused element, so each needs its own).
-            KeyBinding::new("cmd-w", CloseFile, Some("Files")),
-            KeyBinding::new("cmd-w", CloseFile, Some("FileTree")),
-            KeyBinding::new("cmd-w", CloseFile, Some("Files > Input")),
-            // In the side chat, ⌘W hides the pane.
-            KeyBinding::new("cmd-w", ToggleRightPane, Some("SideChat > Composer > Input")),
-            // Changes: the open file (or the pull request's editor), then the pane.
-            KeyBinding::new("cmd-w", CloseFile, Some("Changes")),
-            KeyBinding::new("ctrl-tab", NextTerminal, Some("Terminal")),
-            KeyBinding::new("ctrl-shift-tab", PreviousTerminal, Some("Terminal")),
+            // In the pane: ⌘W closes the shown tab (Changes first closes its open file), ⌘T
+            // opens a new one, ⌃Tab steps through them. A binding without a context matches at
+            // the focused element, so each place focus can be needs its own.
+            KeyBinding::new("cmd-w", ClosePaneTab, Some("Terminal")),
+            KeyBinding::new("cmd-w", ClosePaneTab, Some("PaneTab")),
+            KeyBinding::new("cmd-w", ClosePaneTab, Some("Files")),
+            KeyBinding::new("cmd-w", ClosePaneTab, Some("FileTree")),
+            KeyBinding::new("cmd-w", ClosePaneTab, Some("Files > Input")),
+            KeyBinding::new("cmd-w", ClosePaneTab, Some("SideChat > Composer > Input")),
+            KeyBinding::new("cmd-w", ClosePaneTab, Some("Changes")),
+            KeyBinding::new("cmd-w", ClosePaneTab, Some("Launcher > Input")),
+            KeyBinding::new("cmd-t", NewPaneTab, Some("Terminal")),
+            KeyBinding::new("cmd-t", NewPaneTab, Some("PaneTab")),
+            KeyBinding::new("cmd-t", NewPaneTab, Some("Files")),
+            KeyBinding::new("cmd-t", NewPaneTab, Some("FileTree")),
+            KeyBinding::new("cmd-t", NewPaneTab, Some("Files > Input")),
+            KeyBinding::new("cmd-t", NewPaneTab, Some("SideChat > Composer > Input")),
+            KeyBinding::new("cmd-t", NewPaneTab, Some("Changes")),
+            KeyBinding::new("cmd-t", NewPaneTab, Some("Launcher > Input")),
+            KeyBinding::new("ctrl-tab", NextPaneTab, Some("Terminal")),
+            KeyBinding::new("ctrl-tab", NextPaneTab, Some("PaneTab")),
+            KeyBinding::new("ctrl-shift-tab", PreviousPaneTab, Some("PaneTab")),
+            KeyBinding::new("ctrl-shift-tab", PreviousPaneTab, Some("Terminal")),
+            KeyBinding::new("ctrl-tab", NextPaneTab, Some("Files")),
+            KeyBinding::new("ctrl-shift-tab", PreviousPaneTab, Some("Files")),
+            KeyBinding::new("ctrl-tab", NextPaneTab, Some("FileTree")),
+            KeyBinding::new("ctrl-shift-tab", PreviousPaneTab, Some("FileTree")),
+            KeyBinding::new("ctrl-tab", NextPaneTab, Some("Files > Input")),
+            KeyBinding::new("ctrl-shift-tab", PreviousPaneTab, Some("Files > Input")),
+            KeyBinding::new("ctrl-tab", NextPaneTab, Some("SideChat > Composer > Input")),
+            KeyBinding::new("ctrl-shift-tab", PreviousPaneTab, Some("SideChat > Composer > Input")),
+            KeyBinding::new("ctrl-tab", NextPaneTab, Some("Changes")),
+            KeyBinding::new("ctrl-shift-tab", PreviousPaneTab, Some("Changes")),
+            KeyBinding::new("ctrl-tab", NextPaneTab, Some("Launcher > Input")),
+            KeyBinding::new("ctrl-shift-tab", PreviousPaneTab, Some("Launcher > Input")),
             KeyBinding::new("cmd-c", TerminalCopy, Some("Terminal")),
             KeyBinding::new("cmd-v", TerminalPaste, Some("Terminal")),
             KeyBinding::new("cmd-k", TerminalClear, Some("Terminal")),
@@ -393,9 +413,6 @@ pub struct SpaceApp {
     /// thread it's for (switching threads snaps it).
     pub(crate) pane_max: space_ui::theme::motion::Spring,
     pub(crate) pane_max_for: Option<u64>,
-    /// The pane view used last, in any thread: a thread opening its pane the first time opens it
-    /// there.
-    pub(crate) last_pane_view: space_ui::components::right_pane::PaneView,
     pub(crate) banner: Option<String>,
     /// The image viewer: a message's pictures and the one shown.
     pub(crate) viewer: Option<(Vec<space_ui::components::images::Pic>, usize)>,
@@ -411,6 +428,13 @@ pub struct SpaceApp {
     /// The Files view: each thread's tree (in memory), and its filter, list and watcher.
     pub(crate) file_trees: HashMap<u64, crate::files::Tree>,
     pub(crate) file_tabs: HashMap<u64, crate::files_view::FileTabs>,
+    /// Files opened lately, newest first, per thread (the launcher lists them).
+    pub(crate) recent_files: HashMap<u64, Vec<std::path::PathBuf>>,
+    /// The pane's new tab.
+    pub(crate) launcher: crate::pane::Launcher,
+    /// A tab with nothing of its own to focus (a terminal starting, or that couldn't start), so
+    /// the pane's keys still work there.
+    pub(crate) pane_focus: FocusHandle,
     pub(crate) files: crate::files_view::FilesView,
     /// The folder menu's branch page while it's open.
     pub(crate) branch_menu: Option<crate::branches::BranchMenu>,
@@ -494,6 +518,8 @@ pub struct SpaceApp {
     pub(crate) side_chats: HashMap<u64, crate::side_chat::SideChat>,
     /// Side chats saved for threads, until they're opened.
     pub(crate) saved_sides: crate::side_chat::SavedSides,
+    /// A side chat just deleted, for a moment, for Undo.
+    pub(crate) deleted_side: Option<crate::side_chat::Deleted>,
 }
 
 impl SpaceApp {
@@ -685,6 +711,9 @@ impl SpaceApp {
             open_in_menu: false,
             file_trees: HashMap::new(),
             file_tabs: HashMap::new(),
+            recent_files: HashMap::new(),
+            launcher: crate::pane::Launcher::new(window, cx),
+            pane_focus: cx.focus_handle(),
             files: crate::files_view::FilesView::new(window, cx),
             branch_menu: None,
             changes: HashMap::new(),
@@ -705,7 +734,6 @@ impl SpaceApp {
             terminal_shown_for: None,
             pane_max: space_ui::theme::motion::Spring::new(0.),
             pane_max_for: None,
-            last_pane_view: space_ui::components::right_pane::PaneView::Files,
             banner,
             closed_threads: Vec::new(),
             sidebar_scroll: ScrollHandle::new(),
@@ -741,6 +769,7 @@ impl SpaceApp {
             swipe: Default::default(),
             side_chats: HashMap::new(),
             saved_sides: Default::default(),
+            deleted_side: None,
         };
         this.watch_agent_idle(cx);
         this.watch_midnight(cx);

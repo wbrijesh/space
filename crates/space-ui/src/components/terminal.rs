@@ -1,19 +1,14 @@
 //! The terminal pane's pieces: the grid (a [`Frame`] painted cell by cell in the code font),
-//! the tab strip, and the notices for a terminal whose shell ended or whose plugin stopped.
+//! and the notices for a terminal whose shell ended or whose plugin stopped.
 
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui::assets::IconName as Lucide;
-use gpui::component::Icon;
-use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_terminal::{CursorShape, Frame, FrameCell};
 
-use super::tip::TipExt as _;
-use super::widgets::{icon_button, pill_button};
-use crate::actions::NewTerminal;
-use crate::theme::{color, radius, size, text};
+use super::widgets::pill_button;
+use crate::theme::{color, size, text};
 
 /// The terminal's text size.
 pub const FONT_SIZE: Pixels = px(12.5);
@@ -43,6 +38,17 @@ impl GridLayout {
     }
 }
 
+pub type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// What a terminal's tab shows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TerminalTab {
+    pub title: SharedString,
+    /// Output arrived while it wasn't shown.
+    pub unread: bool,
+    /// Its shell ended.
+    pub ended: bool,
+}
 pub type LayoutHandler = Rc<dyn Fn(GridLayout, &mut Window, &mut App)>;
 
 fn mono(bold: bool, italic: bool) -> Font {
@@ -199,97 +205,6 @@ fn paint(frame: &Frame, focused: bool, layout: GridLayout, window: &mut Window, 
     }
 }
 
-/// One tab in the strip.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TerminalTab {
-    pub title: SharedString,
-    /// Output arrived while it wasn't shown.
-    pub unread: bool,
-    /// Its shell ended.
-    pub ended: bool,
-}
-
-pub type IndexHandler = Rc<dyn Fn(usize, &mut Window, &mut App)>;
-pub type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
-
-#[derive(Clone)]
-pub struct StripHandlers {
-    pub on_select: IndexHandler,
-    pub on_close: IndexHandler,
-    pub on_new: Handler,
-}
-
-impl Default for StripHandlers {
-    fn default() -> Self {
-        let noop: Handler = Rc::new(|_, _| {});
-        Self { on_select: Rc::new(|_, _, _| {}), on_close: Rc::new(|_, _, _| {}), on_new: noop }
-    }
-}
-
-/// A terminal's tab: its program, a dot for output not seen, and × (shown on hover).
-pub fn terminal_tab(ix: usize, t: &TerminalTab, on: bool, h: &StripHandlers) -> Stateful<Div> {
-    let group: SharedString = format!("terminal-tab-{ix}").into();
-    let (select, close) = (h.on_select.clone(), h.on_close.clone());
-    div()
-        .id(("terminal-tab", ix))
-        .group(group.clone())
-        .flex_none()
-        .max_w(px(180.))
-        .h(px(24.))
-        .pl_2()
-        .pr_1()
-        .flex()
-        .items_center()
-        .gap_1p5()
-        .rounded(radius::MD)
-        .text_size(text::SM)
-        .cursor_pointer()
-        .map(|d| if on { d.bg(color::hover()).text_color(color::text()) } else { d.text_color(color::text_3()) })
-        .hover(|s| s.bg(color::hover()).text_color(color::text()))
-        .child(Icon::new(Lucide::SquareTerminal).size(size::ICON).text_color(if t.ended { color::text_3() } else { color::text_2() }))
-        .child(div().min_w_0().truncate().when(t.ended, |d| d.text_color(color::text_3())).child(t.title.clone()))
-        .when(t.unread && !on, |d| d.child(div().size(px(6.)).flex_none().rounded_full().bg(color::blue())))
-        .child(
-            div()
-                .id(("terminal-tab-close", ix))
-                .size(px(18.))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(radius::SM)
-                .text_color(color::text_3())
-                .when(!on, |d| d.invisible().group_hover(group, |s| s.visible()))
-                .hover(|s| s.bg(color::pressed()).text_color(color::text()))
-                .child(Icon::new(Lucide::X).size(size::ICON_SM))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(move |_, w, cx| {
-                    cx.stop_propagation();
-                    close(ix, w, cx)
-                }),
-        )
-        .on_click(move |_, w, cx| select(ix, w, cx))
-}
-
-pub fn new_terminal_button(h: &StripHandlers) -> Stateful<Div> {
-    let new = h.on_new.clone();
-    icon_button("terminal-new", Lucide::Plus, true, false).tip_action("New terminal", &NewTerminal).on_click(move |_, w, cx| new(w, cx))
-}
-
-/// The terminals' tabs (`selected`: the one shown, if the terminal is), then a new one.
-pub fn tab_strip(tabs: &[TerminalTab], selected: Option<usize>, h: &StripHandlers) -> Div {
-    div()
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .items_center()
-        .gap_1()
-        .child(div().id("terminal-tabs").flex_1().min_w_0().flex().items_center().gap_1().overflow_x_scroll().children(
-            tabs.iter().enumerate().map(|(ix, t)| terminal_tab(ix, t, selected == Some(ix), h)),
-        ))
-        .child(new_terminal_button(h))
-}
-
 /// Under a terminal whose shell ended.
 pub fn ended_notice(exit_code: Option<i32>) -> Div {
     let how = match exit_code {
@@ -343,21 +258,14 @@ pub fn sample_frame(cols: u16, rows: u16) -> Frame {
 
 #[cfg(feature = "dev")]
 pub fn previews() -> Vec<crate::preview::ComponentPreview> {
-    use super::right_pane::{PaneView, header, sub_bar};
+    use super::right_pane::{PaneView, StripHandlers, StripTab, header};
     use crate::preview::{Area, ComponentPreview, Example};
-    /// The pane's header on Terminal, and the terminals' tabs under it, as the app shows them.
-    fn strip(tabs: &[TerminalTab], selected: usize, maximized: bool) -> Div {
-        div()
-            .flex()
-            .flex_col()
-            .child(header(Some(PaneView::Terminal), maximized, px(560.), None, Rc::new(|_, _, _| {}), Rc::new(|_, _| {})))
-            .child(sub_bar(tab_strip(tabs, Some(selected), &StripHandlers::default())))
+    /// The pane's header, as the app shows it over a terminal.
+    fn strip(tabs: &[StripTab], selected: usize, maximized: bool) -> Div {
+        div().flex().flex_col().child(header(tabs, selected, maximized, &StripHandlers::default()))
     }
-    let tabs = vec![
-        TerminalTab { title: "zsh".into(), unread: false, ended: false },
-        TerminalTab { title: "cargo".into(), unread: true, ended: false },
-        TerminalTab { title: "zsh".into(), unread: false, ended: true },
-    ];
+    let tab = |title: &str, unread, ended| StripTab { unread, ended, ..StripTab::new(title.to_string(), PaneView::Terminal.icon()) };
+    let tabs = vec![tab("zsh", false, false), tab("cargo", true, false), tab("zsh", false, true)];
     let t2 = tabs.clone();
     vec![ComponentPreview::new(Area::Shell, "Terminal", "The terminal pane: tabs, the grid in the code font, and notices.").stacked().examples([
         Example::new("pane", move |_, _| {

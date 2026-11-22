@@ -33,8 +33,8 @@ use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
 
 use crate::app::{
-    CloseSettings, CloseTerminal, CloseThread, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizePane, NewTerminal, NewThread,
-    NextTerminal, OpenSettings, PreviousTerminal, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleRightPane, ShowTerminal, ShowFiles, ShowSideChat, ShowChanges, ShowChat, ShowTrajectory, CloseFile,
+    CloseSettings, ClosePaneTab, CloseThread, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizePane, NewPaneTab, NewThread,
+    NextPaneTab, OpenSettings, PreviousPaneTab, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleRightPane, ShowTerminal, ShowFiles, ShowSideChat, ShowChanges, ShowChat, ShowTrajectory,
     OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
 };
 use crate::settings::SaveKind;
@@ -146,7 +146,6 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
         .on_action(cx.listener(|this, _: &ShowChat, window, cx| this.show_tab(ViewTab::Chat, window, cx)))
         .on_action(cx.listener(|this, _: &ShowTrajectory, window, cx| this.show_tab(ViewTab::Trajectory, window, cx)))
-        .on_action(cx.listener(|this, _: &CloseFile, window, cx| this.close_files_item(window, cx)))
         .on_action(cx.listener(|this, _: &GoBack, window, cx| this.go_back(window, cx)))
         .on_action(cx.listener(|this, _: &GoForward, window, cx| this.go_forward(window, cx)))
         .on_action(cx.listener(|this, _: &FocusComposer, window, cx| this.focus_composer(window, cx)))
@@ -158,10 +157,10 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &ShowFiles, window, cx| this.show_pane_view(PaneView::Files, window, cx)))
         .on_action(cx.listener(|this, _: &ShowSideChat, window, cx| this.show_pane_view(PaneView::SideChat, window, cx)))
         .on_action(cx.listener(|this, _: &ShowChanges, window, cx| this.show_pane_view(PaneView::Changes, window, cx)))
-        .on_action(cx.listener(|this, _: &NewTerminal, window, cx| this.new_terminal(window, cx)))
-        .on_action(cx.listener(|this, _: &CloseTerminal, window, cx| this.close_current_terminal(window, cx)))
-        .on_action(cx.listener(|this, _: &NextTerminal, window, cx| this.step_terminal(1, window, cx)))
-        .on_action(cx.listener(|this, _: &PreviousTerminal, window, cx| this.step_terminal(-1, window, cx)))
+        .on_action(cx.listener(|this, _: &NewPaneTab, window, cx| this.new_pane_tab(window, cx)))
+        .on_action(cx.listener(|this, _: &ClosePaneTab, window, cx| this.close_pane_item(window, cx)))
+        .on_action(cx.listener(|this, _: &NextPaneTab, window, cx| this.step_pane_tab(1, window, cx)))
+        .on_action(cx.listener(|this, _: &PreviousPaneTab, window, cx| this.step_pane_tab(-1, window, cx)))
         .on_action(cx.listener(|this, _: &MaximizePane, _, cx| this.toggle_pane_maximized(cx)))
         .on_action(cx.listener(|this, _: &Quit, window, cx| this.quit(window, cx)))
         .on_action(cx.listener(|this, _: &OpenFind, window, cx| this.open_find(window, cx)))
@@ -470,84 +469,48 @@ fn with_terminal(
         .into_any_element()
 }
 
-/// The right pane: its header (view switch, the view's controls, hide), then the view (Files
-/// when the thread hasn't picked one).
+/// The right pane: its tabs, then the one shown.
 fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
-    use space_ui::components::right_pane::{ViewHandler, header, sub_bar};
-    // A pane that hasn't picked a view yet shows Files.
-    let view = Some(app.terminals.pane(key).and_then(|p| p.view).unwrap_or(PaneView::Files));
-    let on_view: ViewHandler = {
-        let this = cx.entity().downgrade();
-        Rc::new(move |v, w, cx| {
-            let _ = this.update(cx, |this, cx| this.switch_pane_view(v, w, cx));
-        })
-    };
-    let on_maximize = handler(cx, |this, _, cx| this.toggle_pane_maximized(cx));
-    let maximized = app.terminals.pane(key).is_some_and(|p| p.maximized);
-    let content = match view {
-        None | Some(PaneView::Files) => app.files_content(key, cx),
-        Some(PaneView::Terminal) => div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .child(sub_bar(terminal_tabs(app, key, cx)))
-            .child(terminal_content(app, key, window, cx))
-            .into_any_element(),
-        Some(PaneView::SideChat) => crate::side_chat::side_chat_content(app, key, window, cx),
-        Some(PaneView::Changes) => app.changes_content(key, window, cx),
-    };
-    // The pane's width, for the header (a narrow one shows the other modes as icons).
-    let sidebar = f32::from(size::SIDEBAR_W) * app.sidebar_shown.target();
-    let main = f32::from(window.viewport_size().width) - sidebar;
-    // Mid-slide, the width it has reached.
-    let pane = app.pane_width(window);
-    let width = px(pane + (main - pane) * app.pane_max_at(cx).0);
-    let action = (view == Some(PaneView::SideChat)).then(|| crate::side_chat::side_chat_header_action(app, key, cx)).flatten();
-    div().size_full().flex().flex_col().bg(color::bg()).child(header(view, maximized, width, action, on_view, on_maximize)).child(content).into_any_element()
-}
-
-/// The Terminal mode's tabs: the terminals, then a new one.
-fn terminal_tabs(app: &SpaceApp, key: u64, cx: &mut Context<SpaceApp>) -> Div {
-    use space_ui::components::terminal::{StripHandlers, new_terminal_button, terminal_tab};
-    let (tabs, selected) = match app.terminals.pane(key) {
-        Some(pane) => (pane.tabs.iter().filter_map(|id| app.terminals.session(id)).map(|s| s.tab()).collect::<Vec<_>>(), pane.selected),
-        None => (Vec::new(), 0),
-    };
+    use crate::pane::PaneTab;
+    use space_ui::components::right_pane::{StripHandlers, header};
     let handlers = StripHandlers {
         on_select: {
             let this = cx.entity().downgrade();
             Rc::new(move |ix, w, cx| {
-                let _ = this.update(cx, |this, cx| this.select_terminal(ix, w, cx));
+                let _ = this.update(cx, |this, cx| this.select_pane_tab(ix, w, cx));
             })
         },
         on_close: {
             let this = cx.entity().downgrade();
             Rc::new(move |ix, w, cx| {
-                let _ = this.update(cx, |this, cx| this.close_terminal(ix, w, cx));
+                let _ = this.update(cx, |this, cx| this.close_pane_tab(ix, w, cx));
             })
         },
-        on_new: handler(cx, |this, w, cx| this.new_terminal(w, cx)),
+        on_new: handler(cx, |this, w, cx| this.new_pane_tab(w, cx)),
+        on_maximize: handler(cx, |this, _, cx| this.toggle_pane_maximized(cx)),
     };
-    let tabs = tabs.iter().enumerate().map(|(ix, t)| terminal_tab(ix, t, ix == selected, &handlers));
-    div()
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .items_center()
-        .gap_1()
-        .child(div().id("terminal-tabs").flex_1().min_w_0().flex().items_center().gap_1().overflow_x_scroll().children(tabs))
-        .when(app.host.has_terminal(), |d| d.child(new_terminal_button(&handlers)))
+    let (maximized, active, tab) = match app.terminals.pane(key) {
+        Some(p) => (p.maximized, p.active, p.active_tab().cloned()),
+        None => (false, 0, None),
+    };
+    let content = match tab {
+        None => div().flex_1().into_any_element(),
+        Some(PaneTab::Launcher) => app.launcher_content(key, window, cx),
+        Some(PaneTab::Files) => app.files_tree_content(key, cx),
+        Some(PaneTab::File(path)) => app.file_content(key, &path, cx),
+        Some(PaneTab::Terminal(id)) => terminal_content(app, key, &id, window, cx),
+        Some(PaneTab::SideChat(side)) => crate::side_chat::side_chat_content(app, side, window, cx),
+        Some(PaneTab::Changes) => app.changes_content(key, window, cx),
+    };
+    let tabs = app.strip_tabs(key);
+    div().size_full().flex().flex_col().bg(color::bg()).child(header(&tabs, active, maximized, &handlers)).child(content).into_any_element()
 }
 
-/// The Terminal view: the selected terminal, or why there's none.
-fn terminal_content(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
+/// A terminal tab: its terminal, or why there's none.
+fn terminal_content(app: &mut SpaceApp, key: u64, id: &str, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
     use space_ui::components::terminal::stopped_notice;
-    let (opening, error) = match app.terminals.pane(key) {
-        Some(pane) => (pane.opening, pane.error.clone()),
-        None => (0, None),
-    };
-    let session = app.terminals.selected(key);
+    let error = app.terminals.pane(key).and_then(|p| p.failed.get(id).cloned());
+    let session = app.terminals.session(id);
     let stopped = session.as_ref().is_some_and(|s| s.state.lock().unwrap().stopped);
     match session {
         Some(s) if stopped => {
@@ -562,22 +525,16 @@ fn terminal_content(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut 
             Some(view) => div().flex_1().min_h_0().child(view).into_any_element(),
             None => div().flex_1().into_any_element(),
         },
-        None => match error {
-            Some(e) => stopped_notice(e, handler(cx, |this, w, cx| this.new_terminal(w, cx))).into_any_element(),
-            None => div()
-                .flex_1()
-                .p_3()
-                .text_size(text::SM)
-                .text_color(color::text_3())
-                .child(if opening > 0 {
-                    "Starting a shell…"
-                } else if !app.host.has_terminal() {
-                    "The terminal plugin isn't running."
-                } else {
-                    ""
-                })
-                .into_any_element(),
-        },
+        None => {
+            let body = match error {
+                Some(e) => {
+                    let id = id.to_string();
+                    stopped_notice(e, handler(cx, move |this, w, cx| this.restart_terminal(&id, w, cx))).into_any_element()
+                }
+                None => div().p_3().text_size(text::SM).text_color(color::text_3()).child("Starting a shell…").into_any_element(),
+            };
+            div().key_context("PaneTab").track_focus(&app.pane_focus).flex_1().min_h_0().flex().child(body).into_any_element()
+        }
     }
 }
 

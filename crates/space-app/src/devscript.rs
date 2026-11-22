@@ -355,12 +355,19 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                         let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
                         if let Some(app) = app {
                             let app = app.read(cx);
-                            let Some(key) = app.selected else { return };
+                            let Some(main) = app.selected else { return };
                             let composer = app.input.read(cx).value().to_string();
-                            match app.side_chats.get(&key) {
+                            let count = app.side_chats.values().filter(|s| s.thread.side_of == Some(main)).count();
+                            // The one shown, else the newest.
+                            let shown = match app.terminals.pane(main).and_then(|p| p.active_tab()) {
+                                Some(crate::pane::PaneTab::SideChat(k)) => Some(*k),
+                                _ => app.side_chats.values().filter(|s| s.thread.side_of == Some(main)).max_by_key(|s| s.thread.created_ms).map(|s| s.thread.key),
+                            };
+                            match shown.and_then(|k| app.side_chats.get(&k)) {
                                 Some(side) => eprintln!(
-                                    "script: sidechat focused={} input={:?} composer={composer:?} items={} running={} error={:?}",
-                                    app.side_chat_focused(key, window, cx),
+                                    "script: sidechat count={count} title={:?} focused={} input={:?} composer={composer:?} items={} running={} error={:?}",
+                                    side.title(),
+                                    app.side_chat_focused(side.thread.key, window, cx),
                                     side.input.read(cx).value().to_string(),
                                     side.thread.state.items.len(),
                                     side.thread.state.running,
@@ -381,7 +388,7 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                             let (shown, _) = app.terminal_shown.at(clock.now(), clock.pinned());
                             eprintln!(
                                 "script: terminals {:?} maximized {} shown {shown:.2} width {} sidebar {}",
-                                pane.map(|p| (p.open, p.view, p.tabs.len(), p.opening)),
+                                pane.map(|p| (p.open, p.active_tab().cloned(), p.tabs.len())),
                                 pane.is_some_and(|p| p.maximized),
                                 app.terminals.width,
                                 app.sidebar_open,
