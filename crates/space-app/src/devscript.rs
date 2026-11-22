@@ -31,6 +31,7 @@
 //! title               print the selected thread's title
 //! editmenu            print the Edit menu's items: AppKit action and key equivalent
 //! sidechat            print the selected thread's side chat: focused, its input, the composer's, items, running
+//! trajectory          print whether the selected thread shows its trajectory, and what has focus
 //! terminals           print the selected thread's right pane: open, its view, tabs, shells starting, how far it's
 //!                     shown, whether it's maximized, its set width; and whether the sidebar is open
 //! open src/main.rs    show a file (relative to the thread's folder) in the Files view, as a click on its row would
@@ -271,19 +272,21 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                     }
                     let name = args.first().copied().unwrap_or("shot").to_string();
                     if let Some(dir) = std::env::var_os("SPACE_SHOT_DIR") {
-                        // The window itself, by its window number (no shadow), even when it's behind others.
+                        // The window itself, by its window number (no shadow), even when it's behind
+                        // others or on another workspace (see scripts/capture-window.swift).
                         let number = window.update(cx, |_, window, _| crate::text_prompt::ns_window(window).map(|w| w.windowNumber())).ok().flatten();
                         let path = std::path::Path::new(&dir).join(format!("{name}.png"));
-                        match number {
-                            Some(n) => {
-                                let out = std::process::Command::new("screencapture").args(["-x", "-o", "-l", &n.to_string()]).arg(&path).output();
+                        match (number, capture_window()) {
+                            (None, _) => eprintln!("script: shot: no native window"),
+                            (_, Err(e)) => eprintln!("script: shot failed: {e}"),
+                            (Some(n), Ok(capture)) => {
+                                let out = std::process::Command::new(capture).arg(n.to_string()).arg(&path).output();
                                 match out {
                                     Ok(o) if o.status.success() => eprintln!("script: shot {}", path.display()),
                                     Ok(o) => eprintln!("script: shot failed: {}", String::from_utf8_lossy(&o.stderr).trim()),
                                     Err(e) => eprintln!("script: shot failed: {e}"),
                                 }
                             }
-                            None => eprintln!("script: shot: no native window"),
                         }
                     } else if let Some(shot) = std::env::var_os("SPACE_SHOT_CMD") {
                         let _ = std::process::Command::new(shot).arg(name).status();
@@ -378,6 +381,21 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                         }
                     });
                 }
+                "trajectory" => {
+                    let _ = window.update(cx, |root, window, cx| {
+                        let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
+                        if let Some(app) = app {
+                            let app = app.read(cx);
+                            eprintln!(
+                                "script: trajectory shown={} available={} focused={} composer_focused={}",
+                                app.trajectory_shown(),
+                                app.host.has_trajectory(),
+                                app.trajectories.focus.contains_focused(window, cx),
+                                app.input.read(cx).focus_handle(cx).is_focused(window),
+                            );
+                        }
+                    });
+                }
                 "terminals" => {
                     let _ = window.update(cx, |root, _, cx| {
                         let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
@@ -445,4 +463,21 @@ fn print_edit_menu() {
         let action = item.action().map(|s| s.name().to_string_lossy().into_owned()).unwrap_or_default();
         eprintln!("script: edit {:?} {action} {:?} {:?}", item.title().to_string(), item.keyEquivalent().to_string(), item.keyEquivalentModifierMask());
     }
+}
+
+/// The window-capture helper, compiled from scripts/capture-window.swift the first time (and
+/// again when the source is newer), into the build folder.
+fn capture_window() -> Result<std::path::PathBuf, String> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source = root.join("scripts/capture-window.swift");
+    let out = root.join("target/debug/capture-window");
+    let modified = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    if modified(&out).is_some_and(|built| modified(&source).is_none_or(|src| src <= built)) {
+        return Ok(out);
+    }
+    let built = std::process::Command::new("swiftc").arg("-O").arg(&source).arg("-o").arg(&out).output().map_err(|e| format!("swiftc: {e}"))?;
+    if !built.status.success() {
+        return Err(format!("compiling {}: {}", source.display(), String::from_utf8_lossy(&built.stderr).trim()));
+    }
+    Ok(out)
 }
