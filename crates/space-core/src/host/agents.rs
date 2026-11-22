@@ -10,7 +10,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use space_protocol::acp::{self, Agent, ByteStreams, Client};
 use space_protocol::acp_schema as schema;
-use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, SIDE_OF_META_KEY, PROTOCOL_VERSION_META_KEY, STEER_META_KEY, USAGE_META_KEY};
+use space_protocol::ext::{CONTEXT_META_KEY, SIDE_OF_META_KEY, PROTOCOL_VERSION_META_KEY, STEER_META_KEY, USAGE_META_KEY};
 use space_protocol::service::HistoryItem;
 use space_protocol::trace::{ContextFact, TraceBatch, TraceEvent};
 use space_protocol::{
@@ -360,7 +360,6 @@ impl AgentInner {
     }
 }
 
-/// `_meta` with the session's data folder, if any.
 /// A long paste as a prompt block: its text inline (an embedded resource), or, for an agent that
 /// doesn't take embedded context, a link to its file.
 fn text_block(t: &TextRef, embedded: bool) -> Result<schema::ContentBlock> {
@@ -376,17 +375,12 @@ fn text_block(t: &TextRef, embedded: bool) -> Result<schema::ContentBlock> {
     Ok(schema::ContentBlock::Resource(schema::EmbeddedResource::new(schema::EmbeddedResourceResource::TextResourceContents(contents))))
 }
 
-/// `_meta` of `session/new` and `session/load`: the session's data folder, and the session it's
-/// a side chat of.
-fn session_meta(data_dir: Option<&std::path::Path>, side_of: Option<&str>) -> Option<schema::Meta> {
+/// `_meta` of `session/new` and `session/load`: the session it's a side chat of.
+fn session_meta(side_of: Option<&str>) -> Option<schema::Meta> {
+    let main = side_of?;
     let mut meta = schema::Meta::new();
-    if let Some(dir) = data_dir {
-        meta.insert(DATA_DIR_META_KEY.into(), dir.display().to_string().into());
-    }
-    if let Some(main) = side_of {
-        meta.insert(SIDE_OF_META_KEY.into(), main.into());
-    }
-    (!meta.is_empty()).then_some(meta)
+    meta.insert(SIDE_OF_META_KEY.into(), main.into());
+    Some(meta)
 }
 
 fn acp_error(what: &str, e: acp::Error, process: &PluginProcess) -> anyhow::Error {
@@ -446,26 +440,24 @@ impl AgentHandle {
 
     /// `session/new` with `cwd`.
     pub async fn new_session(&self, cwd: impl Into<PathBuf>) -> Result<Session> {
-        self.new_session_in(cwd, None, None).await
+        self.new_session_in(cwd, None).await
     }
 
-    /// `session/new` with `cwd`, telling the agent the folder it may keep the session's own
-    /// files in (to load it again later). `thread_id`: the thread the session belongs to (its
-    /// traces are filed under it).
-    pub async fn new_session_in(&self, cwd: impl Into<PathBuf>, data_dir: Option<PathBuf>, thread_id: Option<&str>) -> Result<Session> {
-        self.create_session(cwd.into(), data_dir, thread_id, None).await
+    /// `session/new` with `cwd` for thread `thread_id` (the session's traces are filed under it).
+    pub async fn new_session_in(&self, cwd: impl Into<PathBuf>, thread_id: Option<&str>) -> Result<Session> {
+        self.create_session(cwd.into(), thread_id, None).await
     }
 
     /// `session/new` for a side chat of session `side_of` (see [`SIDE_OF_META_KEY`]); otherwise as
     /// [`AgentHandle::new_session_in`].
-    pub async fn new_side_session(&self, side_of: &str, cwd: impl Into<PathBuf>, data_dir: Option<PathBuf>, thread_id: Option<&str>) -> Result<Session> {
-        self.create_session(cwd.into(), data_dir, thread_id, Some(side_of)).await
+    pub async fn new_side_session(&self, side_of: &str, cwd: impl Into<PathBuf>, thread_id: Option<&str>) -> Result<Session> {
+        self.create_session(cwd.into(), thread_id, Some(side_of)).await
     }
 
-    async fn create_session(&self, cwd: PathBuf, data_dir: Option<PathBuf>, thread_id: Option<&str>, side_of: Option<&str>) -> Result<Session> {
+    async fn create_session(&self, cwd: PathBuf, thread_id: Option<&str>, side_of: Option<&str>) -> Result<Session> {
         let this = self.clone();
         let host = self.inner.shared.host.clone();
-        let request = schema::NewSessionRequest::new(cwd.clone()).meta(session_meta(data_dir.as_deref(), side_of));
+        let request = schema::NewSessionRequest::new(cwd.clone()).meta(session_meta(side_of));
         let response = host
             .rt
             .spawn(async move {
@@ -505,43 +497,23 @@ impl AgentHandle {
 
     /// ACP `session/load`: continue session `session_id` (from an earlier run) in `cwd`. The
     /// history the agent replays while loading isn't reported; the thread already shows it.
-    pub async fn load_session(
-        &self,
-        session_id: &str,
-        cwd: impl Into<PathBuf>,
-        data_dir: Option<PathBuf>,
-        thread_id: Option<&str>,
-    ) -> Result<Session> {
-        self.reopen_session(session_id, cwd.into(), data_dir, thread_id, None).await
+    pub async fn load_session(&self, session_id: &str, cwd: impl Into<PathBuf>, thread_id: Option<&str>) -> Result<Session> {
+        self.reopen_session(session_id, cwd.into(), thread_id, None).await
     }
 
     /// `session/load` of side chat `session_id`, still a side chat of session `side_of` (which
     /// may have been loaded under a new id since); otherwise as [`AgentHandle::load_session`].
-    pub async fn load_side_session(
-        &self,
-        session_id: &str,
-        side_of: &str,
-        cwd: impl Into<PathBuf>,
-        data_dir: Option<PathBuf>,
-        thread_id: Option<&str>,
-    ) -> Result<Session> {
-        self.reopen_session(session_id, cwd.into(), data_dir, thread_id, Some(side_of)).await
+    pub async fn load_side_session(&self, session_id: &str, side_of: &str, cwd: impl Into<PathBuf>, thread_id: Option<&str>) -> Result<Session> {
+        self.reopen_session(session_id, cwd.into(), thread_id, Some(side_of)).await
     }
 
-    async fn reopen_session(
-        &self,
-        session_id: &str,
-        cwd: PathBuf,
-        data_dir: Option<PathBuf>,
-        thread_id: Option<&str>,
-        side_of: Option<&str>,
-    ) -> Result<Session> {
+    async fn reopen_session(&self, session_id: &str, cwd: PathBuf, thread_id: Option<&str>, side_of: Option<&str>) -> Result<Session> {
         if !self.inner.can_load {
             bail!("{} can't load a saved session", self.agent_name().unwrap_or(&self.inner.plugin_id));
         }
         let (this, id) = (self.clone(), session_id.to_string());
         let host = self.inner.shared.host.clone();
-        let request = schema::LoadSessionRequest::new(id.clone(), cwd.clone()).meta(session_meta(data_dir.as_deref(), side_of));
+        let request = schema::LoadSessionRequest::new(id.clone(), cwd.clone()).meta(session_meta(side_of));
         self.inner.shared.loading.lock().unwrap().insert(id.clone());
         let response = host
             .rt

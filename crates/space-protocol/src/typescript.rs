@@ -33,7 +33,6 @@ fn generate() -> String {
         ("RETRY_METHOD", format!("{RETRY_METHOD:?}")),
         ("STEER_META_KEY", format!("{STEER_META_KEY:?}")),
         ("CONTEXT_META_KEY", format!("{CONTEXT_META_KEY:?}")),
-        ("DATA_DIR_META_KEY", format!("{DATA_DIR_META_KEY:?}")),
         ("SIDE_OF_META_KEY", format!("{SIDE_OF_META_KEY:?}")),
         ("USAGE_META_KEY", format!("{USAGE_META_KEY:?}")),
         ("TRACE_METHOD", format!("{:?}", crate::trace::TRACE_METHOD)),

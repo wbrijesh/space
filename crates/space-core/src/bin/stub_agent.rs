@@ -24,8 +24,9 @@
 //! requested model or else the session's; a prompt with `titlefail` fails and one with
 //! `titlehang` never answers.
 //!
-//! Given a data folder (`_meta["space/dataDir"]`), a session keeps its prompts there and can be
-//! loaded again (`session/load`, which first replays a chunk, as agents replay history).
+//! A session keeps its prompts in the stub's own folder (`<temp>/space-stub-sessions`, as Claude
+//! Code keeps its sessions under `~/.claude`), so it can be loaded again, also by a new process
+//! (`session/load`, which first replays a chunk, as agents replay history).
 //!
 //! A side chat (`_meta["space/sideOf"]` on `session/new` or `session/load`) answers
 //! "Side chat of <main session>: Hello from the stub agent." `/btw` is offered as the side command.
@@ -53,7 +54,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use space_core::stub_script::{SCRIPT_ENV, Step, StubScript};
-use space_protocol::ext::{CONTEXT_META_KEY, DATA_DIR_META_KEY, PROTOCOL_VERSION_META_KEY, SIDE_OF_META_KEY, STEER_META_KEY, USAGE_META_KEY};
+use space_protocol::ext::{CONTEXT_META_KEY, PROTOCOL_VERSION_META_KEY, SIDE_OF_META_KEY, STEER_META_KEY, USAGE_META_KEY};
 use space_protocol::{
     CommandInfo, Complete, CompleteResult, Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, Retry, RetryKind, RetryState, SpaceStatus,
     SteerResult, SteerSession, Steered,
@@ -117,8 +118,8 @@ struct StubSession {
     model: String,
     thinking: String,
     context_tokens: u64,
-    /// Where the session's prompts are kept (in its data folder).
-    history: Option<std::path::PathBuf>,
+    /// Where the session's prompts are kept.
+    history: std::path::PathBuf,
     /// A side chat: the session it's beside.
     side_of: Option<String>,
     /// Trace numbering: turns and requests so far, and whether the header went out.
@@ -128,13 +129,12 @@ struct StubSession {
 }
 
 impl StubSession {
-    fn new(meta: Option<&Meta>) -> Self {
-        let dir = meta.and_then(|m| m.get(DATA_DIR_META_KEY)).and_then(|d| d.as_str()).map(std::path::PathBuf::from);
+    fn new(id: &str, meta: Option<&Meta>) -> Self {
         Self {
             model: MODELS[0].0.into(),
             thinking: "low".into(),
             context_tokens: 0,
-            history: dir.map(|d| d.join("history.txt")),
+            history: std::env::temp_dir().join("space-stub-sessions").join(format!("{id}.txt")),
             side_of: meta.and_then(|m| m.get(SIDE_OF_META_KEY)).and_then(|d| d.as_str()).map(str::to_string),
             turns: 0,
             requests: 0,
@@ -151,7 +151,7 @@ const MODELS: [(&str, &str); 2] = [("stub-model", "Stub Model"), ("stub-fast", "
 const LEVELS: [&str; 4] = ["low", "medium", "high", "max"];
 impl State {
     fn status(&self, session_id: &str) -> SpaceStatus {
-        let s = self.sessions.lock().unwrap().get(session_id).cloned().unwrap_or_else(|| StubSession::new(None));
+        let s = self.sessions.lock().unwrap().get(session_id).cloned().unwrap_or_else(|| StubSession::new(session_id, None));
         SpaceStatus {
             session_id: session_id.to_string(),
             provider: Some("stub".into()),
@@ -228,7 +228,11 @@ async fn main() -> acp::Result<()> {
                     // Unique across runs, so a loaded session can't clash with a new one.
                     let run = std::process::id();
                     let id = format!("stub-{run}-{}", state.next_session.fetch_add(1, Ordering::Relaxed) + 1);
-                    state.sessions.lock().unwrap().insert(id.clone(), StubSession::new(req.meta.as_ref()));
+                    let session = StubSession::new(&id, req.meta.as_ref());
+                    // A new session starts with no history (an earlier run with the same pid may
+                    // have left some).
+                    let _ = std::fs::remove_file(&session.history);
+                    state.sessions.lock().unwrap().insert(id.clone(), session);
                     responder.respond(NewSessionResponse::new(id.clone()))?;
                     cx.send_notification(state.status(&id))
                 }
@@ -241,7 +245,7 @@ async fn main() -> acp::Result<()> {
                 async move |req: LoadSessionRequest, responder, cx: Conn| {
                     let id = req.session_id.clone();
                     eprintln!("space-stub-agent: load {}", id.0);
-                    state.sessions.lock().unwrap().insert(id.0.to_string(), StubSession::new(req.meta.as_ref()));
+                    state.sessions.lock().unwrap().insert(id.0.to_string(), StubSession::new(&id.0, req.meta.as_ref()));
                     // Agents replay the conversation while loading.
                     let replay = ContentChunk::new(ContentBlock::Text(TextContent::new("(replayed history)")));
                     cx.send_notification(SessionNotification::new(id.clone(), SessionUpdate::AgentMessageChunk(replay)))?;
@@ -522,8 +526,8 @@ async fn run_turn(
         )))?;
     }
 
-    // Earlier prompts of this session (kept in its data folder), then this one.
-    let history = state.sessions.lock().unwrap().get(&*sid.0).and_then(|s| s.history.clone());
+    // Earlier prompts of this session, then this one.
+    let history = state.sessions.lock().unwrap().get(&*sid.0).map(|s| s.history.clone());
     let earlier = history.as_ref().and_then(|h| std::fs::read_to_string(h).ok()).map_or(0, |t| t.lines().count());
     if let Some(h) = &history {
         let line = format!("{}\n", text.replace('\n', " "));
@@ -782,7 +786,7 @@ impl Tracer {
     /// A new turn in the session, with the header before the session's first request.
     fn start(state: &Arc<State>, sid: &SessionId) -> Self {
         let mut sessions = state.sessions.lock().unwrap();
-        let session = sessions.entry(sid.0.to_string()).or_insert_with(|| StubSession::new(None));
+        let session = sessions.entry(sid.0.to_string()).or_insert_with(|| StubSession::new(&sid.0, None));
         session.turns += 1;
         let mut events = vec![TraceEvent::TurnStart { turn: session.turns, at: now_ms() }];
         if !session.header_sent {
@@ -824,7 +828,7 @@ impl Tracer {
         self.end_run();
         let number = {
             let mut sessions = self.state.sessions.lock().unwrap();
-            let session = sessions.entry(self.sid.clone()).or_insert_with(|| StubSession::new(None));
+            let session = sessions.entry(self.sid.clone()).or_insert_with(|| StubSession::new(&self.sid, None));
             session.requests += 1;
             session.requests
         };

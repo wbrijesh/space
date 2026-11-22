@@ -281,15 +281,14 @@ async fn a_side_chat_is_a_session_beside_another() {
     assert!(commands.iter().any(|c| c.name == "btw" && c.side), "{commands:?}");
 
     // The agent is told which session it's beside, on `session/new` and on `session/load`.
-    let data = root.path().join("side-data");
-    let side = agent.new_side_session(main.id(), root.path(), Some(data.clone()), Some("t1")).await.unwrap();
+    let side = agent.new_side_session(main.id(), root.path(), Some("t1")).await.unwrap();
     assert_ne!(side.id(), main.id());
     let mut side_state = SessionState::new(side.id());
     assert_eq!(side.prompt("hi").await.unwrap(), "end_turn");
     until(&mut events, &mut side_state, &mut seen, turn_ended).await;
     assert!(agent_text(&side_state).starts_with(&format!("Side chat of {}: Hello", main.id())), "{side_state:?}");
 
-    let side = agent.load_side_session(side.id(), main.id(), root.path(), Some(data), Some("t1")).await.unwrap();
+    let side = agent.load_side_session(side.id(), main.id(), root.path(), Some("t1")).await.unwrap();
     let mut side_state = SessionState::new(side.id());
     assert_eq!(side.prompt("again").await.unwrap(), "end_turn");
     until(&mut events, &mut side_state, &mut seen, turn_ended).await;
@@ -409,14 +408,13 @@ async fn an_agent_without_images_refuses_them() {
 }
 
 /// The app stops an idle agent: the stop reads as Stopped (not a crash), and the session goes
-/// on in a new agent process, loaded from its data folder.
+/// on in a new agent process, which loads it from where the agent keeps it.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_agent_stopped_on_purpose_is_stopped_and_its_session_loads_again() {
     let root = stub_root();
     let (host, mut events) = host(root.path());
-    let data = root.path().join("thread-data");
     let agent = host.start_agent("stub").await.unwrap();
-    let session = agent.new_session_in(PathBuf::from(root.path()), Some(data.clone()), Some("t1")).await.unwrap();
+    let session = agent.new_session_in(PathBuf::from(root.path()), Some("t1")).await.unwrap();
     let id = session.id().to_string();
     assert_eq!(session.prompt("hello").await.unwrap(), "end_turn");
 
@@ -438,7 +436,7 @@ async fn an_agent_stopped_on_purpose_is_stopped_and_its_session_loads_again() {
 
     // Woken: a new process loads the same session and remembers the earlier prompt.
     let agent = host.start_agent("stub").await.unwrap();
-    let session = agent.load_session(&id, PathBuf::from(root.path()), Some(data), Some("t1")).await.unwrap();
+    let session = agent.load_session(&id, PathBuf::from(root.path()), Some("t1")).await.unwrap();
     assert_eq!(session.id(), id);
     let mut state = SessionState::new(session.id());
     let mut seen = Vec::new();

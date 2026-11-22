@@ -64,7 +64,7 @@ pub const STORE_LIST: &str = "store/list";
 pub const STORE_LOAD: &str = "store/load";
 pub const STORE_WRITE: &str = "store/write";
 pub const STORE_DELETE: &str = "store/delete";
-pub const STORE_DATA_DIR: &str = "store/data-dir";
+pub const STORE_ATTACHMENTS_DIR: &str = "store/attachments-dir";
 /// The `session-title` seam: a thread's title from its first message ([`TitleRequest`]).
 pub const TITLE_GENERATE: &str = "title/generate";
 
@@ -642,15 +642,10 @@ pub struct StoredThread {
     pub events: Vec<serde_json::Value>,
 }
 
-/// `store/data-dir` result: the folder the thread's agent may keep the session's own files in,
-/// and the one Space keeps the thread's attached images in (both deleted with the thread).
-/// They may not exist yet.
+/// `store/attachments-dir` result: the folder Space keeps the thread's attached images in,
+/// deleted with the thread. It may not exist yet.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct DataDir {
-    pub data_dir: String,
-    /// `None` from a store that doesn't keep attachments (Space then keeps them in a temporary
-    /// folder).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attachments_dir: Option<String>,
+pub struct AttachmentsDir {
+    pub dir: String,
 }

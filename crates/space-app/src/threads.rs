@@ -363,34 +363,17 @@ impl SpaceApp {
         }
         let (cwd, id) = (thread.cwd.clone(), thread.id.clone());
         cx.spawn(async move |this, cx| {
-            let dirs = host.thread_dirs(&id).await;
+            let attachments = host.thread_attachments_dir(&id).await;
             let _ = this.update(cx, |this, _| {
                 if let Some(t) = this.thread_mut(key) {
-                    t.attachments_dir = Some(dirs.attachments.clone());
+                    t.attachments_dir = Some(attachments);
                 }
             });
-            let data_dir = dirs.data;
-            let new = |data_dir: Option<PathBuf>| {
-                let (agent, cwd, side_of) = (agent.clone(), cwd.clone(), side_of.clone());
-                let id = id.clone();
-                async move {
-                    match &side_of {
-                        Some(main) => agent.new_side_session(main, cwd, data_dir, Some(&id)).await,
-                        None => agent.new_session_in(cwd, data_dir, Some(&id)).await,
-                    }
-                }
-            };
             let result = match (&resume, &side_of) {
-                (Some((_, session_id)), Some(main)) => agent.load_side_session(session_id, main, cwd.clone(), data_dir, Some(&id)).await,
-                (Some((_, session_id)), None) => agent.load_session(session_id, cwd.clone(), data_dir, Some(&id)).await,
-                // An agent that can't use the folder still gets a session (kept in memory).
-                (None, _) => match new(data_dir.clone()).await {
-                    Err(e) if data_dir.is_some() => {
-                        tracing::warn!("a session in {}: {e:#}; keeping it in memory", data_dir.unwrap_or_default().display());
-                        new(None).await
-                    }
-                    result => result,
-                },
+                (Some((_, session_id)), Some(main)) => agent.load_side_session(session_id, main, cwd, Some(&id)).await,
+                (Some((_, session_id)), None) => agent.load_session(session_id, cwd, Some(&id)).await,
+                (None, Some(main)) => agent.new_side_session(main, cwd, Some(&id)).await,
+                (None, None) => agent.new_session_in(cwd, Some(&id)).await,
             };
             let session = match result {
                 Ok(s) => s,

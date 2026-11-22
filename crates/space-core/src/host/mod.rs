@@ -71,7 +71,7 @@ use crate::secrets::Secrets;
 use crate::session::{SessionEvent, SessionId};
 
 pub use agents::{AgentHandle, Session};
-pub use store::{ThreadDirs, ThreadSave};
+pub use store::ThreadSave;
 pub use terminals::TerminalSink;
 pub use titles::TITLE_TIMEOUT;
 use agents::AgentInner;

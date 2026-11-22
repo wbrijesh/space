@@ -49,7 +49,7 @@ async fn a_turn_shows_up_in_the_trajectory() {
     assert!(host.has_trajectory());
 
     let agent = host.start_agent("stub").await.unwrap();
-    let session = agent.new_session_in(tmp.path(), None, Some("t1")).await.unwrap();
+    let session = agent.new_session_in(tmp.path(), Some("t1")).await.unwrap();
     assert_eq!(session.prompt("hello trajectory").await.unwrap(), "end_turn");
 
     // The plugin says when the thread's trajectory changed; wait until the turn is in.
@@ -99,7 +99,7 @@ async fn a_turn_shows_up_in_the_trajectory() {
 async fn traces_sent_before_the_plugin_started_arrive() {
     let (tmp, host, _events) = setup();
     let agent = host.start_agent("stub").await.unwrap();
-    let session = agent.new_session_in(tmp.path(), None, Some("t2")).await.unwrap();
+    let session = agent.new_session_in(tmp.path(), Some("t2")).await.unwrap();
     assert_eq!(session.prompt("early bird").await.unwrap(), "end_turn");
     host.start_services().await;
     let page = tokio::time::timeout(Duration::from_secs(10), async {

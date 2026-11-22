@@ -82,11 +82,8 @@ async fn a_saved_thread_comes_back_after_a_restart_and_continues() {
     host.start_services().await;
     assert!(host.has_session_store());
     let agent = host.start_agent("stub").await.unwrap();
-    let dirs = host.thread_dirs("t1").await;
-    let data_dir = dirs.data.expect("a data folder");
-    assert!(data_dir.starts_with(root.path().join("space/threads/t1")));
-    assert_eq!(dirs.attachments, root.path().join("space/threads/t1/attachments"));
-    let session = agent.new_session_in(root.path(), Some(data_dir.clone()), Some("t1")).await.unwrap();
+    assert_eq!(host.thread_attachments_dir("t1").await, root.path().join("space/threads/t1/attachments"));
+    let session = agent.new_session_in(root.path(), Some("t1")).await.unwrap();
     assert_eq!(session.prompt("hello").await.unwrap(), "end_turn");
     let live = drain(&mut events).await;
     let mut shown = SessionState::default();
@@ -116,7 +113,7 @@ async fn a_saved_thread_comes_back_after_a_restart_and_continues() {
     assert_eq!(host.load_thread("t1").await.unwrap().1, saved);
     let agent = host.start_agent("stub").await.unwrap();
     assert!(agent.can_load_session());
-    let session = agent.load_session(&session_id, root.path(), host.thread_dirs("t1").await.data, Some("t1")).await.unwrap();
+    let session = agent.load_session(&session_id, root.path(), Some("t1")).await.unwrap();
     assert_eq!(session.id(), session_id);
     // What the agent replays while loading isn't reported (the thread shows it already).
     let replay = drain(&mut events).await;
@@ -148,7 +145,7 @@ async fn a_saved_thread_comes_back_after_a_restart_and_continues() {
     assert_eq!(host.list_threads().await.unwrap()[0].closed_ms, None);
     assert_eq!(host.list_threads().await.unwrap()[0].pinned_ms, pinned.pinned_ms);
 
-    // Deleting removes the folder, the agent's files with it.
+    // Deleting removes the folder, attachments and all.
     host.delete_thread("t1").await.unwrap();
     assert!(!root.path().join("space/threads/t1").exists());
     assert!(host.list_threads().await.unwrap().is_empty());
@@ -163,7 +160,7 @@ async fn a_store_that_cant_write_doesnt_stop_the_conversation() {
     let (host, mut events) = host(root.path());
     host.start_services().await;
     let agent = host.start_agent("stub").await.unwrap();
-    let session = agent.new_session_in(root.path(), host.thread_dirs("t1").await.data, Some("t1")).await.unwrap();
+    let session = agent.new_session_in(root.path(), Some("t1")).await.unwrap();
     assert_eq!(session.prompt("hello").await.unwrap(), "end_turn");
     let live = drain(&mut events).await;
     let err = host.save_thread("t1", Some(meta("t1", session.id(), root.path())), 0, &live).await.unwrap_err();
