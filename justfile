@@ -3,38 +3,56 @@
 project := justfile_directory()
 version := `sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1`
 
-# Builds everything, then launches through dx with live Rust edits: saving a file patches the running
-# app in ~1 s (render code, layout, styles; struct fields or `main` need a rebuild: press `r` in
-# the dx window). Plugins are other processes: when their sources change, the app rebuilds and
-# restarts them (the agent once it's idle). Arguments go to the app:
+# Builds everything, then runs Space as target/debug/Space.app (a bundle, for notifications). When a
+# plugin's sources change, the app rebuilds and restarts it (the agent once it's idle); a change to
+# the app itself needs a restart (⌃C, then `just run` again). Arguments go to the app:
 #   just run                      this repo as the project
 #   just run ~/code/other         another project
 #   just run --gallery            the component gallery
 #   just run --scenario list      scripted states (stub agent); `--scenario <name>` opens one
-# Needs dx at GPUI's subsecond version: cargo install dioxus-cli --version 0.7.10 --locked
 # Run Space: the one way to run it while developing (plain `just` does this too)
 run *args: build
+    scripts/dev-bundle.sh > /dev/null
     SPACE_TARGET_DIR={{project}}/target/debug SPACE_PROJECT={{project}} SPACE_RELOAD_PLUGINS=1 \
-        dx serve --hot-patch -p space-app --bin Space --features hot --macos --args="{{args}}"
+        target/debug/Space.app/Contents/MacOS/Space {{args}}
 
 # Build the Rust workspace (app and Rust plugins) and the TypeScript plugins
-build: build-rust build-ts
+build: size-check build-rust build-ts
 
 build-rust:
     cargo build --workspace
 
-# Every bundled TypeScript plugin runs from one Bun executable, next to the Rust plugins
+# Every bundled TypeScript plugin runs from one Bun executable, next to the Rust plugins. Bun writes
+# a temporary executable to the current folder (and leaves it there if the build fails), so it runs
+# from target/, which `just clean` empties.
 build-ts:
     bun install
-    bun build --compile plugins/space-ts.ts --outfile target/debug/space-ts
+    mkdir -p target/debug
+    cd target && bun build --compile ../plugins/space-ts.ts --outfile debug/space-ts
+    rm -f .*.bun-build
 
-# Without dev tooling (no gallery, scenarios, clock controls or hot reload); plugins inside the
+# Free disk space: build output, Bun's leftover temporary files, and records of removed worktrees
+clean:
+    cargo clean
+    rm -f .*.bun-build
+    git worktree prune
+
+# Warn when the build output has grown past 40 GB (old copies pile up as settings change)
+[private]
+size-check:
+    #!/usr/bin/env sh
+    kb=$(du -sk target 2>/dev/null | cut -f1)
+    if [ "${kb:-0}" -gt 41943040 ]; then echo "warning: target/ is $((kb / 1048576)) GB; run \`just clean\`" >&2; fi
+
+# Without dev tooling (no gallery, scenarios, clock controls or scripts); plugins inside the
 # app, ad-hoc signed, zipped for the cask. For shipping and judging real performance, not daily use
 # Release build: target/release/Space.app and Space-<version>-arm64.zip
 release:
     cargo build --release --workspace --no-default-features
     bun install
-    bun build --compile --minify plugins/space-ts.ts --outfile target/release/space-ts
+    mkdir -p target/release
+    cd target && bun build --compile --minify ../plugins/space-ts.ts --outfile release/space-ts
+    rm -f .*.bun-build
     scripts/bundle.sh release
 
 # Copy the release app to ~/Applications, where Spotlight and Launchpad find it. It has the same

@@ -29,6 +29,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
 tempfile = "3"
 
+# Debug builds: file and line numbers for our crates (backtraces, panics), no debug info for
+# dependencies. Full debug info made target/ several times larger for little use.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 # gpui-base 0.9.0 with one change: a code block's actions are a full-width header row above the
 # code (language and Copy in Space), instead of a box floating over its top-right corner. See
 # vendor/gpui-base/SPACE_PATCH.md.

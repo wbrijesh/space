@@ -90,11 +90,10 @@ cask clears macOS's download mark so it opens normally.
 
 Needs Xcode with its Metal toolchain (`xcodebuild -downloadComponent MetalToolchain` if
 `xcrun metal --version` fails), Rust stable, [Bun](https://bun.sh), [`just`](https://github.com/casey/just),
-dx at GPUI's version (`cargo install dioxus-cli --version 0.7.10 --locked`), and the `claude` CLI signed in.
+and the `claude` CLI signed in.
 
-**`just run`** builds everything and starts Space with live reload: saving a Rust file patches the
-running app (struct fields or `main` need `r` in the dx window), and a changed plugin is rebuilt and
-restarted. Only one Space runs at a time: quit the installed one first, or `just run`'s exits at once.
+**`just run`** builds everything and starts Space; a changed plugin is rebuilt and restarted, and a
+change to the app needs a restart (⌃C, then `just run`). Only one Space runs at a time: quit the installed one first, or `just run`'s exits at once.
 Arguments go to the app: a project folder, `--gallery`, or `--scenario list`.
 
 | | |
@@ -103,6 +102,7 @@ Arguments go to the app: a project folder, `--gallery`, or `--scenario list`.
 | `just test` | Rust tests and the TypeScript plugins' tests; a scripted stub agent, so no model calls |
 | `just check [crates]` | while iterating: clippy and tests for those crates only (default `space-app`) |
 | `just lint` | clippy (with and without dev tooling) and the TypeScript typecheck |
+| `just clean` | free disk space: build output and leftover temporary files (`just build` warns past 40 GB) |
 | `just protocol` | regenerate the TypeScript protocol bindings from the Rust types |
 | `just install` | release build into `~/Applications/Space.app` (Spotlight) |
 | `just release-check` | release build, then check every plugin starts from a copy of the app |
