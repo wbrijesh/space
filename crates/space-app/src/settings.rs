@@ -36,10 +36,6 @@ pub struct Settings {
     pub pane_width: Option<f32>,
     /// The app "Open in" used last (a bundle id); Finder when unset or uninstalled.
     pub open_in: Option<String>,
-    /// Older files: the alerts switches, before they were the alerts plugin's settings. Moved
-    /// there on load, and no longer written.
-    #[serde(skip_serializing)]
-    notifications: Option<LegacyNotifications>,
 }
 
 /// Applied when a new thread's session is created; `None` keeps the agent's default.
@@ -110,34 +106,6 @@ pub struct ModelRef {
     pub id: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-struct LegacyNotifications {
-    on_finish: Option<bool>,
-    sound: Option<bool>,
-}
-
-/// The alerts plugin's id, and its switches the old `notifications` settings become.
-const ALERTS: &str = "alerts";
-
-impl Settings {
-    /// Move old `notifications` switches that were off to the alerts plugin's settings (unless
-    /// it has its own). Whether anything changed.
-    fn migrate(&mut self) -> bool {
-        let Some(old) = self.notifications.take() else { return false };
-        let alerts = self.plugins.settings.entry(ALERTS.into()).or_default();
-        for (key, on) in [("notify", old.on_finish), ("sound", old.sound)] {
-            if on == Some(false) {
-                alerts.entry(key.into()).or_insert_with(|| "false".into());
-            }
-        }
-        if alerts.is_empty() {
-            self.plugins.settings.remove(ALERTS);
-        }
-        true
-    }
-}
-
 /// The settings file location: `SPACE_SETTINGS`, else `~/.space/settings.json`.
 pub fn default_path() -> Option<PathBuf> {
     match std::env::var_os(SETTINGS_ENV).filter(|p| !p.is_empty()) {
@@ -155,13 +123,7 @@ pub struct SettingsStore {
 
 impl SettingsStore {
     pub fn load(path: Option<PathBuf>) -> Self {
-        let mut settings: Settings = path.as_deref().map(read).unwrap_or_default();
-        if settings.migrate()
-            && let Some(path) = &path
-            && let Err(e) = write(path, &settings)
-        {
-            tracing::warn!("saving settings to {} failed: {e:#}", path.display());
-        }
+        let settings: Settings = path.as_deref().map(read).unwrap_or_default();
         Self { path, settings }
     }
 
@@ -509,7 +471,6 @@ mod tests {
         });
         let json = std::fs::read_to_string(&path).unwrap();
         assert!(json.contains("\"newThreads\"") && json.contains("\"thinkingLevel\""));
-        assert!(!json.contains("notifications"));
         assert!(json.contains("\"permissionMode\"") && json.contains("\"disabled\""));
         assert!(json.contains("\"swipe\": \"sidebar\""), "{json}");
         assert_eq!(SettingsStore::load(Some(path)).settings, store.settings);
@@ -523,22 +484,6 @@ mod tests {
         assert_eq!(s.threads.keep_closed_days, 30);
         let s: Settings = serde_json::from_str(r#"{ "threads": { "keepClosedDays": 7 } }"#).unwrap();
         assert_eq!(s.threads.keep_closed_days, 7);
-    }
-
-    #[test]
-    fn old_notification_switches_move_to_the_alerts_plugin() {
-        let path = temp("legacy");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, r#"{ "notifications": { "onFinish": true, "sound": false } }"#).unwrap();
-        let store = SettingsStore::load(Some(path.clone()));
-        let alerts = &store.settings.plugins.settings[ALERTS];
-        assert_eq!((alerts.get("notify"), alerts.get("sound").map(String::as_str)), (None, Some("false")));
-        let json = std::fs::read_to_string(&path).unwrap();
-        assert!(!json.contains("notifications") && json.contains("\"alerts\""), "{json}");
-        // Both on: nothing to keep.
-        let mut s: Settings = serde_json::from_str(r#"{ "notifications": { "sound": true } }"#).unwrap();
-        assert!(s.migrate());
-        assert!(s.plugins.settings.is_empty());
     }
 
     #[test]
