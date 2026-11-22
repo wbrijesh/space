@@ -31,7 +31,7 @@ pub use space_ui::actions::{
     CloseSettings, CloseThread, CyclePermissionMode, FocusComposer, NextThread, PreviousThread, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious, CompleteCommand,
     ScrollToBottom,
     ToggleSidebar,
-    ShowChat, ShowTrajectory, OpenInLastApp,
+    ToggleTrajectory, OpenInLastApp,
     ClosePaneTab, MaximizePane, NewPaneTab, NextPaneTab, PreviousPaneTab, TerminalClear, TerminalCopy, TerminalPaste,
     ToggleRightPane, ShowTerminal, ShowFiles, ShowSideChat, ShowChanges, OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
 };
@@ -69,7 +69,7 @@ pub struct Options {
     pub settings_path: Option<PathBuf>,
     /// Open on the Settings page.
     pub open_settings: bool,
-    /// Dev scenarios: open the selected thread's Trajectory tab.
+    /// Dev scenarios: show the selected thread's trajectory.
     pub open_trajectory: bool,
     /// Dev scenarios: open the selected thread's terminal pane.
     pub open_terminal: bool,
@@ -152,8 +152,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-l", FocusComposer, None),
             KeyBinding::new("cmd-,", OpenSettings, None),
             KeyBinding::new("cmd-shift-r", CyclePermissionMode, None),
-            KeyBinding::new("cmd-shift-c", ShowChat, None),
-            KeyBinding::new("cmd-shift-t", ShowTrajectory, None),
+            KeyBinding::new("cmd-shift-t", ToggleTrajectory, None),
             KeyBinding::new("cmd-shift-p", TogglePinThread, None),
             KeyBinding::new("cmd-o", OpenInLastApp, None),
             // ⌘↓ scrolls the transcript to the bottom, also from the composer (where the
@@ -292,8 +291,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
                     MenuItem::action("Next Thread", NextThread),
                     MenuItem::action("Previous Thread", PreviousThread),
                     MenuItem::separator(),
-                    MenuItem::action("Chat", ShowChat),
-                    MenuItem::action("Trajectory", ShowTrajectory),
+                    MenuItem::action("Trajectory", ToggleTrajectory),
                     MenuItem::separator(),
                     MenuItem::action("Right Pane", ToggleRightPane),
                     MenuItem::action("Terminal", ShowTerminal),
@@ -446,7 +444,7 @@ pub struct SpaceApp {
     /// A finished selection in the transcript that can be quoted: its thread and text.
     pub(crate) quote_offer: Option<(u64, String)>,
     pub(crate) transcript_area: crate::quote::Area,
-    /// The Trajectory tab: which threads show it, the shown one's data, the search field.
+    /// The trajectory view: which threads show it, the shown one's data, the search field.
     pub(crate) trajectories: crate::trajectory::Trajectories,
     /// The message row that shows "Copied" for a moment, and the one whose usage panel is open.
     pub(crate) copied: Option<String>,
@@ -789,8 +787,7 @@ impl SpaceApp {
         if options.open_settings {
             this.open_settings(window, cx);
         } else {
-            let input = this.input.clone();
-            input.update(cx, |s, cx| s.focus(window, cx));
+            this.focus_composer(window, cx);
         }
         if options.open_files {
             this.show_pane_view(space_ui::components::right_pane::PaneView::Files, window, cx);
@@ -902,7 +899,7 @@ impl SpaceApp {
                 notify::post(thread.map(|t| t.key), &n.title, &body, n.banner, n.sound);
             }
             HostEvent::OpenUrl { url, .. } => open_url(url),
-            // The Trajectory tab isn't wired yet.
+            // The trajectory view isn't wired yet.
             HostEvent::TrajectoryChanged { thread_id, .. } => self.trajectory_changed(thread_id, cx),
             // Handled before the batch (see the event loop); here only when it needs the app.
             HostEvent::TerminalOutput { .. } => {}
@@ -1346,7 +1343,14 @@ impl SpaceApp {
         self.ensure_agent(cx);
     }
 
+    /// Focus the main column: the composer, or the trajectory while it shows in the chat's place
+    /// (the composer isn't drawn then, and keys would go nowhere).
     pub(crate) fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.trajectory_shown() {
+            let focus = self.trajectories.focus.clone();
+            window.focus(&focus, cx);
+            return;
+        }
         self.input.update(cx, |s, cx| s.focus(window, cx));
     }
 

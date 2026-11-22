@@ -11,7 +11,7 @@ use gpui::*;
 use super::tip::TipExt as _;
 use super::widgets::icon_button;
 use crate::ClickHandler;
-use crate::actions::{GoBack, GoForward, NewThread, ToggleRightPane, ToggleSidebar};
+use crate::actions::{GoBack, GoForward, NewThread, ToggleRightPane, ToggleSidebar, ToggleTrajectory};
 use crate::theme::{color, size, text};
 
 /// Makes `el` a window drag region: dragging moves the window, a double click zooms or
@@ -176,16 +176,24 @@ pub struct MainTitleBar {
     right_pane: Option<(bool, ClickHandler)>,
     /// Open the thread's folder in an app.
     open_in: Option<super::open_in::OpenIn>,
+    /// The trajectory's button: whether the thread shows it in place of the chat, and the toggle.
+    trajectory: Option<(bool, ClickHandler)>,
 }
 
 impl MainTitleBar {
     pub fn new(title: impl Into<SharedString>) -> Self {
-        Self { title: title.into(), nav: None, sidebar: 1., right_pane: None, open_in: None }
+        Self { title: title.into(), nav: None, sidebar: 1., right_pane: None, open_in: None, trajectory: None }
     }
 
     /// The "Open in" control at the right, left of the right pane's button.
     pub fn open_in(mut self, open_in: super::open_in::OpenIn) -> Self {
         self.open_in = Some(open_in);
+        self
+    }
+
+    /// The trajectory's button, left of the right pane's (filled while it shows).
+    pub fn trajectory(mut self, shown: bool, on_toggle: ClickHandler) -> Self {
+        self.trajectory = Some((shown, on_toggle));
         self
     }
 
@@ -233,6 +241,14 @@ impl RenderOnce for MainTitleBar {
                     .child(self.title),
             )
             .when_some(self.open_in, |d, o| d.child(div().mr_1().child(super::open_in::open_in_control(o))))
+            .when_some(self.trajectory, |d, (shown, toggle)| {
+                d.child(
+                    icon_button("toggle-trajectory", Lucide::TextSearch, true, shown)
+                        .mr_0p5()
+                        .tip_action("Trajectory", &ToggleTrajectory)
+                        .on_click(move |e, w, cx| toggle(e, w, cx)),
+                )
+            })
             .when_some(self.right_pane, |d, (open, toggle)| {
                 d.child(
                     icon_button("toggle-right-pane", Lucide::PanelRight, true, open)
@@ -273,7 +289,23 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             .example(
                 Example::new("open in", move |_, _| {
                     let nav = TitleBarNav::inert(false, true, true);
-                    let bar = MainTitleBar::new(title).sidebar(0., nav.clone()).open_in(super::open_in::fixture()).right_pane(false, Rc::new(|_, _, _| {}));
+                    let bar = MainTitleBar::new(title)
+                        .sidebar(0., nav.clone())
+                        .open_in(super::open_in::fixture())
+                        .trajectory(false, Rc::new(|_, _, _| {}))
+                        .right_pane(false, Rc::new(|_, _, _| {}));
+                    div().relative().child(bar).child(nav.overlay(0.)).into_any_element()
+                })
+                .width(px(900.)),
+            )
+            .example(
+                Example::new("trajectory shown", move |_, _| {
+                    let nav = TitleBarNav::inert(false, true, true);
+                    let bar = MainTitleBar::new(title)
+                        .sidebar(0., nav.clone())
+                        .open_in(super::open_in::fixture())
+                        .trajectory(true, Rc::new(|_, _, _| {}))
+                        .right_pane(false, Rc::new(|_, _, _| {}));
                     div().relative().child(bar).child(nav.overlay(0.)).into_any_element()
                 })
                 .width(px(900.)),

@@ -25,7 +25,7 @@ pub struct Scenario {
     pub settings_page: bool,
     /// Contents of the scenario's settings file (a temp file; never `~/.space/settings.json`).
     pub settings: Option<&'static str>,
-    /// Also run the real trajectory plugin, and open the selected thread's Trajectory tab.
+    /// Also run the real trajectory plugin, and show the selected thread's trajectory.
     pub trajectory: bool,
     /// Open the right pane on Files (the project folder: the repo, or the folder given).
     pub files: bool,
@@ -291,7 +291,7 @@ pub fn all() -> Vec<Scenario> {
         },
         Scenario {
             name: "trajectory",
-            description: "Two finished threads; the selected one shows its Trajectory tab.",
+            description: "Two finished threads; the selected one shows its trajectory.",
             threads: vec![explain_thread(), done_thread("Fix the failing test in space-core", "Fixed: the test expected the old message.")],
             trajectory: true,
             ..Default::default()

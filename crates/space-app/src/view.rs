@@ -20,7 +20,7 @@ use space_ui::components::follow_scroll::FollowScrollArea;
 use space_ui::components::right_pane::PaneView;
 use space_ui::components::images::{Pic, ViewerHandlers, viewer};
 use space_ui::components::message_actions::ActionHandlers;
-use space_ui::components::trajectory::{TrajectoryHandlers, TrajectoryView, ViewTab, view_tabs};
+use space_ui::components::trajectory::{TrajectoryHandlers, TrajectoryView};
 use space_ui::components::shell::{
     banner, confirm_card, empty_heading, problem_card, sidebar_column,
 };
@@ -34,7 +34,7 @@ use space_ui::ClickHandler;
 
 use crate::app::{
     CloseSettings, ClosePaneTab, CloseThread, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizePane, NewPaneTab, NewThread,
-    NextPaneTab, OpenSettings, PreviousPaneTab, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleRightPane, ShowTerminal, ShowFiles, ShowSideChat, ShowChanges, ShowChat, ShowTrajectory,
+    NextPaneTab, OpenSettings, PreviousPaneTab, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleRightPane, ShowTerminal, ShowFiles, ShowSideChat, ShowChanges, ToggleTrajectory,
     OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
 };
 use crate::settings::SaveKind;
@@ -101,6 +101,10 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
     })
     .sidebar(shown, nav.clone())
     .when_some((!app.show_settings).then(|| app.open_in_view(cx)).flatten(), |b, o| b.open_in(o))
+    // The trajectory's button: with a trajectory plugin, on a thread that has started.
+    .when(!app.show_settings && app.host.has_trajectory() && app.current().is_some_and(|t| !t.is_empty()), |b| {
+        b.trajectory(app.trajectory_shown(), click(cx, |this, w, cx| this.toggle_trajectory(w, cx)))
+    })
     .when(!app.show_settings && app.current().is_some(), |b| {
         b.right_pane(terminal_open, click(cx, |this, w, cx| this.toggle_right_pane(w, cx)))
     });
@@ -144,8 +148,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .on_action(cx.listener(|this, _: &NextThread, window, cx| this.step_thread(1, window, cx)))
         .on_action(cx.listener(|this, _: &PreviousThread, window, cx| this.step_thread(-1, window, cx)))
         .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
-        .on_action(cx.listener(|this, _: &ShowChat, window, cx| this.show_tab(ViewTab::Chat, window, cx)))
-        .on_action(cx.listener(|this, _: &ShowTrajectory, window, cx| this.show_tab(ViewTab::Trajectory, window, cx)))
+        .on_action(cx.listener(|this, _: &ToggleTrajectory, window, cx| this.toggle_trajectory(window, cx)))
         .on_action(cx.listener(|this, _: &GoBack, window, cx| this.go_back(window, cx)))
         .on_action(cx.listener(|this, _: &GoForward, window, cx| this.go_forward(window, cx)))
         .on_action(cx.listener(|this, _: &FocusComposer, window, cx| this.focus_composer(window, cx)))
@@ -571,14 +574,6 @@ fn body(app: &SpaceApp, streaming: Option<(usize, usize)>, window: &mut Window, 
             .into_any_element();
     }
 
-    // The tabs: only with a trajectory plugin.
-    let has_trajectory = app.host.has_trajectory();
-    let tabs = has_trajectory.then(|| {
-        let this = cx.entity().downgrade();
-        view_tabs(app.view_tab(), Rc::new(move |tab, w, cx| {
-            let _ = this.update(cx, |this, cx| this.show_tab(tab, w, cx));
-        }))
-    });
     let bottom = div()
         .flex_none()
         .w_full()
@@ -589,11 +584,24 @@ fn body(app: &SpaceApp, streaming: Option<(usize, usize)>, window: &mut Window, 
         .pb_2()
         .child(column().gap_2().children(notices).child(composer));
 
-    if app.view_tab() == ViewTab::Trajectory
+    if app.trajectory_shown()
         && let Some(view) = trajectory_view(app, cx)
     {
-        // No composer here: the ledger gets the whole height.
-        return div().flex_1().min_h_0().flex().flex_col().children(tabs).child(view).into_any_element();
+        // No composer here: the ledger gets the whole height. Esc goes back to the chat.
+        return div()
+            .track_focus(&app.trajectories.focus)
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                if e.keystroke.key == "escape" && !e.keystroke.modifiers.modified() {
+                    this.toggle_trajectory(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(view)
+            .into_any_element();
     }
 
     #[cfg(feature = "dev")]
@@ -709,7 +717,7 @@ fn body(app: &SpaceApp, streaming: Option<(usize, usize)>, window: &mut Window, 
     let measure = canvas(move |bounds, _, _| area.set(Some(bounds)), |_, _, _, _| {}).absolute().size_full();
     let transcript = div().relative().flex_1().min_h_0().flex().flex_col().child(measure).child(transcript).children(find_bar);
 
-    div().flex_1().min_h_0().flex().flex_col().children(tabs).child(transcript).child(bottom).into_any_element()
+    div().flex_1().min_h_0().flex().flex_col().child(transcript).child(bottom).into_any_element()
 }
 
 /// Dev: `SPACE_PERF=1` prints, every 2 s, how often the transcript was built (frame interval)
@@ -784,7 +792,7 @@ pub(crate) fn streaming_reply(app: &SpaceApp, thread: &Thread, window: &mut Wind
     Some((last?, shown))
 }
 
-/// The Trajectory tab's view of the selected thread (`None` until its state exists).
+/// The trajectory view of the selected thread (`None` until its state exists).
 fn trajectory_view(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
     let state = app.trajectories.state.as_ref()?;
     // Offered whenever the agent says how (also while it works: the copy is taken when it runs).

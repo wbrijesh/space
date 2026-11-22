@@ -3,7 +3,6 @@
 //! [`TrajectoryPage`] (from the trajectory plugin), the selected row's [`TrajectoryDetail`],
 //! fold state, the search input, the time filter and callbacks ([`TrajectoryHandlers`]).
 //!
-//! * [`view_tabs`]: "Chat | Trajectory" under the title bar.
 //! * [`TrajectoryView`]: toolbar, overview ([`timeline`]), ledger ([`ledger`]), inspector.
 
 pub mod inspector;
@@ -95,53 +94,7 @@ pub fn duration_label(ms: u64) -> String {
     }
 }
 
-// ----- tabs, toolbar, stats -------------------------------------------------------------------
-
-/// Which view of a thread is showing.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum ViewTab {
-    #[default]
-    Chat,
-    Trajectory,
-}
-
-pub type TabHandler = Rc<dyn Fn(ViewTab, &mut Window, &mut App)>;
-
-/// "Chat | Trajectory": text tabs with an accent underline on the selected one.
-pub fn view_tabs(selected: ViewTab, on_select: TabHandler) -> Div {
-    let tab = |t: ViewTab, label: &'static str| {
-        let f = on_select.clone();
-        let on = selected == t;
-        div()
-            .id(label)
-            .h_full()
-            .px_1()
-            .flex()
-            .items_center()
-            .text_size(text::SM)
-            .cursor_pointer()
-            .border_b_2()
-            .map(|d| if on { d.border_color(color::accent()).text_color(color::text()) } else { d.border_color(transparent_black()).text_color(color::text_2()).hover(|s| s.text_color(color::text())) })
-            .child(label)
-            .map(|d| match t {
-                ViewTab::Chat => d.tip_action(label, &crate::actions::ShowChat),
-                ViewTab::Trajectory => d.tip_action(label, &crate::actions::ShowTrajectory),
-            })
-            .on_click(move |_, w, cx| f(t, w, cx))
-    };
-    div()
-        .flex_none()
-        .w_full()
-        .h(size::PANE_BAR_H)
-        .px_4()
-        .flex()
-        .items_end()
-        .gap_4()
-        .border_b_1()
-        .border_color(color::border())
-        .child(tab(ViewTab::Chat, "Chat"))
-        .child(tab(ViewTab::Trajectory, "Trajectory"))
-}
+// ----- toolbar, stats -------------------------------------------------------------------
 
 fn tool_button(id: &'static str, icon: Lucide, label: &'static str, on: bool, f: impl Fn(&mut Window, &mut App) + 'static) -> Stateful<Div> {
     div()
@@ -406,8 +359,10 @@ impl RenderOnce for TrajectoryView {
             .flex_col()
             .bg(color::trajectory_bg())
             .on_key_down(move |e, w, cx| {
+                // Esc clears a picked time range first (and goes no further).
                 if e.keystroke.key == "escape" && range.is_some() {
                     close_range(None, w, cx);
+                    cx.stop_propagation();
                 }
             })
             .child(toolbar)
