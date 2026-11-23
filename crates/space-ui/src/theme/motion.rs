@@ -42,7 +42,7 @@ pub const TIP_FADE: Duration = Duration::from_millis(120);
 /// It times every panel: the sidebar covers its fixed width in this time, and any other panel
 /// move (the right pane sliding in or out, maximizing or restoring it) is timed from it by its
 /// distance ([`panel_duration`]), so all of them move alike.
-pub const SIDEBAR_SLIDE: Duration = Duration::from_millis(250);
+pub const SIDEBAR_SLIDE: Duration = Duration::from_millis(180);
 
 /// How long a panel takes to move `distance`: [`SIDEBAR_SLIDE`] for the sidebar's width, growing
 /// with the square root of the distance. At one constant speed a long move (maximizing across a
@@ -184,8 +184,8 @@ mod tests {
         assert_eq!(panel_duration(sidebar), SIDEBAR_SLIDE);
         assert_eq!(panel_duration(sidebar * 4.), SIDEBAR_SLIDE * 2, "4× as far: 2× as long");
         let ms = |w: f32| panel_duration(gpui::px(w)).as_secs_f64() * 1000.;
-        assert!((ms(520.) - 320.7).abs() < 0.5, "a 520px pane: {}", ms(520.));
-        assert!((ms(764.) - 388.7).abs() < 0.5, "maximizing over a 764px chat: {}", ms(764.));
+        assert!((ms(520.) - 230.9).abs() < 0.5, "a 520px pane: {}", ms(520.));
+        assert!((ms(764.) - 279.9).abs() < 0.5, "maximizing over a 764px chat: {}", ms(764.));
         assert_eq!(panel_duration(gpui::px(0.)), Duration::ZERO);
 
         // A move four times as far settles twice as late.
