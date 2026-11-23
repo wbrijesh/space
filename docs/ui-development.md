@@ -20,7 +20,7 @@ for these.
 | `color` | Palette as functions (`color::text()`, `color::accent()`); `color::ALL` lists them with hex and purpose |
 | `space` | 4px spacing scale for computed values. Plain layout uses GPUI's 4px helpers (`gap_2` = 8px, `px_3` = 12px), the same scale |
 | `size` | Control heights, icon sizes, layout widths (`size::THREAD_ROW_H`, `size::SPINNER_LG`, …) |
-| `radius` | Corner radii (`radius::MD` for buttons and rows, `radius::CARD` for the composer) |
+| `radius` | Corner radii (`radius::MD` for buttons and rows, `radius::XXL` for the composer, `radius::CARD` for bubbles) |
 | `text` | Type scale (`text::MD`, `text::BODY`, …), line heights, `UI_FONT` / `MONO_FONT` |
 | `motion` | Animation cycles and curves: spinner (1.6 s, 8 spokes), dots (1.3 s, 16% stagger), toggle slide (180 ms, ease-out), scroll glide (200 ms), button pop (160 ms, from 0.92) |
 

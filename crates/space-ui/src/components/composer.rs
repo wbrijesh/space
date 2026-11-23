@@ -33,8 +33,9 @@ use crate::format;
 use crate::theme::{color, radius, size, space, text};
 
 /// Card padding.
-const PAD: f32 = space::MD;
-const BUTTON: f32 = size::ROUND_BUTTON;
+const PAD: f32 = space::SM;
+/// "+", send and stop: icons in a square this size (the hit area).
+const BUTTON: f32 = 28.;
 /// The textarea's line height: 1.25rem.
 const LINE: f32 = 20.;
 const SEND_GAP: f32 = space::SM;
@@ -214,8 +215,8 @@ pub struct ComposerControls {
     pub context_open: bool,
     /// The control-row menu that's open.
     pub menu: Option<ComposerMenu>,
-    /// Closed threads in this folder that can be resumed, last closed first. Offered on a new
-    /// thread with nothing typed (empty: no Resume menu).
+    /// Closed threads in this folder that can be resumed, last closed first. Offered under "+"
+    /// on a new thread (empty: "+" attaches straight away).
     pub resumable: Vec<ClosedThread>,
 }
 
@@ -233,8 +234,8 @@ pub struct ClosedThread {
 pub enum ComposerMenu {
     Folder(FolderPage),
     Mode,
-    /// Closed threads to resume.
-    Resume,
+    /// "+": attach files, or resume a closed thread.
+    Plus(PlusPage),
     /// The model picker, at this pane.
     Model(PickerPane),
 }
@@ -245,12 +246,20 @@ impl ComposerMenu {
         match self {
             ComposerMenu::Model(p) => p.back().map(ComposerMenu::Model),
             ComposerMenu::Folder(FolderPage::Branches) => Some(ComposerMenu::Folder(FolderPage::Root)),
+            ComposerMenu::Plus(PlusPage::Resume) => Some(ComposerMenu::Plus(PlusPage::Root)),
             _ => None,
         }
     }
 }
 
 pub type MenuHandler = Rc<dyn Fn(Option<ComposerMenu>, &mut Window, &mut App)>;
+
+/// The "+" menu's pages: its choices, or the closed threads to resume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlusPage {
+    Root,
+    Resume,
+}
 
 /// The folder menu's pages: the folders (with the branch row), or the folder's branches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -442,7 +451,6 @@ impl Composer {
 impl RenderOnce for Composer {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Self { id, input, running, queued, attachments, images, pastes, quote, controls, handlers: h, queued_messages, after_step, commands, attach: can_attach, docked } = self;
-        let focused = input.read(cx).focus_handle(cx).is_focused(window);
         let has_text = !input.read(cx).value().trim().is_empty();
         let blocker = controls.as_ref().and_then(|c| c.blocker.clone());
         let preparing = images.iter().any(Option::is_none);
@@ -504,81 +512,22 @@ impl RenderOnce for Composer {
                 .flex()
                 .items_center()
                 .gap(px(BUTTON_GAP))
+                .child(icon_only("stop", stop_icon(color::text_2()), true).tip("Stop  ⎋").on_click(move |_, w, cx| stop(w, cx)))
                 .child(
-                    div()
-                        .id("stop")
-                        .size(px(BUTTON))
-                        .flex_none()
-                        .rounded_full()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .border_1()
-                        .border_color(color::border_strong())
-                        .cursor_pointer()
-                        .hover(|s| s.bg(color::hover()))
-                        .child(div().size(px(10.)).rounded(px(2.)).bg(color::text_2()))
-                        .tip("Stop  ⎋")
-                        .on_click(move |_, w, cx| stop(w, cx)),
-                )
-                .child(
-                    div()
-                        .id("send-queued")
-                        .size(px(BUTTON))
-                        .flex_none()
-                        .rounded_full()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .map(|d| {
-                            if after_step {
-                                d.bg(color::text()).text_color(color::bg())
-                            } else {
-                                d.bg(color::border_strong()).text_color(color::text())
-                            }
-                        })
-                        .hover(|s| s.opacity(0.85))
-                        .child(Icon::new(IconName::ArrowUp).size(size::ICON_MD))
+                    icon_only("send-queued", Icon::new(IconName::ArrowUp).size(size::ICON_MD), true)
+                        // White with ⌘: sent after the current step; else when the turn is done.
+                        .text_color(if after_step { color::text() } else { color::text_2() })
                         .tip(if after_step { "Send after this step  ⌘⏎" } else { "Send when done  ⏎" })
                         .on_click(move |_, w, cx| if after_step { steer(w, cx) } else { send(w, cx) }),
                 )
                 .into_any_element()
         } else if running {
             let stop = h.on_stop.clone();
-            div()
-                .id("stop")
-                .size(px(BUTTON))
-                .flex_none()
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(color::text())
-                .cursor_pointer()
-                .hover(|s| s.opacity(0.85))
-                .child(div().size(px(10.)).rounded(px(2.)).bg(color::bg()))
-                .tip("Stop")
-                .on_click(move |_, w, cx| stop(w, cx))
-                .into_any_element()
+            icon_only("stop", stop_icon(color::text()), true).tip("Stop").on_click(move |_, w, cx| stop(w, cx)).into_any_element()
         } else {
             let send = h.on_send.clone();
-            div()
-                .id("send")
-                .size(px(BUTTON))
-                .flex_none()
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .map(|d| {
-                    if can_send {
-                        d.bg(color::text()).text_color(color::bg()).cursor_pointer().hover(|s| s.opacity(0.85))
-                    } else {
-                        d.bg(color::pressed()).text_color(color::text_3())
-                    }
-                })
-                .child(Icon::new(IconName::ArrowUp).size(size::ICON_MD))
+            icon_only("send", Icon::new(IconName::ArrowUp).size(size::ICON_MD), can_send)
+                .text_color(if can_send { color::text() } else { color::text_3() })
                 .when(can_send, |d| d.tip("Send  ⏎").on_click(move |_, w, cx| send(w, cx)))
                 .when(blocker.is_some(), |d| d.tip("Can't send right now"))
                 .when(preparing && blocker.is_none(), |d| d.tip("Preparing images…"))
@@ -586,16 +535,46 @@ impl RenderOnce for Composer {
         };
 
         let (attach_fn, focus_fn) = (h.on_attach.clone(), h.on_focus.clone());
+        // With closed threads to resume (a new thread), "+" opens a menu: attach, or resume.
+        let plus_menu = controls.as_ref().filter(|c| c.thread_empty && !c.resumable.is_empty()).map(|c| {
+            let page = match c.menu {
+                Some(ComposerMenu::Plus(page)) => Some(page),
+                _ => None,
+            };
+            (page, c.resumable.clone())
+        });
         let attach = if can_attach {
-            icon_button("attach", IconName::Plus, true, false)
-                .size(px(BUTTON))
-                .rounded_full()
-                .tip("Attach images, files or folders")
-                .on_click(move |_, w, cx| {
-                    focus_fn(w, cx);
-                    attach_fn(w, cx);
-                })
-                .into_any_element()
+            let button = icon_button("attach", IconName::Plus, true, false).size(px(BUTTON)).rounded(radius::MD);
+            match plus_menu {
+                None => button
+                    .tip("Attach images, files or folders")
+                    .on_click(move |_, w, cx| {
+                        focus_fn(w, cx);
+                        attach_fn(w, cx);
+                    })
+                    .into_any_element(),
+                Some((page, resumable)) => {
+                    let on_menu = h.on_menu.clone();
+                    div()
+                        .relative()
+                        .flex_none()
+                        .child(button.when(page.is_some(), |d| d.bg(color::hover())).on_click(move |_, w, cx| {
+                            on_menu(page.is_none().then_some(ComposerMenu::Plus(PlusPage::Root)), w, cx)
+                        }))
+                        .when_some(page, |d, page| {
+                            let close: Handler = {
+                                let on_menu = h.on_menu.clone();
+                                Rc::new(move |w, cx| on_menu(None, w, cx))
+                            };
+                            let menu = match page {
+                                PlusPage::Root => plus_menu_root(&h, close.clone()),
+                                PlusPage::Resume => resume_page(&resumable, &h, close.clone()),
+                            };
+                            d.child(popover(false, menu, move |w, cx| close(w, cx)))
+                        })
+                        .into_any_element()
+                }
+            }
         } else {
             div().w(px(space::XS)).flex_none().into_any_element()
         };
@@ -639,10 +618,10 @@ impl RenderOnce for Composer {
                     d.py(px(PAD))
                 } else {
                     d.p(px(PAD))
-                        .rounded(radius::CARD)
-                        .bg(color::surface())
+                        .rounded(radius::XXL)
+                        .bg(color::composer())
                         .border_1()
-                        .border_color(if focused { color::border_strong() } else { color::border() })
+                        .border_color(color::border())
                         .shadow_md()
                 }
             })
@@ -840,6 +819,25 @@ pub fn mode_icon(icon: Option<&str>) -> Lucide {
 
 /// The one-row layout's buttons after the text: send or stop, or (a message can be queued)
 /// stop and send. The row and `is_expanded` both use it, so they agree.
+/// Send or stop: just the icon, in a [`BUTTON`] square that lights up on hover when `enabled`.
+fn icon_only(id: &'static str, icon: impl IntoElement, enabled: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .size(px(BUTTON))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(radius::MD)
+        .when(enabled, |d| d.cursor_pointer().hover(|s| s.bg(color::hover())))
+        .child(icon)
+}
+
+/// Stop: a filled square.
+fn stop_icon(c: Hsla) -> Div {
+    div().size(px(10.)).rounded(px(2.)).bg(c)
+}
+
 fn trailing_width(queueable: bool) -> f32 {
     if queueable { 2. * BUTTON + BUTTON_GAP } else { BUTTON }
 }
@@ -916,16 +914,7 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
             .min_w_0()
             .child(Icon::new(IconName::Folder).size(size::ICON))
             .child(div().max_w(px(160.)).truncate().child(format::dir_name(&c.cwd)))
-            .children(c.branch.as_ref().map(|b| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .ml_1()
-                    .min_w_0()
-                    .child(Icon::new(Lucide::GitBranch).size(size::ICON_SM).text_color(color::text_3()))
-                    .child(div().max_w(px(140.)).truncate().child(b.head.clone()))
-            }))
+            .children(c.branch.as_ref().map(|b| div().max_w(px(140.)).truncate().text_color(color::text_3()).child(b.head.clone())))
     };
     let folder = if c.thread_empty {
         let page = match menu_open {
@@ -1027,36 +1016,58 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
             })
     });
 
-    let resume = (!c.resumable.is_empty()).then(|| {
-        let is_open = menu_open == Some(ComposerMenu::Resume);
-        trigger("resume-menu", is_open, true)
-            .on_click(toggle_menu(ComposerMenu::Resume))
-            .child(Icon::new(Lucide::Play).size(size::ICON))
-            .child("Resume")
-            .child(chevron())
-            .when(!is_open, |d| d.tip("Resume a closed thread"))
-            .when(is_open, |d| {
-                let menu = resume_menu(&c.resumable, h.on_resume.clone(), close_menu.clone());
-                let close = close_menu.clone();
-                d.child(popover(false, menu, move |w, cx| close(w, cx)))
-            })
-    });
-
     div()
         .flex()
         .items_center()
         .justify_between()
         .pl(px(ROW_INSET_LEFT))
         .pr(px(ROW_INSET_RIGHT))
-        .child(div().flex().items_center().gap_1().min_w_0().child(folder).children(mode).children(resume))
+        .child(div().flex().items_center().gap_1().min_w_0().child(folder).children(mode))
         .child(right)
 }
 
-/// Closed threads of this folder, last closed first: the title and when it was closed.
-pub fn resume_menu(threads: &[ClosedThread], on_resume: StringHandler, close: Handler) -> Div {
-    surface().min_w(px(300.)).child(heading("Closed threads")).child(
-        div().id("resume-list").flex().flex_col().max_h(px(320.)).overflow_y_scroll().children(threads.iter().enumerate().map(|(ix, t)| {
-            let (id, f, close) = (t.id.clone(), on_resume.clone(), close.clone());
+/// "+"'s menu: attach files, or go to the closed threads to resume.
+pub fn plus_menu_root(h: &ComposerHandlers, close: Handler) -> Div {
+    let (attach, on_menu) = (h.on_attach.clone(), h.on_menu.clone());
+    surface()
+        .min_w(px(220.))
+        .child(
+            row("plus-attach")
+                .child(Icon::new(Lucide::Paperclip).size(size::ICON).text_color(color::text_2()))
+                .child(div().flex_1().child("Attach files…"))
+                .on_click(move |_, w, cx| {
+                    close(w, cx);
+                    attach(w, cx)
+                }),
+        )
+        .child(
+            row("plus-resume")
+                .child(Icon::new(Lucide::RotateCcw).size(size::ICON).text_color(color::text_2()))
+                .child(div().flex_1().child("Resume a session"))
+                .child(Icon::new(IconName::ChevronRight).size(size::ICON).text_color(color::text_3()))
+                .on_click(move |_, w, cx| on_menu(Some(ComposerMenu::Plus(PlusPage::Resume)), w, cx)),
+        )
+}
+
+/// "+"'s Resume page: back, then this folder's closed threads, last closed first, with when
+/// each was closed.
+pub fn resume_page(threads: &[ClosedThread], h: &ComposerHandlers, close: Handler) -> Div {
+    let on_menu = h.on_menu.clone();
+    surface()
+        .w(px(320.))
+        .child(
+            row("resume-back")
+                .h(px(28.))
+                .gap_1()
+                .px_1p5()
+                .text_size(text::SM)
+                .text_color(color::text_3())
+                .child(Icon::new(IconName::ChevronLeft).size(size::ICON))
+                .child("Resume a session")
+                .on_click(move |_, w, cx| on_menu(Some(ComposerMenu::Plus(PlusPage::Root)), w, cx)),
+        )
+        .child(div().id("resume-list").flex().flex_col().max_h(px(320.)).overflow_y_scroll().children(threads.iter().enumerate().map(|(ix, t)| {
+            let (id, f, close) = (t.id.clone(), h.on_resume.clone(), close.clone());
             row(("resume", ix))
                 .child(div().flex_1().min_w_0().truncate().child(t.title.clone()))
                 .child(div().flex_none().text_size(text::SM).text_color(color::text_3()).child(t.closed.clone()))
@@ -1064,11 +1075,9 @@ pub fn resume_menu(threads: &[ClosedThread], on_resume: StringHandler, close: Ha
                     close(w, cx);
                     f(id.clone(), w, cx)
                 })
-        })),
-    )
+        })))
 }
 
-/// The context window's use and, with a trajectory plugin, the thread's totals.
 pub fn context_panel(tokens: u64, window: Option<u64>, stats: Option<&TrajectoryStats>) -> Div {
     let tok = |n: u64| format!("{} tok", format::thousands(n));
     let row = |label: &str, value: String| {
@@ -1545,8 +1554,9 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                     t("b", "Terminal plugin with alacritty", "yesterday"),
                     t("c", "Greeting exchange", "3 weeks ago"),
                 ];
-                resume_menu(&threads, Rc::new(|_, _, _| {}), Rc::new(|_, _| {}))
+                resume_page(&threads, &ComposerHandlers::default(), Rc::new(|_, _| {}))
             }),
+            menu("plus", || plus_menu_root(&ComposerHandlers::default(), Rc::new(|_, _| {}))),
         ]),
     ]
 }

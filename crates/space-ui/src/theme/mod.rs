@@ -37,8 +37,10 @@ pub mod color {
         bg = 0x141414ff;
         /// Sidebar, code blocks.
         bg_sidebar = 0x1a1a1aff;
-        /// Raised surfaces: composer card, cards, quiet hover on rows.
+        /// Raised surfaces: cards, quiet hover on rows.
         surface = 0x1f1f1fff;
+        /// The composer's card: a step brighter than other cards, so the input stands out.
+        composer = 0x242424ff;
         /// User bubbles, muted fills.
         surface_2 = 0x262626ff;
         /// Hover fill for buttons.
@@ -160,7 +162,7 @@ pub mod radius {
     /// Cards, banners.
     pub const XL: Pixels = px(10.);
     pub const XXL: Pixels = px(12.);
-    /// Composer card, bubbles.
+    /// Message bubbles, the find bar.
     pub const CARD: Pixels = px(18.);
     pub const ALL: &[(&str, Pixels)] =
         &[("XS", XS), ("SM", SM), ("MD", MD), ("LG", LG), ("XL", XL), ("XXL", XXL), ("CARD", CARD)];
@@ -264,7 +266,8 @@ pub fn install(cx: &mut App) {
         t.background = bg();
         t.foreground = text();
         t.muted = surface_2();
-        t.muted_foreground = text_2();
+        // Inputs' placeholders (and code views' line numbers): the faintest text.
+        t.muted_foreground = text_3();
         t.border = border();
         t.input = border_strong();
         t.ring = accent();

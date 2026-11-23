@@ -11,7 +11,7 @@ use gpui::component::input::InputState;
 use space_core::protocol::service::SettingKind;
 use space_ui::components::model_picker::PickerPane;
 use space_ui::components::composer::{
-    ClosedThread, Composer, ComposerBlocker, ComposerControls, ComposerHandlers, ComposerMenu, FolderPage, Handler, ModeChoice,
+    ClosedThread, Composer, ComposerBlocker, ComposerControls, ComposerHandlers, ComposerMenu, FolderPage, Handler, PlusPage, ModeChoice,
 };
 use space_ui::components::settings::{
     Catalog, FieldView, ModelChoice, PluginApproval, PluginRow, PluginSettingsView, SettingsHandlers, SettingsPage,
@@ -558,22 +558,6 @@ fn body(app: &SpaceApp, streaming: Option<(usize, usize)>, window: &mut Window, 
     let composer = composer(app, thread, cx);
     let column = || div().w_full().max_w(size::CONTENT_MAX_W).flex().flex_col();
 
-    if thread.is_empty() {
-        let _ = window;
-        return div()
-            .id("empty-thread")
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .px_6()
-            .pb(px(72.))
-            .child(column().gap_6().child(empty_heading()).children(notices).child(composer))
-            .into_any_element();
-    }
-
     let bottom = div()
         .flex_none()
         .w_full()
@@ -583,6 +567,21 @@ fn body(app: &SpaceApp, streaming: Option<(usize, usize)>, window: &mut Window, 
         // The same as the gap between the composer's card and its controls row above it.
         .pb_2()
         .child(column().gap_2().children(notices).child(composer));
+
+    // A new thread: the line in the middle of the room above the composer, which is already
+    // where it stays once the conversation starts.
+    if thread.is_empty() {
+        let _ = window;
+        return div()
+            .id("empty-thread")
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(div().flex_1().min_h_0().flex().items_center().justify_center().px_6().child(empty_heading()))
+            .child(bottom)
+            .into_any_element();
+    }
 
     if app.trajectory_shown()
         && let Some(view) = trajectory_view(app, cx)
@@ -1330,7 +1329,8 @@ fn menu_slot(menu: ComposerMenu) -> String {
         ComposerMenu::Folder(FolderPage::Root) => crate::branches::FOLDER_MENU,
         ComposerMenu::Folder(FolderPage::Branches) => crate::branches::BRANCH_PAGE,
         ComposerMenu::Mode => "composer:mode",
-        ComposerMenu::Resume => "composer:resume",
+        ComposerMenu::Plus(PlusPage::Root) => "composer:plus",
+        ComposerMenu::Plus(PlusPage::Resume) => "composer:plus:resume",
         ComposerMenu::Model(PickerPane::Root) => "composer:picker",
         ComposerMenu::Model(PickerPane::Models) => "composer:picker:models",
         ComposerMenu::Model(PickerPane::Efforts) => "composer:picker:efforts",
@@ -1342,7 +1342,7 @@ pub(crate) fn composer_menu(slot: &str) -> Option<ComposerMenu> {
     [PickerPane::Root, PickerPane::Models, PickerPane::Efforts]
         .map(ComposerMenu::Model)
         .into_iter()
-        .chain([ComposerMenu::Folder(FolderPage::Root), ComposerMenu::Folder(FolderPage::Branches), ComposerMenu::Mode, ComposerMenu::Resume])
+        .chain([ComposerMenu::Folder(FolderPage::Root), ComposerMenu::Folder(FolderPage::Branches), ComposerMenu::Mode, ComposerMenu::Plus(PlusPage::Root), ComposerMenu::Plus(PlusPage::Resume)])
         .find(|m| menu_slot(*m) == slot)
 }
 
