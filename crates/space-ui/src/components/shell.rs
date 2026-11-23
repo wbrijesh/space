@@ -72,7 +72,7 @@ pub fn activity_bar(active: Option<Activity>, settings: bool, on_pick: ActivityH
             .justify_center()
             .rounded(radius::LG)
             .cursor_pointer()
-            .map(|d| if on { d.bg(color::hover()).text_color(color::text()) } else { d.text_color(color::text_3()) })
+            .map(|d| if on { d.bg(color::pressed()).text_color(color::text()) } else { d.text_color(color::text_3()) })
             .hover(|s| s.bg(color::hover()).text_color(color::text()))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(icon.size(px(21.)))
