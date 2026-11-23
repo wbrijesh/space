@@ -212,6 +212,10 @@ impl SpaceApp {
 
     pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_settings = true;
+        // Its sections are listed in the sidebar: show it.
+        if !self.sidebar_open {
+            self.toggle_sidebar(cx);
+        }
         // Off the composer (it's hidden), so Esc reaches the page.
         window.focus(&self.focus, cx);
         self.refresh_permission(cx);

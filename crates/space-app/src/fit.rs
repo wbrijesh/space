@@ -23,11 +23,20 @@ impl SpaceApp {
         !self.show_settings && self.selected.and_then(|k| self.terminals.pane(k)).is_some_and(|p| p.open && !p.maximized)
     }
 
-    /// The main column (chat and pane) beside the sidebar, where the sidebar is headed: the
-    /// content panel's inside (its insets and border off).
+    /// The content's room (the chat's panel, the gap and the pane's panel) right of the left
+    /// panel (the activity bar, and the sidebar where it's headed); the gaps around off.
     pub(crate) fn main_width(&self, window: &Window) -> f32 {
-        let panel = 2. * f32::from(size::PANEL_INSET) + 2.;
-        f32::from(window.viewport_size().width) - f32::from(size::SIDEBAR_W) * self.sidebar_shown.target() - panel
+        f32::from(window.viewport_size().width)
+            - f32::from(size::ACTIVITY_W)
+            - 2.
+            - f32::from(size::SIDEBAR_W) * self.sidebar_shown.target()
+            - 2. * f32::from(size::PANEL_INSET)
+            - f32::from(size::PANEL_GAP)
+    }
+
+    /// The widest the pane can be dragged and leave the chat its minimum (and the gap).
+    pub(crate) fn pane_room(&self, window: &Window) -> f32 {
+        self.main_width(window) - f32::from(size::CHAT_MIN_W) - f32::from(size::PANEL_GAP)
     }
 
     /// The pane's width as drawn: its set width, but never wider than the main column (a window
@@ -39,7 +48,7 @@ impl SpaceApp {
     /// How wide the chat column is, with the sidebar and pane where they're headed.
     fn chat_width(&self, window: &Window) -> f32 {
         let main = self.main_width(window);
-        if self.pane_beside() { main - self.pane_width(window) } else { main }
+        if self.pane_beside() { main - self.pane_width(window) - f32::from(size::PANEL_GAP) } else { main }
     }
 
     /// The window was resized. Narrower, with the chat under its minimum: close the pane, then
@@ -72,7 +81,7 @@ impl SpaceApp {
                 let room = match last {
                     Closed::Sidebar => chat - f32::from(size::SIDEBAR_W),
                     // Another thread's pane takes no room from this chat.
-                    Closed::Pane(k) if Some(k) == self.selected && !self.show_settings => chat - self.terminals.width,
+                    Closed::Pane(k) if Some(k) == self.selected && !self.show_settings => chat - self.terminals.width - f32::from(size::PANEL_GAP),
                     Closed::Pane(_) => chat,
                 };
                 if room < min {

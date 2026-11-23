@@ -397,6 +397,8 @@ pub struct SpaceApp {
     /// The selected thread's transcript; every thread opens at the bottom.
     pub(crate) transcript_scroll: FollowScroll,
     pub(crate) sidebar_open: bool,
+    /// What the sidebar shows (the activity bar's pick).
+    pub(crate) activity: space_ui::components::shell::Activity,
     /// The window's width when last resized: only narrowing closes panels (`fit`).
     pub(crate) window_width: f32,
     /// What narrowing closed, in order, to reopen on widening (`fit`).
@@ -725,6 +727,7 @@ impl SpaceApp {
             usage_open: None,
             transcript_scroll: FollowScroll::new(),
             sidebar_open: true,
+            activity: Default::default(),
             window_width: f32::from(window.viewport_size().width),
             auto_closed: Vec::new(),
             sidebar_shown: space_ui::theme::motion::Spring::new(1.),
@@ -1333,6 +1336,20 @@ impl SpaceApp {
             return;
         }
         self.transcript_scroll.glide_to_bottom();
+        cx.notify();
+    }
+
+    /// An activity bar item: show it in the sidebar (opening the sidebar), or hide the sidebar
+    /// when it's the one shown. From Settings, it goes back to the thread first.
+    pub(crate) fn pick_activity(&mut self, activity: space_ui::components::shell::Activity, window: &mut Window, cx: &mut Context<Self>) {
+        let shown = self.sidebar_open && !self.show_settings && self.activity == activity;
+        if self.show_settings {
+            self.close_settings(window, cx);
+        }
+        self.activity = activity;
+        if shown || !self.sidebar_open {
+            self.toggle_sidebar(cx);
+        }
         cx.notify();
     }
 

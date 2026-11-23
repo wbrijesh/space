@@ -56,14 +56,17 @@ pub fn open_in_control(o: OpenIn) -> Div {
     let OpenIn { current, apps, menu_open, on_open, on_menu, on_pick, on_copy_path } = o;
     let toggle = on_menu.clone();
     let close = on_menu.clone();
+    // One button in two halves (open, and the menu), inside a single border with a hairline
+    // between them; each half lights up on its own.
+    let inner = radius::MD - px(1.);
     let open = div()
         .id("open-in")
-        .h(px(26.))
+        .h_full()
         .pl(px(6.))
-        .pr_1()
+        .pr(px(5.))
         .flex()
         .items_center()
-        .rounded_l(radius::MD)
+        .rounded_l(inner)
         .cursor_pointer()
         .hover(|s| s.bg(color::hover()))
         .child(app_icon(current.icon.clone(), px(16.)))
@@ -72,11 +75,11 @@ pub fn open_in_control(o: OpenIn) -> Div {
     let chevron = div()
         .id("open-in-menu")
         .relative()
-        .h(px(26.))
+        .h_full()
         .px_1()
         .flex()
         .items_center()
-        .rounded_r(radius::MD)
+        .rounded_r(inner)
         .cursor_pointer()
         .hover(|s| s.bg(color::hover()))
         .when(menu_open, |d| d.bg(color::hover()))
@@ -85,7 +88,16 @@ pub fn open_in_control(o: OpenIn) -> Div {
         .when(menu_open, |d| {
             d.child(menu::dropdown(true, open_in_menu(&apps, on_pick, on_copy_path), move |w, cx| close(false, w, cx)))
         });
-    div().flex().items_center().child(open).child(chevron)
+    div()
+        .h(px(26.))
+        .flex()
+        .items_center()
+        .rounded(radius::MD)
+        .border_1()
+        .border_color(color::border())
+        .child(open)
+        .child(div().w(px(1.)).h_full().bg(color::border()))
+        .child(chevron)
 }
 
 /// The menu: each app with its icon and name (editors, Finder, terminals), then Copy Path.

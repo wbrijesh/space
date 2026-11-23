@@ -366,7 +366,7 @@ impl SpaceApp {
             self.pane_max.snap(target);
             self.pane_max_for = self.selected;
         } else if self.pane_max.target() != target {
-            let chat = self.main_width(window) - self.pane_width(window);
+            let chat = self.main_width(window) - self.pane_width(window) - f32::from(space_ui::theme::size::PANEL_GAP);
             crate::app::slide(&mut self.pane_max, target, px(chat.max(0.)), cx);
         }
     }

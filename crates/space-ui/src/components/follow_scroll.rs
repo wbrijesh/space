@@ -387,7 +387,8 @@ pub struct FollowScrollArea {
     id: ElementId,
     state: FollowScroll,
     content: AnyElement,
-    fade: bool,
+    /// The background the content fades into over the bottom edge, if it does.
+    fade: Option<Hsla>,
     button: bool,
     force_hover: bool,
     on_follow_change: Option<FollowHandler>,
@@ -399,16 +400,22 @@ impl FollowScrollArea {
             id: id.into(),
             state: state.clone(),
             content: content.into_any_element(),
-            fade: false,
+            fade: None,
             button: false,
             force_hover: false,
             on_follow_change: None,
         }
     }
 
-    /// Fade the content into the background over the bottom edge ([`scroll_fade`]).
+    /// Fade the content into the chat's background over the bottom edge ([`scroll_fade`]).
     pub fn fade(mut self, on: bool) -> Self {
-        self.fade = on;
+        self.fade = on.then(color::bg);
+        self
+    }
+
+    /// Fade into `bg` instead (an area on another background, as the right pane's).
+    pub fn fade_into(mut self, bg: Hsla) -> Self {
+        self.fade = Some(bg);
         self
     }
 
@@ -453,7 +460,7 @@ impl RenderOnce for FollowScrollArea {
             .flex()
             .flex_col()
             .child(Tracked { state, on_follow_change, child: scroll.into_any_element() })
-            .when(fade, |d| d.child(scroll_fade()))
+            .when_some(fade, |d, bg| d.child(scroll_fade(bg)))
             .children(button)
     }
 }
@@ -501,11 +508,10 @@ fn scroll_button(state: FollowScroll, opacity: f32, clickable: bool, force_hover
         .child(circle)
 }
 
-/// Fade over the bottom edge of a scroll area so content dims into the background before it
-/// meets the composer. Place inside a `relative()` parent, after the scroll container. Has no
+/// Fade over the bottom edge of a scroll area so content dims into the background (`bg`) before
+/// it meets the composer. Place inside a `relative()` parent, after the scroll container. Has no
 /// hitbox, so wheel and clicks pass through to the content below.
-pub fn scroll_fade() -> Div {
-    let bg = color::bg();
+pub fn scroll_fade(bg: Hsla) -> Div {
     div()
         .absolute()
         .left_0()

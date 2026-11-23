@@ -22,14 +22,17 @@ use space_ui::components::images::{Pic, ViewerHandlers, viewer};
 use space_ui::components::message_actions::ActionHandlers;
 use space_ui::components::trajectory::{TrajectoryHandlers, TrajectoryView};
 use space_ui::components::shell::{
-    banner, confirm_card, empty_heading, problem_card, sidebar_column,
+    Activity, activity_bar, banner, confirm_card, empty_heading, panel, problem_card, side_panel, sidebar_column, sidebar_header,
 };
 use space_ui::components::thread_row::{RowIndicator, ThreadRow, section_header};
-use space_ui::components::title_bar::{MainTitleBar, SidebarTitleBar, TitleBarNav};
+use space_ui::components::tip::TipExt as _;
+use space_ui::components::title_bar::{TitleBar, TitleBarNav};
+use gpui::component::Icon;
+use gpui::assets::IconName as Lucide;
 use space_ui::components::find::find_bar;
 use space_ui::components::transcript::{FindMarks, TranscriptView, UserExtras, transcript_items};
 use space_ui::format::{self, Preview};
-use space_ui::theme::{color, radius, size, text};
+use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
 
 use crate::app::{
@@ -63,16 +66,11 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         window.request_animation_frame();
     }
     let nav = TitleBarNav {
-        sidebar_open: app.sidebar_open,
         // On the Settings page, Back returns to the current thread.
         can_back: (app.show_settings && app.current().is_some()) || app.back.iter().any(|k| app.thread(*k).is_some()),
         can_forward: app.forward.iter().any(|k| app.thread(*k).is_some()),
-        on_toggle_sidebar: click(cx, |this, _, cx| this.toggle_sidebar(cx)),
         on_back: click(cx, |this, w, cx| this.go_back(w, cx)),
         on_forward: click(cx, |this, w, cx| this.go_forward(w, cx)),
-        on_new_thread: click(cx, |this, w, cx| this.new_thread(None, w, cx)),
-        new_thread_active: !app.show_settings && app.current().is_some_and(Thread::is_empty),
-        back_pinned: app.show_settings,
     };
 
     // The terminal pane, when the current thread has it open (and a terminal plugin runs).
@@ -94,12 +92,16 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
             terminal_shown > 0. && !app.show_settings && app.terminals.pane(*k).is_some()
         })
     });
-    let title_bar = MainTitleBar::new(if app.show_settings {
+    // The content starts after the left panel (the activity bar, and the sidebar as far as it's
+    // shown) and the gaps on either side of it.
+    let inset = size::PANEL_INSET;
+    let content_x = f32::from(size::ACTIVITY_W) + f32::from(size::SIDEBAR_W) * shown + f32::from(inset) + f32::from(size::PANEL_GAP);
+    let title = if app.show_settings {
         format!("Settings · {}", app.current_settings_tab().label())
     } else {
         app.current().map(|t| t.title()).unwrap_or_default()
-    })
-    .sidebar(shown, nav.clone())
+    };
+    let title_bar = TitleBar::new(title, nav, content_x)
     .when_some((!app.show_settings).then(|| app.open_in_view(cx)).flatten(), |b, o| b.open_in(o))
     // The trajectory's button: with a trajectory plugin, on a thread that has started.
     .when(!app.show_settings && app.host.has_trajectory() && app.current().is_some_and(|t| !t.is_empty()), |b| {
@@ -109,7 +111,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         b.right_pane(terminal_open, click(cx, |this, w, cx| this.toggle_right_pane(w, cx)))
     });
     let content = if app.show_settings {
-        settings(app, window, cx)
+        panel().flex_1().min_w_0().flex().flex_col().child(settings(app, window, cx)).into_any_element()
     } else {
         let streaming = app.prepare_transcript(window, cx);
         let body = body(app, streaming, window, cx);
@@ -121,27 +123,37 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         };
         match terminal_drawn {
             Some(key) => with_terminal(app, key, body, terminal_shown, window, cx),
-            None => body,
+            None => panel().flex_1().min_w_0().flex().flex_col().child(body).into_any_element(),
         }
     };
-    // The content sits in a panel of its own, inset from the window's chrome (the title bar and
-    // the sidebar share the chrome's tone).
-    let inset = size::PANEL_INSET;
-    let panel = div()
+    // Under the title bar, on the window's chrome with a small gap around each: the left panel
+    // (the activity bar, and the sidebar's view beside it, revealed as the panel widens while
+    // it slides in, the view anchored to its right edge), then the content's panels.
+    let activity = {
+        let active = (!app.show_settings && app.sidebar_open).then_some(app.activity);
+        let this = cx.entity().downgrade();
+        let on_pick = Rc::new(move |a, w: &mut Window, cx: &mut App| {
+            let _ = this.update(cx, |this, cx| this.pick_activity(a, w, cx));
+        });
+        activity_bar(active, app.show_settings, on_pick, click(cx, |this, w, cx| this.toggle_settings(w, cx)))
+    };
+    let sidebar_view = (shown > 0.).then(|| {
+        // The hairline beside the icons is the opening's own edge, so it's there from the first
+        // frame of the slide; the view slides in behind it.
+        div().relative().flex_none().h_full().overflow_hidden().w(size::SIDEBAR_W * shown).border_l_1().border_color(color::border()).child(
+            div().absolute().top_0().right_0().h_full().w(size::SIDEBAR_W - px(1.)).child(sidebar(app, cx)),
+        )
+    });
+    let left_panel = side_panel().flex_none().h_full().flex().child(activity).children(sidebar_view);
+    let below = div()
         .flex_1()
         .min_h_0()
         .flex()
-        .flex_col()
-        .ml(inset)
-        .mr(inset)
-        .mb(inset)
-        .rounded(radius::XL)
-        .border_1()
-        .border_color(color::border())
-        .bg(color::bg())
-        .overflow_hidden()
-        .child(content);
-    let main = div().flex().flex_col().flex_1().min_w_0().h_full().child(title_bar).child(panel);
+        .gap(size::PANEL_GAP)
+        .px(inset)
+        .pb(inset)
+        .child(left_panel)
+        .child(div().flex_1().min_w_0().h_full().flex().child(content));
 
     div()
         .id("space-root")
@@ -264,7 +276,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
                                 return;
                             }
                             let _ = moved.update(cx, |this, cx| {
-                                let room = this.main_width(window) - f32::from(size::CHAT_MIN_W);
+                                let room = this.pane_room(window);
                                 this.terminals.drag_to(f32::from(e.position.x), room);
                                 cx.notify();
                             });
@@ -304,26 +316,14 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         })
         .size_full()
         .flex()
+        .flex_col()
         .bg(color::bg_sidebar())
         .text_color(color::text())
         .font_family(text::UI_FONT)
         .text_size(text::MD)
         .relative()
-        // The sidebar slides in from the left at full width, revealed by its column growing,
-        // while the main column narrows beside it.
-        .when(shown > 0., |d| {
-            d.child(
-                div()
-                    .relative()
-                    .flex_none()
-                    .h_full()
-                    .overflow_hidden()
-                    .w(size::SIDEBAR_W * shown)
-                    .child(div().absolute().top_0().right_0().h_full().child(sidebar(app, nav.clone(), shown, cx))),
-            )
-        })
-        .child(main)
-        .child(nav.overlay(shown))
+        .child(title_bar)
+        .child(below)
         .child(space_ui::components::tip::layer(window, cx))
         .children(app.quote_button(window, cx))
         .children(app.paste_view.as_ref().map(|(body, chars)| {
@@ -347,8 +347,9 @@ fn queued_pic(p: &crate::images::Prepared) -> Pic {
     Pic { src: Arc::new(Image::from_bytes(p.gpui_format(), p.bytes.to_vec())).into(), width: p.width, height: p.height }
 }
 
-fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceApp>) -> impl IntoElement {
-    // Settings lists its sections here instead of the threads.
+/// The sidebar's box: Settings' sections while its page is open, else what the activity bar
+/// picked: the threads (with a new one), or for views still to come, just their header.
+fn sidebar(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> impl IntoElement {
     if app.show_settings {
         let current = app.current_settings_tab();
         let rows = app
@@ -363,7 +364,10 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
                     .into_any_element()
             })
             .collect();
-        return sidebar_column(SidebarTitleBar::new(nav).shown(shown), rows, &app.sidebar_scroll);
+        return sidebar_column(sidebar_header("Settings", None), rows, &app.sidebar_scroll);
+    }
+    if app.activity != Activity::Threads {
+        return sidebar_column(sidebar_header(app.activity.label(), None), Vec::new(), &app.sidebar_scroll);
     }
     let shortcuts = app.row_shortcuts();
     // Pinned threads first, then by day (`listed_sections`); a new thread isn't listed until
@@ -406,14 +410,31 @@ fn sidebar(app: &SpaceApp, nav: TitleBarNav, shown: f32, cx: &mut Context<SpaceA
         })
         .collect();
 
-    sidebar_column(SidebarTitleBar::new(nav).shown(shown), rows, &app.sidebar_scroll)
+    // Just the icon: it brightens under the pointer.
+    let new_thread = div()
+        .id("new-thread")
+        .size(px(24.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .text_color(color::text_2())
+        .hover(|s| s.text_color(color::text()))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(Icon::new(Lucide::Plus).size(size::ICON))
+        .tip_action("New thread", &NewThread)
+        .on_click(cx.listener(|this, _, w, cx| this.new_thread(None, w, cx)))
+        .into_any_element();
+    sidebar_column(sidebar_header("Threads", Some(new_thread)), rows, &app.sidebar_scroll)
 }
 
 /// The thread's body with the terminal pane beside it (or instead of it, maximized). `shown`:
 /// how far the pane has slid in (0..1); its column grows to its width while the pane inside
 /// keeps that width, so it slides in from the right without its terminal resizing. While it
 /// maximizes or restores, the pane lies over the chat, its left edge moving across it (as a drag
-/// of its divider would), and the chat keeps its width beneath so its text doesn't reflow.
+/// The chat's box with the right pane's box beside it, a gap between them that resizes the
+/// pane; or the pane's box over both, maximized. `shown`: how far the pane is slid in (0..1);
+/// its box is revealed from its left edge by a slot growing to its width and the gap.
 fn with_terminal(
     app: &mut SpaceApp,
     key: u64,
@@ -422,71 +443,47 @@ fn with_terminal(
     window: &mut Window,
     cx: &mut Context<SpaceApp>,
 ) -> AnyElement {
+    let chat_box = |body: AnyElement| panel().flex().flex_col().h_full().child(body);
     if app.terminals.pane(key).is_none() {
-        return body;
+        return chat_box(body).flex_1().min_w_0().into_any_element();
     }
     let (max, _) = app.pane_max_at(cx);
     // Settled over the chat, or beside it; anything between is the maximize slide.
     let (full, beside) = (max >= 1., max <= 0.);
+    let gap = size::PANEL_GAP;
     let width = px(app.pane_width(window));
-    let chat = px(app.main_width(window)) - width;
-    let sliding = beside && shown < 1.;
-    let pane = terminal_pane(app, key, window, cx);
-    let pane = if sliding {
-        div().absolute().top_0().left_0().h_full().w(width).flex().flex_col().child(pane).into_any_element()
+    let chat = px(app.main_width(window)) - width - gap;
+    let pane = side_panel().size_full().flex().flex_col().child(terminal_pane(app, key, window, cx));
+    let divider = div()
+        .id("terminal-divider")
+        .absolute()
+        .top_0()
+        .left(px(-2.))
+        .w(gap + px(4.))
+        .h_full()
+        .cursor_col_resize()
+        .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+            this.terminals.drag = Some((f32::from(e.position.x), this.terminals.width));
+            cx.stop_propagation();
+            cx.notify();
+        }));
+    let chat_box = chat_box(body).map(|d| if beside { d.flex_1().min_w_0() } else { d.flex_none().w(chat) }).when(full, |d| d.hidden());
+    let pane_slot = if full {
+        div().flex_1().min_w_0().h_full().child(pane)
+    } else if beside {
+        div()
+            .relative()
+            .flex_none()
+            .h_full()
+            .overflow_hidden()
+            .w((width + gap) * shown)
+            .child(div().absolute().top_0().left(gap).h_full().w(width).child(pane))
+            .child(divider)
     } else {
-        pane
+        // Growing over the chat's box from the right.
+        div().absolute().top_0().right_0().h_full().w(width + (chat + gap) * max).child(pane)
     };
-    div()
-        .flex_1()
-        .min_h_0()
-        .flex()
-        .relative()
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .map(|d| if beside { d.flex_1().min_w_0() } else { d.flex_none().w(chat).overflow_hidden() })
-                .when(full, |d| d.hidden())
-                .child(body),
-        )
-        .child(
-            div()
-                .h_full()
-                .flex()
-                .flex_col()
-                .map(|d| {
-                    if full {
-                        d.relative().flex_1().min_w_0()
-                    } else if beside {
-                        d.relative().flex_none().w(width * shown)
-                    } else {
-                        d.absolute().top_0().right_0().w(width + chat * max).bg(color::bg())
-                    }
-                })
-                .when(sliding, |d| d.overflow_hidden())
-                .child(pane)
-                // Beside the chat: a hairline like the title bar's, and a handle on it to resize.
-                .when(!full, |d| d.border_l_1().border_color(color::border()))
-                .when(beside, |d| {
-                    d.child(
-                        div()
-                            .id("terminal-divider")
-                            .absolute()
-                            .top_0()
-                            .left(px(-4.))
-                            .w(px(7.))
-                            .h_full()
-                            .cursor_col_resize()
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
-                                this.terminals.drag = Some((f32::from(e.position.x), this.terminals.width));
-                                cx.stop_propagation();
-                                cx.notify();
-                            })),
-                    )
-                }),
-        )
-        .into_any_element()
+    div().flex_1().min_w_0().h_full().flex().relative().child(chat_box).child(pane_slot).into_any_element()
 }
 
 /// The right pane: its tabs, then the one shown.
@@ -523,7 +520,7 @@ fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Con
         Some(PaneTab::Changes) => app.changes_content(key, window, cx),
     };
     let tabs = app.strip_tabs(key);
-    div().size_full().flex().flex_col().bg(color::bg()).child(header(&tabs, active, maximized, &handlers)).child(content).into_any_element()
+    div().size_full().flex().flex_col().child(header(&tabs, active, maximized, &handlers)).child(content).into_any_element()
 }
 
 /// A terminal tab: its terminal, or why there's none.

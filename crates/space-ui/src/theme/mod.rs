@@ -35,7 +35,9 @@ pub mod color {
     colors! {
         /// Window / main column background.
         bg = 0x101010ff;
-        /// The window's chrome (title bar, sidebar, around the content panel), code blocks.
+        /// The window's chrome (title bar, around the panels) and the side panels (the left
+        /// panel, the right pane): a step lighter than the chat's panel, which is where the work
+        /// is. Also code blocks' headers.
         bg_sidebar = 0x1a1a1aff;
         /// Raised surfaces: cards, quiet hover on rows.
         surface = 0x1f1f1fff;
@@ -104,7 +106,7 @@ pub mod color {
         /// Selected row on the Trajectory background.
         trajectory_selected = 0x262626ff;
         /// Terminal colors: GitHub Dark's ANSI palette (Space's accents are its values). The
-        /// terminal's background is `bg`, the thread's; its text is `text`.
+        /// terminal's background is `bg_sidebar`, the right pane's; its text is `text`.
         term_black = 0x484f58ff;
         term_red = 0xff7b72ff;
         term_green = 0x3fb950ff;
@@ -124,7 +126,7 @@ pub mod color {
     }
 }
 
-/// The terminal's palette (`0xRRGGBB`), from the tokens: the background is the thread's.
+/// The terminal's palette (`0xRRGGBB`), from the tokens: the background is the right pane's.
 pub fn terminal_palette() -> space_terminal::Palette {
     let hex = |name: &str| ALL_COLORS.iter().find(|(n, _, _)| *n == name).map_or(0, |(_, v, _)| v >> 8);
     let ansi = [
@@ -133,7 +135,7 @@ pub fn terminal_palette() -> space_terminal::Palette {
         "term_bright_magenta", "term_bright_cyan", "term_bright_white",
     ]
     .map(hex);
-    space_terminal::Palette { ansi, foreground: hex("text"), background: hex("bg"), cursor: hex("text") }
+    space_terminal::Palette { ansi, foreground: hex("text"), background: hex("bg_sidebar"), cursor: hex("text") }
 }
 
 use color::ALL as ALL_COLORS;
@@ -174,6 +176,11 @@ pub mod size {
     pub const TITLE_BAR_H: Pixels = px(36.);
     /// The content panel's distance from the window's edges and the sidebar.
     pub const PANEL_INSET: Pixels = px(4.);
+    /// Between two panels: two-thirds of the inset, since two borders face each other there
+    /// and the same space reads wider than at the window's edge.
+    pub const PANEL_GAP: Pixels = px(8. / 3.);
+    /// The activity bar's width (its icons and the room around them).
+    pub const ACTIVITY_W: Pixels = px(44.);
     /// The bars along the top of a pane (Chat | Trajectory, the terminal's tabs), the same
     /// height so they line up side by side. Includes the bottom border.
     pub const PANE_BAR_H: Pixels = px(33.);

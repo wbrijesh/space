@@ -5,20 +5,125 @@ use gpui::component::{Icon, IconName};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
+use super::tip::TipExt as _;
 use super::widgets::{icon_button, pill_button};
 use crate::ClickHandler;
 use crate::theme::{color, radius, size, text};
 
-/// Sidebar column: title bar segment and the scrolling thread list. The rows are the list's
-/// direct children, so `scroll` can tell which are in view.
-pub fn sidebar_column(title_bar: impl IntoElement, rows: Vec<AnyElement>, scroll: &ScrollHandle) -> Div {
+/// A panel on the window's chrome: rounded, with a hairline, what's inside clipped to it. The
+/// chat's is the darkest (where the work is): [`panel`]; the left panel's and the right
+/// pane's take the chrome's lighter tone: [`side_panel`].
+pub fn panel() -> Div {
+    div().rounded(radius::XL).border_1().border_color(color::border()).bg(color::bg()).overflow_hidden()
+}
+
+/// A panel beside the chat's (the left panel, the right pane), in the chrome's tone.
+pub fn side_panel() -> Div {
+    panel().bg(color::bg_sidebar())
+}
+
+/// What the activity bar can show in the sidebar.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Activity {
+    #[default]
+    Threads,
+    Search,
+    SourceControl,
+    Automations,
+    Plugins,
+}
+
+impl Activity {
+    pub const ALL: [Activity; 5] = [Activity::Threads, Activity::Search, Activity::SourceControl, Activity::Automations, Activity::Plugins];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Activity::Threads => "Threads",
+            Activity::Search => "Search",
+            Activity::SourceControl => "Source control",
+            Activity::Automations => "Automations",
+            Activity::Plugins => "Plugins",
+        }
+    }
+
+    fn icon(self) -> Icon {
+        match self {
+            Activity::Threads => Icon::new(Lucide::MessagesSquare),
+            Activity::Search => Icon::new(IconName::Search),
+            Activity::SourceControl => Icon::new(Lucide::GitPullRequest),
+            Activity::Automations => Icon::new(Lucide::Zap),
+            Activity::Plugins => Icon::new(Lucide::Blocks),
+        }
+    }
+}
+
+pub type ActivityHandler = std::rc::Rc<dyn Fn(Activity, &mut Window, &mut App)>;
+
+/// The activity bar, the left panel's icon column: what the sidebar can show, then Settings at
+/// the bottom. `active`: the item shown (in the open sidebar), or Settings while its page is
+/// open. Big icons in snug cells, as editors draw theirs.
+pub fn activity_bar(active: Option<Activity>, settings: bool, on_pick: ActivityHandler, on_settings: ClickHandler) -> Div {
+    let item = |id: ElementId, icon: Icon, on: bool| {
+        div()
+            .id(id)
+            .size(px(36.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(radius::LG)
+            .cursor_pointer()
+            .map(|d| if on { d.bg(color::hover()).text_color(color::text()) } else { d.text_color(color::text_3()) })
+            .hover(|s| s.bg(color::hover()).text_color(color::text()))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(icon.size(px(21.)))
+    };
+    let items = Activity::ALL.map(|a| {
+        let pick = on_pick.clone();
+        item(ElementId::Name(format!("activity-{}", a.label()).into()), a.icon(), active == Some(a))
+            .tip(a.label())
+            .on_click(move |_, w, cx| pick(a, w, cx))
+    });
+    div()
+        .w(size::ACTIVITY_W)
+        .flex_none()
+        .h_full()
+        .pt(px(4.))
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(2.))
+        .children(items)
+        .child(div().flex_1())
+        .child(item("activity-settings".into(), Icon::new(Lucide::Settings), settings).tip("Settings").on_click(move |e, w, cx| on_settings(e, w, cx)))
+        .child(div().h(px(4.)))
+}
+
+/// The sidebar's header: what it shows, and its one action (Threads: a new thread).
+pub fn sidebar_header(title: impl Into<SharedString>, action: Option<AnyElement>) -> Div {
+    div()
+        .h(px(36.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_between()
+        .pl_3()
+        .pr_1p5()
+        .text_size(text::SM)
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(color::text_2())
+        .child(title.into())
+        .children(action)
+}
+
+/// The sidebar's view, beside the activity bar in the left panel: its header, then the
+/// scrolling list. The rows are the list's direct children, so `scroll` can tell which are in
+/// view.
+pub fn sidebar_column(header: impl IntoElement, rows: Vec<AnyElement>, scroll: &ScrollHandle) -> Div {
     div()
         .flex()
         .flex_col()
-        .w(size::SIDEBAR_W)
-        .flex_none()
-        .h_full()
-        .child(title_bar)
+        .size_full()
+        .child(header)
         .child(
             div()
                 .id("thread-list")
@@ -29,8 +134,7 @@ pub fn sidebar_column(title_bar: impl IntoElement, rows: Vec<AnyElement>, scroll
                 .flex()
                 .flex_col()
                 .gap_0p5()
-                .px_2()
-                .pt_1()
+                .px_1p5()
                 .pb_4()
                 .children(rows),
         )
