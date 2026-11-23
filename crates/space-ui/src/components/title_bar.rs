@@ -12,7 +12,7 @@ use super::tip::TipExt as _;
 use super::widgets::icon_button;
 use crate::ClickHandler;
 use crate::actions::{GoBack, GoForward, NewThread, ToggleRightPane, ToggleSidebar, ToggleTrajectory};
-use crate::theme::{color, size, text};
+use crate::theme::{size, text};
 
 /// Makes `el` a window drag region: dragging moves the window, a double click zooms or
 /// minimizes (per the macOS setting). Controls inside stop mouse-down propagation.
@@ -129,7 +129,7 @@ impl TitleBarNav {
 
 /// With the sidebar hidden, where the main title bar's title starts (window x): after the
 /// sidebar toggle, the only button left.
-const HIDDEN_TITLE_X: f32 = 92. + 28. + 12.;
+const HIDDEN_TITLE_X: f32 = 76. + 28. + 8.;
 
 /// Title bar segment over the sidebar column (the nav overlay sits on its left).
 #[derive(IntoElement)]
@@ -159,7 +159,7 @@ impl RenderOnce for SidebarTitleBar {
             .flex()
             .items_center()
             .justify_end()
-            .pr_2()
+            .pr_1()
             .child(div().opacity(((self.shown - 0.7) / 0.3).clamp(0., 1.)).child(self.nav.new_thread()))
     }
 }
@@ -215,7 +215,8 @@ impl RenderOnce for MainTitleBar {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         // Positions in window x, made relative to this bar's left edge (the sidebar's width).
         let edge = f32::from(size::SIDEBAR_W) * self.sidebar;
-        let shown_title_x = f32::from(size::SIDEBAR_W) + 16.;
+        // Over the content panel, a little in from its edge.
+        let shown_title_x = f32::from(size::SIDEBAR_W) + f32::from(size::PANEL_INSET) + 8.;
         // A pinned back button stays beside the toggle: the title starts after it.
         let pinned = self.nav.as_ref().is_some_and(|n| n.back_pinned);
         let hidden_title_x = HIDDEN_TITLE_X + if pinned { f32::from(size::ICON_BUTTON) + 2. } else { 0. };
@@ -228,9 +229,7 @@ impl RenderOnce for MainTitleBar {
             .flex()
             .items_center()
             .pl(px(title_x - edge))
-            .pr_4()
-            .border_b_1()
-            .border_color(color::border())
+            .pr(size::PANEL_INSET)
             .child(
                 div()
                     .min_w_0()
@@ -261,6 +260,7 @@ impl RenderOnce for MainTitleBar {
 
 #[cfg(feature = "dev")]
 pub fn previews() -> Vec<crate::preview::ComponentPreview> {
+    use crate::theme::color;
     use crate::preview::{Area, ComponentPreview, Example};
     let title = "Fix the failing smoke test in space-core";
     vec![

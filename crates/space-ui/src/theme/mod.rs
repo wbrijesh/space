@@ -34,8 +34,8 @@ pub mod color {
 
     colors! {
         /// Window / main column background.
-        bg = 0x141414ff;
-        /// Sidebar, code blocks.
+        bg = 0x101010ff;
+        /// The window's chrome (title bar, sidebar, around the content panel), code blocks.
         bg_sidebar = 0x1a1a1aff;
         /// Raised surfaces: cards, quiet hover on rows.
         surface = 0x1f1f1fff;
@@ -51,7 +51,7 @@ pub mod color {
         menu_highlight = 0x3a3a3aff;
         /// Code blocks in replies: a little darker than the thread, so they stand apart from
         /// your messages' bubbles; with a lighter border (and the rule under their top bar).
-        code_bg = 0x0f0f0fff;
+        code_bg = 0x0b0b0bff;
         code_border = 0x222222ff;
         /// Links in replies (softer than the accent; no underline).
         md_link = 0x58a6ffff;
@@ -97,12 +97,12 @@ pub mod color {
         yellow_bg = 0xd299221a;
         yellow_border = 0xd2992266;
         scrollbar_thumb_hover = 0x4a4a4aff;
-        /// Trajectory view background (lighter than the window, like a data sheet).
-        trajectory_bg = 0x232323ff;
+        /// Trajectory view background: the panel's own, like every other view in it.
+        trajectory_bg = 0x101010ff;
         /// Row hover on the Trajectory background.
-        trajectory_hover = 0x2b2b2bff;
+        trajectory_hover = 0x1a1a1aff;
         /// Selected row on the Trajectory background.
-        trajectory_selected = 0x333333ff;
+        trajectory_selected = 0x262626ff;
         /// Terminal colors: GitHub Dark's ANSI palette (Space's accents are its values). The
         /// terminal's background is `bg`, the thread's; its text is `text`.
         term_black = 0x484f58ff;
@@ -171,16 +171,18 @@ pub mod radius {
 /// Control heights, icon sizes and layout widths.
 pub mod size {
     use super::*;
-    pub const TITLE_BAR_H: Pixels = px(48.);
+    pub const TITLE_BAR_H: Pixels = px(36.);
+    /// The content panel's distance from the window's edges and the sidebar.
+    pub const PANEL_INSET: Pixels = px(4.);
     /// The bars along the top of a pane (Chat | Trajectory, the terminal's tabs), the same
     /// height so they line up side by side. Includes the bottom border.
     pub const PANE_BAR_H: Pixels = px(33.);
     /// The folder tree's column beside open files in the right pane.
     pub const PANE_TREE_W: Pixels = px(240.);
     pub const SIDEBAR_W: Pixels = px(316.);
-    /// Width reserved for the macOS traffic lights (at x=18, ~52px wide) plus a gap before
+    /// Width reserved for the macOS traffic lights (at x=13, ~52px wide) plus a gap before
     /// the first title-bar button.
-    pub const TRAFFIC_LIGHTS_W: Pixels = px(92.);
+    pub const TRAFFIC_LIGHTS_W: Pixels = px(76.);
     pub const CONTENT_MAX_W: Pixels = px(760.);
     /// The chat's narrowest: a narrowing window closes the right pane, then the sidebar, to keep it.
     pub const CHAT_MIN_W: Pixels = px(600.);

@@ -23,9 +23,11 @@ impl SpaceApp {
         !self.show_settings && self.selected.and_then(|k| self.terminals.pane(k)).is_some_and(|p| p.open && !p.maximized)
     }
 
-    /// The main column (chat and pane) beside the sidebar, where the sidebar is headed.
+    /// The main column (chat and pane) beside the sidebar, where the sidebar is headed: the
+    /// content panel's inside (its insets and border off).
     pub(crate) fn main_width(&self, window: &Window) -> f32 {
-        f32::from(window.viewport_size().width) - f32::from(size::SIDEBAR_W) * self.sidebar_shown.target()
+        let panel = 2. * f32::from(size::PANEL_INSET) + 2.;
+        f32::from(window.viewport_size().width) - f32::from(size::SIDEBAR_W) * self.sidebar_shown.target() - panel
     }
 
     /// The pane's width as drawn: its set width, but never wider than the main column (a window

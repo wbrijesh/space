@@ -344,8 +344,8 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             titlebar: Some(TitlebarOptions {
                 title: Some("Space".into()),
                 appears_transparent: true,
-                // Vertically centered in the 48px title bar (the buttons are ~14px tall).
-                traffic_light_position: Some(point(px(18.), px(17.))),
+                // Vertically centered in the 36px title bar (the buttons are ~14px tall).
+                traffic_light_position: Some(point(px(13.), px(11.))),
             }),
             // The title bar is drawn by the app, which moves the window itself.
             app_owns_titlebar_drag: true,

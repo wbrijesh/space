@@ -29,7 +29,7 @@ use space_ui::components::title_bar::{MainTitleBar, SidebarTitleBar, TitleBarNav
 use space_ui::components::find::find_bar;
 use space_ui::components::transcript::{FindMarks, TranscriptView, UserExtras, transcript_items};
 use space_ui::format::{self, Preview};
-use space_ui::theme::{color, size, text};
+use space_ui::theme::{color, radius, size, text};
 use space_ui::ClickHandler;
 
 use crate::app::{
@@ -124,7 +124,24 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
             None => body,
         }
     };
-    let main = div().flex().flex_col().flex_1().min_w_0().h_full().bg(color::bg()).child(title_bar).child(content);
+    // The content sits in a panel of its own, inset from the window's chrome (the title bar and
+    // the sidebar share the chrome's tone).
+    let inset = size::PANEL_INSET;
+    let panel = div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .ml(inset)
+        .mr(inset)
+        .mb(inset)
+        .rounded(radius::XL)
+        .border_1()
+        .border_color(color::border())
+        .bg(color::bg())
+        .overflow_hidden()
+        .child(content);
+    let main = div().flex().flex_col().flex_1().min_w_0().h_full().child(title_bar).child(panel);
 
     div()
         .id("space-root")
@@ -287,7 +304,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         })
         .size_full()
         .flex()
-        .bg(color::bg())
+        .bg(color::bg_sidebar())
         .text_color(color::text())
         .font_family(text::UI_FONT)
         .text_size(text::MD)

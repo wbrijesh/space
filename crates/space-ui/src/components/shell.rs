@@ -18,9 +18,6 @@ pub fn sidebar_column(title_bar: impl IntoElement, rows: Vec<AnyElement>, scroll
         .w(size::SIDEBAR_W)
         .flex_none()
         .h_full()
-        .bg(color::bg_sidebar())
-        .border_r_1()
-        .border_color(color::border())
         .child(title_bar)
         .child(
             div()
