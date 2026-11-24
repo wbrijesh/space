@@ -976,6 +976,7 @@ fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>)
         .modes(app.permission_modes.clone(), s.new_threads.permission_mode.clone())
         .plugin_settings(plugin_sections)
         .plugins(plugin_rows)
+        .build(crate::build_info::get().version.clone(), crate::build_info::get().built.clone())
         .tab(app.current_settings_tab())
         .handlers(handlers);
     div()

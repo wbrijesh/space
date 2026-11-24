@@ -208,6 +208,10 @@ pub struct SettingsPage {
     keep_closed: Option<Entity<InputState>>,
     /// What a two-finger swipe shows and hides (an index of [`SWIPE_CHOICES`]).
     swipe: usize,
+    /// About: "0.1.6", or a local build's "0.1.6 +2 · a95ab81 · edited".
+    version: SharedString,
+    /// About: when a local build was made.
+    built: Option<SharedString>,
     /// The section shown (the sidebar lists them).
     tab: SettingsTab,
 }
@@ -225,6 +229,8 @@ pub enum SettingsTab {
     Plugin(SharedString),
     Notifications,
     Plugins,
+    /// Which build this is.
+    About,
 }
 
 impl SettingsTab {
@@ -236,11 +242,12 @@ impl SettingsTab {
             SettingsTab::Plugin(name) => name.clone(),
             SettingsTab::Notifications => "Notifications".into(),
             SettingsTab::Plugins => "Plugins".into(),
+            SettingsTab::About => "About".into(),
         }
     }
 
     /// The sections there are, in order: Threads while threads are saved, a section per
-    /// service plugin with settings (by name), Plugins when any are installed.
+    /// service plugin with settings (by name), Plugins when any are installed, About.
     pub fn all(threads: bool, plugins: impl IntoIterator<Item = SharedString>, any_plugins: bool) -> Vec<SettingsTab> {
         let mut tabs = vec![SettingsTab::NewThreads];
         if threads {
@@ -252,6 +259,7 @@ impl SettingsTab {
         if any_plugins {
             tabs.push(SettingsTab::Plugins);
         }
+        tabs.push(SettingsTab::About);
         tabs
     }
 }
@@ -270,12 +278,21 @@ impl SettingsPage {
             handlers: SettingsHandlers::default(),
             keep_closed: None,
             swipe: 0,
+            version: SharedString::default(),
+            built: None,
             tab: SettingsTab::default(),
         }
     }
 
     pub fn tab(mut self, tab: SettingsTab) -> Self {
         self.tab = tab;
+        self
+    }
+
+    /// The build, for About: its version line, and when a local build was made.
+    pub fn build(mut self, version: impl Into<SharedString>, built: Option<String>) -> Self {
+        self.version = version.into();
+        self.built = built.map(Into::into);
         self
     }
 
@@ -338,7 +355,7 @@ fn model_name(m: &ModelInfo) -> String {
 
 impl RenderOnce for SettingsPage {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        let Self { catalog, model, thinking, permission, modes, mode, plugin_settings, plugins, handlers: h, keep_closed, swipe, tab } = self;
+        let Self { catalog, model, thinking, permission, modes, mode, plugin_settings, plugins, handlers: h, keep_closed, swipe, version, built, tab } = self;
 
         // Model: "Agent default" + the agent's models.
         let (model_row, thinking_row) = match &catalog {
@@ -412,6 +429,14 @@ impl RenderOnce for SettingsPage {
                     .collect(),
             ),
             SettingsTab::Notifications => (None, vec![permission_row(permission, &h).into_any_element()]),
+            SettingsTab::About => {
+                let value = |s: SharedString| div().text_size(text::MD).text_color(color::text_2()).child(s).into_any_element();
+                let mut rows = vec![row("Version", "", Some(value(version.clone()))).into_any_element()];
+                if let Some(built) = built.clone() {
+                    rows.push(row("Built", "", Some(value(built))).into_any_element());
+                }
+                (None, rows)
+            }
             SettingsTab::Plugins => (
                 None,
                 plugins.iter().map(|p| plugin_row(p, &h, window).into_any_element()).collect(),

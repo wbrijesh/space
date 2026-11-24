@@ -18,6 +18,11 @@
   resume`), no trailing period; then a body in plain prose saying what changed and why, wrapped
   at ~72 columns; then the `Co-Authored-By:` line. Release commits are just `Space 0.1.x`.
 
+## Local apps
+
+`just apps` starts Space (workspace 3) and SpaceTest (workspace 9), detached. After each committed
+change, run `just apps-update` (build, then restart both on it) and check `just apps-status`.
+
 ## Disk use
 
 Build output grows fast here (GPUI is a large dependency graph), so:

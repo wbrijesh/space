@@ -2,7 +2,7 @@
 # Wrap the debug build in target/debug/Space.app for `just run`: macOS gives notifications only to
 # an app with a bundle id. The executable is a hard link to target/debug/Space (no copy), so each
 # build is picked up without taking more space. Same bundle id as the release app, so only one of
-# them runs at a time.
+# them runs at a time. build.txt beside the executable says which build it is (build-info.sh).
 set -eu
 root="$(cd "$(dirname "$0")/.." && pwd)"
 out="$root/target/debug"
@@ -12,6 +12,7 @@ version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)"
 [ -x "$out/Space" ] || { echo "missing $out/Space (build first: just build)" >&2; exit 1; }
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 ln -f "$out/Space" "$app/Contents/MacOS/Space"
+"$root/scripts/build-info.sh" "$out/Space" > "$app/Contents/MacOS/build.txt"
 cp -f "$root/crates/space-app/resources/Assets.car" "$app/Contents/Resources/Assets.car"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

@@ -16,6 +16,28 @@ run *args: build
     SPACE_TARGET_DIR={{project}}/target/debug SPACE_PROJECT={{project}} SPACE_RELOAD_PLUGINS=1 \
         target/debug/Space.app/Contents/MacOS/Space {{args}}
 
+# The two local apps, detached and kept on the latest build: Space (this repo) on workspace 3,
+# SpaceTest (the `changes` scenario, fake gh) on 9. See scripts/dev-apps.sh
+# Start whichever of Space and SpaceTest isn't running
+apps:
+    @scripts/dev-apps.sh open
+
+# Build, then restart Space and SpaceTest on the new build (a failed build leaves them running)
+apps-update:
+    @scripts/dev-apps.sh update
+
+# Show whether Space and SpaceTest run, on which build, and whether it's the latest
+apps-status:
+    @scripts/dev-apps.sh status
+
+# Quit Space and SpaceTest
+apps-stop:
+    @scripts/dev-apps.sh stop
+
+# Follow Space's and SpaceTest's logs
+apps-log:
+    @scripts/dev-apps.sh log
+
 # Build the Rust workspace (app and Rust plugins) and the TypeScript plugins
 build: size-check build-rust build-ts
 
