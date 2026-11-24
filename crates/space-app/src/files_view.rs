@@ -200,6 +200,27 @@ impl SpaceApp {
             }
         });
         self.files.watch = Some(Watch { root: root.to_path_buf(), _watcher: watcher, _task: task });
+        self.relist(root, cx);
+    }
+
+    /// List again every folder already listed under `root`: nothing watched it while another
+    /// thread or pane showed, so its trees may be out of date.
+    fn relist(&mut self, root: &Path, cx: &mut Context<Self>) {
+        let keys: Vec<u64> = self.file_trees.iter().filter(|(_, t)| t.root == root && !t.children.is_empty()).map(|(k, _)| *k).collect();
+        for key in keys {
+            let Some(tree) = self.file_trees.get_mut(&key) else { continue };
+            // A folder gone since is dropped when its parent lists again.
+            let dirs: Vec<PathBuf> = tree.children.keys().filter(|d| d.is_dir()).cloned().collect();
+            let refilter = !tree.filter.trim().is_empty();
+            tree.all = None;
+            for dir in dirs {
+                self.list_dir(key, dir, cx);
+            }
+            self.refresh_git(key, cx);
+            if refilter {
+                self.walk_all(key, cx);
+            }
+        }
     }
 
     /// Files changed under `root`: list their listed folders again, refresh git status, search
