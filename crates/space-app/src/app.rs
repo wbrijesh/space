@@ -327,11 +327,15 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
                 if let Some(handle) = space_ui::gallery::open(cx) {
                     devscript::spawn_from_env(handle, cx);
                 }
-                cx.activate(true);
                 return;
             }
         };
 
+        // Space never makes itself the active app (only a click on its notification does): when
+        // you open it from the Dock, Finder or Spotlight, macOS activates it already, and a start
+        // from a script or terminal (`just apps`, `just run`, test runs) must leave you where you
+        // are; with a tiling window manager, an app that activates itself pulls you to its
+        // workspace. Its window is still the app's key window, for when you switch to it.
         // A window an input script drives (test runs) never takes the keyboard: scripted keys
         // go through GPUI, and your typing stays where you are.
         #[cfg(feature = "dev")]
@@ -368,9 +372,6 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
         #[cfg(feature = "dev")]
         devscript::spawn_from_env(handle, cx);
         let _ = handle;
-        if !scripted {
-            cx.activate(true);
-        }
     });
 }
 

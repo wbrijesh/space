@@ -3,7 +3,8 @@
 #   Space      this repo's dev bundle (target/debug/Space.app), on AeroSpace workspace 3
 #   SpaceTest  a copy in ~/.cache/space-test with the `changes` scenario and a fake `gh`, on 9
 # Both run detached (nohup; logs and state in ~/.cache/space-dev), so closing a terminal or
-# interrupting an agent doesn't stop them. Windows are moved by window id, without focusing them.
+# interrupting an agent doesn't stop them. Windows are moved by window id, without focusing them,
+# and neither app takes focus: each start checks that it didn't (guard).
 #
 #   dev-apps.sh open     start whichever isn't running
 #   dev-apps.sh update   build, then restart both on the new build (a failed build changes nothing)
@@ -59,6 +60,23 @@ place() {
     if [ -z "$id" ]; then echo "$(name "$app"): started (pid $pid), but no window after 60 s" >&2; return 1; fi
     aerospace move-node-to-workspace --window-id "$id" "$(workspace "$app")" > /dev/null 2>&1 || true
     echo "$(name "$app"): running on workspace $(workspace "$app") (pid $pid)"
+    guard "$app" "$pid"
+}
+
+# Space must never take focus when it starts: an app that makes itself active pulls you to its
+# workspace (AeroSpace follows macOS focus), away from whatever you were doing. Check, a moment
+# after its window shows, that the focused window isn't the app's; only reads AeroSpace's state.
+guard() {
+    local app="$1" pid="$2" focused
+    sleep 1.5
+    focused="$(aerospace list-windows --focused --format '%{app-pid}' 2>/dev/null || true)"
+    if [ "$focused" = "$pid" ]; then
+        echo "" >&2
+        echo "!!! $(name "$app") took focus when it started, and pulled you to workspace $(workspace "$app")." >&2
+        echo "!!! Space must never make itself active (see the launch in crates/space-app/src/app.rs)." >&2
+        echo "" >&2
+        return 1
+    fi
 }
 
 stop() {

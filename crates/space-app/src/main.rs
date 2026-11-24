@@ -154,12 +154,14 @@ fn main() -> Result<()> {
         anyhow::bail!("--gallery and --scenario need a build with the `dev` feature");
     }
     // One Space at a time on the real settings and threads: a second one (the installed app
-    // while `just run`'s runs, or the other way round) brings the first forward and exits.
+    // while `just run`'s runs, or the other way round) exits, leaving the first where it is.
     // The gallery, scenarios, command-line checks, scripted test windows and other settings
     // files run alongside.
     let own_data = std::env::var_os(settings::SETTINGS_ENV).is_none() && std::env::var_os("SPACE_SCRIPT").is_none();
     let window_app = !args.gallery && args.scenario.is_none() && !args.check_plugins && args.smoke.is_none();
-    if own_data && window_app && single::activate_running() {
+    if own_data && window_app && let Some(pid) = single::running_elsewhere() {
+        eprintln!("Space is already running (pid {pid}); switch to it with ⌘Tab or the Dock");
+        tracing::info!("Space is already running (pid {pid}): exiting");
         return Ok(());
     }
 
