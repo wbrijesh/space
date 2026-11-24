@@ -13,6 +13,7 @@ pub mod loaders;
 pub mod menu;
 pub mod message_actions;
 pub mod model_picker;
+pub mod notice;
 pub mod open_in;
 pub mod pastes;
 pub mod quote;

@@ -121,6 +121,7 @@ pub fn registry() -> Vec<ComponentPreview> {
         file_tree::previews(),
         file_viewer::previews(),
         message_actions::previews(),
+        notice::previews(),
         trajectory::previews(),
         follow_scroll::previews(),
         loaders::previews(),

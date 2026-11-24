@@ -120,12 +120,12 @@ The harness is the ACP **client**; agent plugins are ACP **agents**.
 
 | Direction | Method | Notes |
 |---|---|---|
-| client → agent | `initialize` | Protocol version and capabilities; `_meta["space/steer"]: true` from agents that take steering |
-| client → agent | `session/new` | `cwd` = the thread's folder; `_meta["space/sideOf"]` = a session this one is a side chat of (below) |
+| client → agent | `initialize` | Protocol version and capabilities; `_meta["space/steer"]: true` from agents that take steering, `_meta["space/rewind"]: true` from agents that can go back to an earlier message |
+| client → agent | `session/new` | `cwd` = the thread's folder; `_meta["space/sideOf"]` = a session this one is a side chat of (below); `_meta["space/forkOf"]: { sessionId, messageId }` = a copy of that session's conversation up to just before that message (going back, below) |
 | client → agent | `session/load` | Continue a saved thread's session (agents with `loadSession`), same `_meta`; what the agent replays meanwhile isn't shown (the thread already is) |
-| client → agent | `session/prompt` | Image blocks (base64 bytes plus the saved file's `file://` uri; only to agents with `promptCapabilities.image`), long pastes as text `resource` blocks (`text/plain`, the saved file's `file://` uri; a `resource_link` to that file for agents without `promptCapabilities.embeddedContext`), then text (a quoted selection first, as a markdown blockquote) and `resource_link` blocks; `_meta["space/context"]` carries hidden context sections |
+| client → agent | `session/prompt` | Image blocks (base64 bytes plus the saved file's `file://` uri; only to agents with `promptCapabilities.image`), long pastes as text `resource` blocks (`text/plain`, the saved file's `file://` uri; a `resource_link` to that file for agents without `promptCapabilities.embeddedContext`), then text (a quoted selection first, as a markdown blockquote) and `resource_link` blocks; `_meta["space/context"]` carries hidden context sections, `_meta["space/messageId"]` the message's id (a UUID) |
 | client → agent | `session/cancel` (notification) | Abort the running turn |
-| agent → client | `session/update` (notification) | message/thought chunks, `tool_call`, `tool_call_update`, `plan` |
+| agent → client | `session/update` (notification) | message/thought chunks, `tool_call` (an edit's `locations` name its file; `_meta["space/subagent"]: true` when a subagent made it), `tool_call_update`, `plan` |
 | agent → client | `session/request_permission` | The agent's own approval card |
 
 Space extensions:
@@ -140,6 +140,7 @@ Space extensions:
 | client → agent | `_space/session/steer` | `{ sessionId, id, text, images?, texts?, attachments? }`: a message for the running turn, delivered after the current step |
 | client → agent | `_space/session/unsteer` | `{ sessionId }` → `{ ids }`: take back the undelivered ones (the turn was stopped) |
 | agent → client | `_space/steered` (notification) | `{ sessionId, id }`: that message reached the model; the transcript shows it there |
+| client → agent | `_space/session/rewind` | `{ sessionId, messageId, restoreFiles? }` → `{ found, files, reason?, changed, skipped? }`: can the conversation go back to just before that message, and which files the agent's edits changed since; with `restoreFiles` it puts them back as they were then |
 | agent → client | `_space/retry` (notification) | `{ sessionId, state?: { kind: offline \| retrying \| busy, attempt, reason }, discard? }`: the model request waits out a bad network (the working row says so; no `state`: it doesn't any more), or one that broke off after part of its reply streamed is sent again (`discard`: that part leaves the transcript, also when the thread loads again) |
 | agent → client | `_space/trace` (notification) | `{ sessionId, events: TraceEvent[] }`: what happened around each model request (headers on change, requests with their new messages, first token, chunk times, responses with usage, retries, tool start/end); see Traces below |
 
@@ -158,6 +159,14 @@ Space extensions:
 it as "Continue in <app>" and copies the command. `commands` (optional) are the agent's slash
 commands for the composer's `/` menu: a prompt that is exactly `/<name>` or `/<name> <arguments>`
 runs the command; one marked `side` isn't sent: it opens the side chat.
+
+**Going back** to one of your messages (✎ Edit it in place, or ↺ Rewind to it; see
+[rewind.md](rewind.md)): the agent puts back the files its edits changed since
+(`_space/session/rewind`; claude-agent uses Claude Code's own file checkpoints), the thread's log
+gets a `Rewound` event that cuts the transcript there, and the next message goes to a new session
+made with `space/forkOf`, a copy of the conversation up to the message. The old session stays as it
+was, so a `RewindUndone` (⌘Z) goes back to it. A side chat whose thread went back follows the new
+session (`session/load` again with the new `space/sideOf`).
 
 A **side chat** is a session made with `_meta["space/sideOf"]` naming another session (on
 `session/new`, and again on `session/load`). The agent starts it as a copy of that conversation,

@@ -30,7 +30,7 @@ use space_ui::components::title_bar::{TitleBar, TitleBarNav};
 use gpui::component::Icon;
 use gpui::assets::IconName as Lucide;
 use space_ui::components::find::find_bar;
-use space_ui::components::transcript::{FindMarks, TranscriptView, UserExtras, transcript_items};
+use space_ui::components::transcript::{FindMarks, RewindMarks, TranscriptView, UserExtras, transcript_items};
 use space_ui::format::{self, Preview};
 use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
@@ -38,7 +38,7 @@ use space_ui::ClickHandler;
 use crate::app::{
     CloseSettings, ClosePaneTab, CloseThread, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizePane, NewPaneTab, NewThread,
     NextPaneTab, OpenSettings, PreviousPaneTab, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleRightPane, ShowTerminal, ShowFiles, ShowSideChat, ShowChanges, ToggleTrajectory,
-    OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread,
+    OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread, UndoRewind,
 };
 use crate::settings::SaveKind;
 use crate::threads::Thread;
@@ -57,8 +57,9 @@ fn handler(cx: &mut Context<SpaceApp>, f: impl Fn(&mut SpaceApp, &mut Window, &m
 }
 
 pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> impl IntoElement {
-    // A stopped turn's queued messages go back into the composer.
+    // A stopped turn's queued messages go back into the composer; so does a message rewound to.
     app.restore_stopped_queue(window, cx);
+    app.apply_composer_changes(window, cx);
     let clock = space_ui::clock::AnimationClock::global(cx);
     let (now, pinned, clock_running) = (clock.now(), clock.pinned(), clock.is_running());
     let (shown, moving) = app.sidebar_shown.at(now, pinned);
@@ -245,22 +246,45 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
             .absolute()
             .size_0()
         })
-        // Esc in the composer closes the `/` menu, then stops the agent
-        // while it works (open panels and menus close first).
+        // Esc in the composer leaves rewind mode, closes the `/` menu, stops the agent while
+        // it works, and twice in a moment with nothing in it picks a message to go back to
+        // (open panels and menus close first). In a message being edited, it leaves it as it was.
         .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
-            if e.keystroke.key != "escape"
-                || e.keystroke.modifiers.modified()
-                || this.usage_open.is_some()
-                || !this.input.read(cx).focus_handle(cx).is_focused(window)
-            {
+            if e.keystroke.key != "escape" || e.keystroke.modifiers.modified() || this.usage_open.is_some() {
                 return;
             }
-            if this.close_command_menu(cx) {
+            if this.rewind.editor.as_ref().is_some_and(|ed| ed.input.read(cx).focus_handle(cx).is_focused(window)) {
+                this.cancel_edit(window, cx);
+                cx.stop_propagation();
+                return;
+            }
+            if !this.input.read(cx).focus_handle(cx).is_focused(window) {
+                return;
+            }
+            if this.rewind.mode.is_some() {
+                this.leave_rewind_mode(cx);
+                cx.stop_propagation();
+            } else if this.close_command_menu(cx) {
                 cx.stop_propagation();
             } else if this.current().is_some_and(|t| t.state.running) {
                 this.cancel(cx);
                 cx.stop_propagation();
+            } else if this.esc_for_rewind(cx) {
+                cx.stop_propagation();
             }
+        }))
+        // ⌘Z undoes the last rewind: from the composer while it holds nothing of yours since,
+        // and anywhere no text field has focus.
+        .capture_action(cx.listener(|this, _: &gpui::component::input::Undo, window, cx| {
+            if this.input.read(cx).focus_handle(cx).is_focused(window) && this.undo_key(true, cx) {
+                cx.stop_propagation();
+            }
+        }))
+        .on_action(cx.listener(|this, _: &UndoRewind, _, cx| {
+            this.undo_key(false, cx);
+        }))
+        .on_action(cx.listener(|this, _: &gpui::component::input::Undo, _, cx| {
+            this.undo_key(false, cx);
         }))
         // Dragging the pane's divider: window-level listeners, so the drag follows the pointer
         // wherever it goes (over the pane, the chat's too-narrow overlay, or out of the window).
@@ -326,6 +350,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .child(below)
         .child(space_ui::components::tip::layer(window, cx))
         .children(app.quote_button(window, cx))
+        .children(notice(app, cx))
         .children(app.paste_view.as_ref().map(|(body, chars)| {
             space_ui::components::pastes::text_view(body.clone(), *chars, &app.viewer_focus, handler(cx, |this, w, cx| this.close_paste_view(w, cx)))
         }))
@@ -340,6 +365,36 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
                 },
             })
         }))
+}
+
+/// The notice in the window's bottom-right corner (over the composer too), if one is up.
+fn notice(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
+    use space_ui::components::notice::{self, MARGIN, Notice};
+    let n = app.rewind.notice.as_ref()?;
+    let icon = match n.kind {
+        crate::rewind::NoticeKind::Rewound => Icon::new(Lucide::RotateCcw),
+        crate::rewind::NoticeKind::Edited => Icon::new(Lucide::Pencil),
+        crate::rewind::NoticeKind::Problem => Icon::new(gpui::component::IconName::TriangleAlert),
+    };
+    let key = n.key;
+    let can_undo = n.kind != crate::rewind::NoticeKind::Problem && app.thread(key).is_some_and(|t| !t.undo.is_empty());
+    let undo = can_undo.then(|| {
+        let this = cx.entity().downgrade();
+        let on_undo: notice::Handler = Rc::new(move |_, cx| {
+            let _ = this.update(cx, |this, cx| this.undo_rewind(key, cx));
+        });
+        (SharedString::from("⌘Z"), on_undo)
+    });
+    let element = notice::notice(Notice {
+        icon,
+        title: n.title.clone().into(),
+        body: n.body.clone().map(Into::into),
+        kept: n.kept.iter().map(|(path, why)| (path.clone().into(), SharedString::from(*why))).collect(),
+        error: n.kind == crate::rewind::NoticeKind::Problem,
+        undo,
+        on_close: handler(cx, |this, _, cx| this.close_notice(cx)),
+    });
+    Some(div().absolute().right(MARGIN).bottom(MARGIN).child(element).into_any_element())
 }
 
 /// A queued message's picture (prepared, not saved yet).
@@ -667,6 +722,18 @@ fn body(app: &SpaceApp, streaming: Option<(usize, usize)>, window: &mut Window, 
                     let _ = this.update(cx, |this, cx| this.show_usage(row.map(|r| r.to_string()), cx));
                 })
             },
+            on_edit: Some({
+                let this = cx.entity().downgrade();
+                Rc::new(move |ix, w, cx| {
+                    let _ = this.update(cx, |this, cx| this.start_edit(ix, w, cx));
+                })
+            }),
+            on_rewind: Some({
+                let this = cx.entity().downgrade();
+                Rc::new(move |ix, w, cx| {
+                    let _ = this.update(cx, |this, cx| this.rewind_at(ix, w, cx));
+                })
+            }),
         },
         open_turns: &thread.open_turns,
         on_toggle_turn: Rc::new(move |ix, _, cx| {
@@ -691,6 +758,11 @@ fn body(app: &SpaceApp, streaming: Option<(usize, usize)>, window: &mut Window, 
                 scroll.reveal(bounds);
                 window.refresh();
             }))
+        },
+        rewind: RewindMarks {
+            can: app.rewindable(thread),
+            editing: app.rewind.editor.as_ref().filter(|ed| ed.key == thread.key).and_then(|ed| Some((thread.state.message_index(&ed.message_id)?, &ed.input))),
+            picked: app.picked(thread),
         },
     }, window, cx);
     #[cfg(feature = "dev")]

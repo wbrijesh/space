@@ -12,7 +12,20 @@
 import { randomUUID } from "node:crypto";
 import type { ContentBlock, SessionUpdate, StopReason } from "@agentclientprotocol/sdk";
 import type { HookJSONOutput, PermissionResult, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
-import { DEFAULT_EFFORT, EFFORTS, type Effort, type EngineOptions, type ModelInfo, PROVIDER, type SDKMessage, type SessionHooks, type SlashCommand, TOOLS, userMessage } from "./claude.js";
+import {
+	DEFAULT_EFFORT,
+	EFFORTS,
+	type Effort,
+	type EngineOptions,
+	type ModelInfo,
+	PROVIDER,
+	type RewindFilesResult,
+	type SDKMessage,
+	type SessionHooks,
+	type SlashCommand,
+	TOOLS,
+	userMessage,
+} from "./claude.js";
 import { errorText, log } from "./env.js";
 import {
 	type CommandInfo,
@@ -25,10 +38,14 @@ import {
 	type PreExecuteResult,
 	RETRY_METHOD,
 	type RetryState,
+	type RewindResult,
 	type SpaceStatus,
 	STEERED_METHOD,
+	SUBAGENT_META_KEY,
 	type TurnUsage,
 } from "./generated/protocol.js";
+import { uuid } from "./params.js";
+import { type Entry, forkPoint } from "./rewind.js";
 import { leftOff, mainUpdate, type SavedMessage, SIDE_NOTE, SIDE_TOOLS } from "./side.js";
 import { type TraceRecorder } from "./trace.js";
 import {
@@ -75,6 +92,7 @@ export interface EngineLike {
 	send(message: ReturnType<typeof userMessage>): void;
 	interrupt(): Promise<void>;
 	cancelQueued(uuid: string): Promise<boolean>;
+	rewindFiles(uuid: string, dryRun: boolean): Promise<RewindFilesResult>;
 	setModel(model: string): Promise<void>;
 	setEffort(effort: Effort): Promise<void>;
 	models(): Promise<ModelInfo[]>;
@@ -97,8 +115,12 @@ export interface SessionOptions {
 	start: StartEngine;
 	/** A side chat of this session (side.ts). */
 	sideOf?: string;
+	/** Not resuming: start as a copy of session `from`'s conversation up to entry `at` (going back to an earlier message). */
+	fork?: { from: string; at: string };
 	/** A session's saved messages, in order (claude.ts's `savedMessages`; tests fake it). */
 	read: (sessionId: string, cwd: string) => Promise<SavedMessage[]>;
+	/** A session's transcript entries (rewind.ts's `readEntries`; tests fake it). */
+	entries: (sessionId: string, cwd: string) => Entry[];
 }
 
 /** How a turn ended. */
@@ -266,6 +288,15 @@ function localCommandOutput(content: unknown): string | undefined {
 	return text.match(/^<local-command-stdout>([\s\S]*)<\/local-command-stdout>$/)?.[1]?.trim();
 }
 
+/** The tools that write a file (named by `file_path`): Space keeps track of what they wrote. */
+const EDITS = ["Edit", "Write", "NotebookEdit"];
+
+/** An edit's file as the call's ACP `locations`. */
+function editedFile(name: string, input: unknown): { locations?: { path: string }[] } {
+	const path = EDITS.includes(name) && isObject(input) ? (input.file_path ?? input.notebook_path) : undefined;
+	return typeof path === "string" && path ? { locations: [{ path }] } : {};
+}
+
 /** The retry state Space shows for an `api_retry`. */
 export function retryState(m: Json): RetryState {
 	const status = typeof m.error_status === "number" ? m.error_status : undefined;
@@ -322,8 +353,10 @@ export class Session {
 	private readonly tools: string[];
 	/** A side chat: the last main-thread message it was told about (or copied with). */
 	private through: string | undefined;
-	/** A side chat before its first prompt: the session it starts as a copy of. */
+	/** Before its first prompt: the session it starts as a copy of (a side chat, or going back). */
 	private forkFrom: string | undefined;
+	/** With `forkFrom`: the entry the copy goes up to. */
+	private forkAt: string | undefined;
 
 	private constructor(options: SessionOptions) {
 		this.options = options;
@@ -333,6 +366,8 @@ export class Session {
 		this.trace = options.trace;
 		this.conversation = options.resume;
 		this.tools = options.sideOf ? SIDE_TOOLS : TOOLS;
+		this.forkFrom = options.fork?.from;
+		this.forkAt = options.fork?.at;
 	}
 
 	/** Start (or resume) the session's Claude Code. Throws a readable error. */
@@ -381,7 +416,7 @@ export class Session {
 				cwd: this.cwd,
 				sessionId: this.id,
 				resume: this.conversation,
-				...(this.forkFrom && !this.conversation ? { forkFrom: this.forkFrom } : {}),
+				...(this.forkFrom && !this.conversation ? { forkFrom: this.forkFrom, ...(this.forkAt ? { forkAt: this.forkAt } : {}) } : {}),
 				tools: this.tools,
 				...(this.options.sideOf ? { appendSystemPrompt: SIDE_NOTE } : {}),
 				...(this.model ? { model: this.model } : {}),
@@ -485,8 +520,8 @@ export class Session {
 		return same ? allow() : allow({ ...args, command: confined.argv.map(shellQuote).join(" ") });
 	}
 
-	/** `session/prompt`. Resolves when the turn is over. */
-	async prompt(blocks: readonly ContentBlock[], context: readonly ContextSection[]): Promise<Outcome> {
+	/** `session/prompt`. Resolves when the turn is over. `messageId`: Space's id for the message (a UUID). */
+	async prompt(blocks: readonly ContentBlock[], context: readonly ContextSection[], messageId?: string): Promise<Outcome> {
 		if (this.turn) throw new Error("A prompt is already running for this session");
 		const engine = await this.ensureEngine();
 		if (this.turn) throw new Error("A prompt is already running for this session");
@@ -524,7 +559,7 @@ export class Session {
 		}
 		this.conversation = true;
 		try {
-			engine.send(userMessage(content, randomUUID(), { command: !!command }));
+			engine.send(userMessage(content, messageId ?? randomUUID(), { command: !!command }));
 			if (update) this.through = update.through;
 		} catch (error) {
 			turn.exit = errorText(error);
@@ -593,9 +628,10 @@ export class Session {
 			const path = block.type === "image" ? filePath(block.uri) : undefined;
 			if (block.type === "image" && path) this.trace.noteImage(block.data, path);
 		}
-		const uuid = randomUUID();
-		this.steers.set(uuid, { id, content });
-		this.engine.send(userMessage(content, uuid, { priority: "next" }));
+		// Space's id is the message's uuid, so Claude Code's transcript knows it by it.
+		const sent = uuid(id) && !this.steers.has(id) ? id : randomUUID();
+		this.steers.set(sent, { id, content });
+		this.engine.send(userMessage(content, sent, { priority: "next" }));
 	}
 
 	/** `_space/session/unsteer`: the steered messages Claude will never read (withdrawn now, or when the turn was stopped). */
@@ -621,6 +657,48 @@ export class Session {
 			if (cancelled && this.steers.delete(uuid)) dropped.push(steer.id);
 		}
 		return dropped;
+	}
+
+	/**
+	 * `_space/session/rewind`: whether the conversation can go back to just before message
+	 * `messageId`, and the files Claude's edits changed since (put back as they were then with
+	 * `restoreFiles`). Claude Code keeps a file checkpoint only for a message sent while no turn
+	 * ran; for one sent during a turn, the files can't be put back.
+	 */
+	async rewind(messageId: string, restoreFiles: boolean): Promise<RewindResult> {
+		if (this.turn) throw new Error("A turn is running: stop it first");
+		let found: boolean;
+		try {
+			found = forkPoint(this.options.entries(this.id, this.cwd), messageId) !== undefined;
+		} catch (error) {
+			log(`${this.id}: couldn't read the transcript: ${errorText(error)}`);
+			found = false;
+		}
+		const engine = await this.ensureEngine();
+		let preview: RewindFilesResult;
+		try {
+			preview = await engine.rewindFiles(messageId, true);
+		} catch (error) {
+			return { found, files: false, reason: errorText(error), changed: [] };
+		}
+		if (!preview.canRewind) return { found, files: false, reason: preview.error ?? "Claude Code has no file checkpoint for this message", changed: [] };
+		const changed = preview.filesChanged ?? [];
+		if (!restoreFiles || changed.length === 0) return { found, files: true, changed };
+		try {
+			const done = await engine.rewindFiles(messageId, false);
+			if (!done.canRewind) return { found, files: false, reason: done.error ?? "Claude Code couldn't put the files back", changed };
+			log(`${this.id}: put back ${changed.length} file(s) as they were before ${messageId}`);
+			return { found, files: true, changed, ...(done.skippedLinks ? { skipped: done.skippedLinks } : {}) };
+		} catch (error) {
+			return { found, files: false, reason: errorText(error), changed };
+		}
+	}
+
+	/** A side chat now beside session `main` (its main thread went back to an earlier message, or forward again). */
+	follow(main: string): void {
+		if (!this.options.sideOf || this.options.sideOf === main) return;
+		log(`${this.id}: side chat now follows ${main}`);
+		this.options.sideOf = main;
 	}
 
 	/** `_space/session/configure`. Throws a readable error. */
@@ -816,6 +894,9 @@ export class Session {
 				kind: toolKind(name),
 				status: "in_progress",
 				rawInput: block.input ?? {},
+				...editedFile(name, block.input),
+				// Claude Code's file checkpoints don't cover a subagent's edits.
+				...(main ? {} : { _meta: { [SUBAGENT_META_KEY]: true } }),
 			});
 		}
 	}

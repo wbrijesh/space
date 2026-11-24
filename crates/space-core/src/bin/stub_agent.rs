@@ -40,6 +40,13 @@
 //! while a scripted turn holds, or else at the end of the turn. Delivery sends `_space/steered`
 //! and a reply chunk "Steered: <text>. ". A steer when no turn runs is refused.
 //!
+//! Going back (`space/rewind`, advertised in `initialize`): prompts carry their id
+//! (`_meta["space/messageId"]`), kept with each prompt in the session's history file. A
+//! `session/new` with `_meta["space/forkOf"]` copies the history before that message
+//! ("space-stub-agent: fork <from> before <id> -> <new>"), or fails when it isn't there.
+//! `_space/session/rewind` finds the message, lists the files the session's `write` steps changed
+//! since, and with `restoreFiles` puts them back; a steered message has no file checkpoint.
+//!
 //! Sessions report two fake models (`stub-model`, `stub-fast`) and thinking levels through
 //! `_space/status`, and accept `_space/session/configure`.
 //!
@@ -54,9 +61,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use space_core::stub_script::{SCRIPT_ENV, Step, StubScript};
-use space_protocol::ext::{CONTEXT_META_KEY, PROTOCOL_VERSION_META_KEY, SIDE_OF_META_KEY, STEER_META_KEY, USAGE_META_KEY};
+use space_protocol::ext::{
+    CONTEXT_META_KEY, FORK_OF_META_KEY, MESSAGE_ID_META_KEY, PROTOCOL_VERSION_META_KEY, REWIND_META_KEY, SIDE_OF_META_KEY, STEER_META_KEY, USAGE_META_KEY,
+};
 use space_protocol::{
-    CommandInfo, Complete, CompleteResult, Confine, ConfigureSession, ModelInfo, PROTOCOL_VERSION, PreExecute, Retry, RetryKind, RetryState, SpaceStatus,
+    CommandInfo, Complete, CompleteResult, Confine, ConfigureSession, ForkOf, ModelInfo, PROTOCOL_VERSION, PreExecute, Retry, RetryKind, RetryState, RewindResult,
+    RewindSession, SpaceStatus,
     SteerResult, SteerSession, Steered,
     UnsteerResult, UnsteerSession, Verdict,
 };
@@ -77,7 +87,15 @@ struct State {
     running: Mutex<HashSet<String>>,
     /// Steered messages not delivered yet, by session: (id, text).
     steers: Mutex<HashMap<String, Vec<(String, String)>>>,
+    /// Files `write` steps changed, by session, in order: the message it was for, the file, and
+    /// what it held before (`None`: no file).
+    edits: Mutex<HashMap<String, Vec<Edit>>>,
+    /// Numbers `write` steps' tool calls (unique across turns).
+    next_write: AtomicU64,
 }
+
+/// A `write` step's change: the message it was for, the file, and what it held before.
+type Edit = (String, std::path::PathBuf, Option<Vec<u8>>);
 
 /// Marks a session's turn as running while it lives.
 struct Running(Arc<State>, String);
@@ -122,6 +140,10 @@ struct StubSession {
     history: std::path::PathBuf,
     /// A side chat: the session it's beside.
     side_of: Option<String>,
+    /// The folder it runs in.
+    cwd: std::path::PathBuf,
+    /// The id of the prompt being answered.
+    message: Option<String>,
     /// Trace numbering: turns and requests so far, and whether the header went out.
     turns: u32,
     requests: u32,
@@ -136,6 +158,8 @@ impl StubSession {
             context_tokens: 0,
             history: std::env::temp_dir().join("space-stub-sessions").join(format!("{id}.txt")),
             side_of: meta.and_then(|m| m.get(SIDE_OF_META_KEY)).and_then(|d| d.as_str()).map(str::to_string),
+            cwd: std::path::PathBuf::new(),
+            message: None,
             turns: 0,
             requests: 0,
             header_sent: false,
@@ -204,6 +228,7 @@ async fn main() -> acp::Result<()> {
                 let mut meta = Meta::new();
                 meta.insert(PROTOCOL_VERSION_META_KEY.into(), version.into());
                 meta.insert(STEER_META_KEY.into(), true.into());
+                meta.insert(REWIND_META_KEY.into(), true.into());
                 responder.respond(
                     InitializeResponse::new(req.protocol_version)
                         .agent_capabilities(
@@ -228,10 +253,25 @@ async fn main() -> acp::Result<()> {
                     // Unique across runs, so a loaded session can't clash with a new one.
                     let run = std::process::id();
                     let id = format!("stub-{run}-{}", state.next_session.fetch_add(1, Ordering::Relaxed) + 1);
-                    let session = StubSession::new(&id, req.meta.as_ref());
+                    let mut session = StubSession::new(&id, req.meta.as_ref());
+                    session.cwd.clone_from(&req.cwd);
                     // A new session starts with no history (an earlier run with the same pid may
-                    // have left some).
+                    // have left some), or a copy of the one it forks up to the message.
                     let _ = std::fs::remove_file(&session.history);
+                    let fork: Option<ForkOf> = req.meta.as_ref().and_then(|m| m.get(FORK_OF_META_KEY)).and_then(|f| serde_json::from_value(f.clone()).ok());
+                    if let Some(fork) = fork {
+                        let from = std::env::temp_dir().join("space-stub-sessions").join(format!("{}.txt", fork.session_id));
+                        let lines: Vec<String> = std::fs::read_to_string(&from).unwrap_or_default().lines().map(str::to_string).collect();
+                        let Some(at) = lines.iter().position(|l| l.split('\t').next() == Some(fork.message_id.as_str())) else {
+                            return responder.respond_with_error(acp::Error::new(-32602, "That message isn't in the conversation"));
+                        };
+                        let kept: String = lines[..at].iter().map(|l| format!("{l}\n")).collect();
+                        let _ = std::fs::create_dir_all(session.history.parent().unwrap()).and_then(|()| std::fs::write(&session.history, kept));
+                        // The files' history goes with the copy.
+                        let edits = state.edits.lock().unwrap().get(&fork.session_id).cloned().unwrap_or_default();
+                        state.edits.lock().unwrap().insert(id.clone(), edits);
+                        eprintln!("space-stub-agent: fork {} before {} -> {id}", fork.session_id, fork.message_id);
+                    }
                     state.sessions.lock().unwrap().insert(id.clone(), session);
                     responder.respond(NewSessionResponse::new(id.clone()))?;
                     cx.send_notification(state.status(&id))
@@ -245,7 +285,9 @@ async fn main() -> acp::Result<()> {
                 async move |req: LoadSessionRequest, responder, cx: Conn| {
                     let id = req.session_id.clone();
                     eprintln!("space-stub-agent: load {}", id.0);
-                    state.sessions.lock().unwrap().insert(id.0.to_string(), StubSession::new(&id.0, req.meta.as_ref()));
+                    let mut session = StubSession::new(&id.0, req.meta.as_ref());
+                    session.cwd.clone_from(&req.cwd);
+                    state.sessions.lock().unwrap().insert(id.0.to_string(), session);
                     // Agents replay the conversation while loading.
                     let replay = ContentChunk::new(ContentBlock::Text(TextContent::new("(replayed history)")));
                     cx.send_notification(SessionNotification::new(id.clone(), SessionUpdate::AgentMessageChunk(replay)))?;
@@ -331,6 +373,16 @@ async fn main() -> acp::Result<()> {
         .on_receive_request(
             {
                 let state = state.clone();
+                async move |req: RewindSession, responder: Responder<RewindResult, acp::V1>, _cx: Conn| {
+                    eprintln!("space-stub-agent: rewind {} restore={}", req.message_id, req.restore_files);
+                    responder.respond(rewind(&state, &req))
+                }
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = state.clone();
                 async move |req: UnsteerSession, responder: Responder<UnsteerResult, acp::V1>, _cx: Conn| {
                     let ids = state.steers.lock().unwrap().remove(&req.session_id).unwrap_or_default().into_iter().map(|(id, _)| id).collect();
                     responder.respond(UnsteerResult { ids })
@@ -374,8 +426,13 @@ async fn run_turn(
     if let Some(context) = req.meta.as_ref().and_then(|m| m.get(CONTEXT_META_KEY)) {
         eprintln!("space-stub-agent: context {context}");
     }
+    let message = req.meta.as_ref().and_then(|m| m.get(MESSAGE_ID_META_KEY)).and_then(|v| v.as_str()).map(str::to_string);
+    if let Some(s) = state.sessions.lock().unwrap().get_mut(&*sid.0) {
+        s.message.clone_from(&message);
+    }
     if let Some(turn) = state.script.turn(&text) {
         let steps = turn.steps.clone();
+        remember(&state, &sid, message.as_deref(), &text);
         return run_script(cx, state, sid, &text, steps, responder).await;
     }
     let mut trace = Tracer::start(&state, &sid);
@@ -527,17 +584,7 @@ async fn run_turn(
     }
 
     // Earlier prompts of this session, then this one.
-    let history = state.sessions.lock().unwrap().get(&*sid.0).map(|s| s.history.clone());
-    let earlier = history.as_ref().and_then(|h| std::fs::read_to_string(h).ok()).map_or(0, |t| t.lines().count());
-    if let Some(h) = &history {
-        let line = format!("{}\n", text.replace('\n', " "));
-        let kept = std::fs::create_dir_all(h.parent().unwrap())
-            .and_then(|_| std::fs::OpenOptions::new().create(true).append(true).open(h))
-            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
-        if let Err(e) = kept {
-            eprintln!("space-stub-agent: can't keep the session in {}: {e}", h.display());
-        }
-    }
+    let earlier = remember(&state, &sid, message.as_deref(), &text);
     trace.request(vec![
         serde_json::json!({"role": "assistant", "content": [{"type": "tool_use", "id": tool_id, "name": "bash", "input": {"command": command}}]}),
         serde_json::json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_id, "content": {"toolResultRef": tool_id}}]}),
@@ -700,6 +747,23 @@ async fn run_script(
                 let content = vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(text)))];
                 send(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id, ToolCallUpdateFields::new().status(status).content(content))))?;
             }
+            Step::Write { path, text } => {
+                let (cwd, message) = state.sessions.lock().unwrap().get(&*sid.0).map(|s| (s.cwd.clone(), s.message.clone())).unwrap_or_default();
+                let file = cwd.join(&path);
+                let before = std::fs::read(&file).ok();
+                if let Some(message) = message {
+                    state.edits.lock().unwrap().entry(sid.0.to_string()).or_default().push((message, file.clone(), before));
+                }
+                if let Err(e) = file.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&file, &text)) {
+                    eprintln!("space-stub-agent: can't write {}: {e}", file.display());
+                }
+                let id = format!("write-{}", state.next_write.fetch_add(1, Ordering::Relaxed));
+                tools.insert(id.clone());
+                let location = ToolCallLocation::new(file.clone());
+                send(SessionUpdate::ToolCall(
+                    ToolCall::new(id, format!("edit: {}", file.display())).kind(ToolKind::Edit).status(ToolCallStatus::Completed).locations(vec![location]),
+                ))?;
+            }
             Step::Context { tokens } => {
                 if let Some(s) = state.sessions.lock().unwrap().get_mut(&*sid.0) {
                     s.context_tokens = tokens;
@@ -735,6 +799,48 @@ async fn run_script(
     trace.end_turn("end_turn");
     trace.send(&cx)?;
     responder.respond(PromptResponse::new(StopReason::EndTurn).meta(usage_meta()))
+}
+
+/// Keep a prompt (and its id) in the session's history file; returns how many it had before.
+fn remember(state: &State, sid: &SessionId, id: Option<&str>, text: &str) -> usize {
+    let Some(h) = state.sessions.lock().unwrap().get(&*sid.0).map(|s| s.history.clone()) else { return 0 };
+    let earlier = std::fs::read_to_string(&h).map_or(0, |t| t.lines().count());
+    let line = format!("{}\t{}\n", id.unwrap_or("-"), text.replace('\n', " "));
+    let kept = std::fs::create_dir_all(h.parent().unwrap())
+        .and_then(|_| std::fs::OpenOptions::new().create(true).append(true).open(&h))
+        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+    if let Err(e) = kept {
+        eprintln!("space-stub-agent: can't keep the session in {}: {e}", h.display());
+    }
+    earlier
+}
+
+/// `_space/session/rewind`: the message is a prompt of the session's history; the files `write`
+/// steps changed since go back to what they held before it.
+fn rewind(state: &State, req: &RewindSession) -> RewindResult {
+    let history = std::env::temp_dir().join("space-stub-sessions").join(format!("{}.txt", req.session_id));
+    let found = std::fs::read_to_string(history).unwrap_or_default().lines().any(|l| l.split('\t').next() == Some(req.message_id.as_str()));
+    let edits = state.edits.lock().unwrap().get(&req.session_id).cloned().unwrap_or_default();
+    let Some(start) = edits.iter().position(|(m, _, _)| *m == req.message_id).or_else(|| found.then_some(edits.len())) else {
+        return RewindResult { found, files: false, reason: Some("No file checkpoint found for this message.".into()), ..Default::default() };
+    };
+    // Each file's content before the first edit since.
+    let mut first: Vec<(std::path::PathBuf, Option<Vec<u8>>)> = Vec::new();
+    for (_, path, before) in &edits[start..] {
+        if !first.iter().any(|(p, _)| p == path) {
+            first.push((path.clone(), before.clone()));
+        }
+    }
+    let changed: Vec<_> = first.into_iter().filter(|(p, before)| std::fs::read(p).ok() != *before).collect();
+    if req.restore_files {
+        for (path, before) in &changed {
+            let _ = match before {
+                Some(bytes) => std::fs::write(path, bytes),
+                None => std::fs::remove_file(path),
+            };
+        }
+    }
+    RewindResult { found, files: true, changed: changed.iter().map(|(p, _)| p.display().to_string()).collect(), ..Default::default() }
 }
 
 /// The usage every finished turn reports.

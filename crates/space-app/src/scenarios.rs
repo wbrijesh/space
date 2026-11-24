@@ -57,6 +57,8 @@ pub struct ScenarioThread {
     /// Quoted by `prompt`, and in the composer.
     pub quote: Option<&'static str>,
     pub draft_quote: Option<&'static str>,
+    /// Sent after `prompt`, one per turn as each ends, with what the stub streams back.
+    pub followups: Vec<(&'static str, Vec<Step>)>,
 }
 
 const ICON: &str = "crates/space-app/resources/AppIcon.png";
@@ -366,6 +368,15 @@ pub fn all() -> Vec<Scenario> {
             ..Default::default()
         },
         Scenario {
+            name: "rewind",
+            description: "Three finished turns that wrote files under `rewind-demo/` in the project folder (give a \
+                          scratch folder after the scenario name): hover a message for ✎ Edit and ↺ Rewind, or Esc \
+                          Esc in the empty composer. Threads are saved in a temp folder kept between launches.",
+            threads: vec![rewind_thread()],
+            store: true,
+            ..Default::default()
+        },
+        Scenario {
             name: "side-chat",
             description: "A finished thread to open the side chat beside (⌘⇧L, or /btw and a space). Threads are \
                           saved in a temp folder kept between launches, so a side chat is there again next time.",
@@ -395,6 +406,18 @@ fn long_thread() -> ScenarioThread {
     }
     steps.push(context(120_000));
     thread("Walk me through plugin discovery in detail", steps)
+}
+
+/// Three turns, each changing files, to go back through.
+fn rewind_thread() -> ScenarioThread {
+    let write = |path: &str, text: &str| Step::Write { path: format!("rewind-demo/{path}"), text: text.into() };
+    ScenarioThread {
+        followups: vec![
+            ("Also remember its width", vec![thought("Keep it in the window state."), write("sidebar.rs", "resizable\nremembered\n"), write("settings.rs", "sidebar_width\n"), say("Done: the width is saved per window and restored at launch.")]),
+            ("Add a minimum width of 200 px", vec![write("sidebar.rs", "resizable\nremembered\nmin 200\n"), say("Done: it stops at 200 px.")]),
+        ],
+        ..thread("Make the sidebar resizable", vec![thought("A drag handle on its edge."), write("sidebar.rs", "resizable\n"), say("Done. Drag the divider to resize it.")])
+    }
 }
 
 /// A long finished stretch, then a reply that keeps streaming a sentence every ~0.6 s for a few
@@ -450,6 +473,7 @@ pub fn script(scenario: &Scenario) -> StubScript {
                 let input = space_core::UserInput { quote: t.quote.map(Into::into), ..space_core::UserInput::text(t.prompt?) };
                 Some(ScriptedTurn { prompt: input.prompt_text(), steps: t.steps.clone() })
             })
+            .chain(scenario.threads.iter().flat_map(|t| t.followups.iter().map(|(p, steps)| ScriptedTurn { prompt: (*p).into(), steps: steps.clone() })))
             .collect(),
     }
 }
@@ -531,6 +555,7 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
             pinned: t.pinned,
             quote: t.quote.map(Into::into),
             draft_quote: t.draft_quote.map(Into::into),
+            followups: t.followups.iter().map(|(p, _)| (*p).to_string()).collect(),
         })
         .collect();
     let options = Options {

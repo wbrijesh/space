@@ -21,6 +21,7 @@ gpui::actions!(
         ScrollToBottom,
         RecallPrevious,
         RecallNext,
+        UndoRewind,
         CompleteCommand,
         Quit,
         ToggleRightPane,

@@ -73,7 +73,7 @@ export interface Update {
 /**
  * What the main thread (`main`, its saved messages in order) has after message `through`;
  * `undefined` when there's nothing new. When `through` isn't there (the main thread was
- * compacted since, or started over), all of it is new.
+ * compacted since, started over or went back to an earlier message), all of it is new.
  */
 export function mainUpdate(main: readonly SavedMessage[], through: string | undefined): Update | undefined {
 	const at = through === undefined ? -1 : main.findIndex((m) => m.uuid === through);
@@ -89,7 +89,7 @@ export function mainUpdate(main: readonly SavedMessage[], through: string | unde
 		steps = steps.slice(1);
 	}
 	const left = total - steps.length;
-	const head = [...(at === -1 && through !== undefined ? ["(The main thread was compacted or started over since the last update; this is what it holds now.)"] : []), ...(left > 0 ? [`(${left} earlier steps left out.)`] : [])];
+	const head = [...(at === -1 && through !== undefined ? ["(The main thread was compacted, started over or went back to an earlier message since the last update; this is what it holds now.)"] : []), ...(left > 0 ? [`(${left} earlier steps left out.)`] : [])];
 	const body = [...head, ...steps].join("\n");
 	return { text: `<main-thread-update through="${last.uuid}">\n${body}\n</main-thread-update>`, through: last.uuid, steps: total };
 }

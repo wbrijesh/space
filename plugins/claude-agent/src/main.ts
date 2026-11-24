@@ -8,7 +8,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
-import { complete, Engine, PROVIDER, type SDKMessage, savedMessages } from "./claude.js";
+import { complete, copySession, Engine, PROVIDER, type SDKMessage, savedMessages } from "./claude.js";
 import { claudeCli, errorText, log } from "./env.js";
 import {
 	COMPLETE_METHOD,
@@ -16,10 +16,15 @@ import {
 	CONFINE_METHOD,
 	type ConfineResult,
 	CONTEXT_META_KEY,
+	FORK_OF_META_KEY,
+	type ForkOf,
+	MESSAGE_ID_META_KEY,
 	PRE_EXECUTE_METHOD,
 	type PreExecuteResult,
 	PROTOCOL_VERSION,
 	PROTOCOL_VERSION_META_KEY,
+	REWIND_META_KEY,
+	REWIND_METHOD,
 	SIDE_OF_META_KEY,
 	STATUS_METHOD,
 	STEER_META_KEY,
@@ -29,7 +34,8 @@ import {
 	UNSTEER_METHOD,
 	USAGE_META_KEY,
 } from "./generated/protocol.js";
-import { parseComplete, parseConfigure, parseSteer, sessionRef, sideOf, steerBlocks } from "./params.js";
+import { forkOf, messageId, parseComplete, parseConfigure, parseRewind, parseSteer, sessionRef, sideOf, steerBlocks } from "./params.js";
+import { forkPoint, readEntries } from "./rewind.js";
 import { contextFromMeta, type HostLink, type Output, Session } from "./session.js";
 import { TraceRecorder } from "./trace.js";
 // Built in (a single-file executable has no package.json next to it).
@@ -101,7 +107,7 @@ const host: HostLink = {
  * Start (or continue) the session `sessionId` and announce its status once the reply is out.
  * `side`: it's a side chat of that session.
  */
-async function openSession(sessionId: string, cwd: string, resume: boolean, side: string | undefined): Promise<void> {
+async function openSession(sessionId: string, cwd: string, resume: boolean, side: string | undefined, fork?: { from: string; at: string }): Promise<void> {
 	const output = new Outbox(sessionId);
 	const trace = new TraceRecorder(sessionId, (batch: TraceBatch) => connection.client.notify(TRACE_METHOD, batch), resume);
 	let session: Session;
@@ -116,14 +122,16 @@ async function openSession(sessionId: string, cwd: string, resume: boolean, side
 			trace,
 			start: (options, onMessage, onExit) => new Engine(options, record(sessionId, onMessage), onExit),
 			read: savedMessages,
+			entries: readEntries,
 			...(side ? { sideOf: side } : {}),
+			...(fork ? { fork } : {}),
 		});
 	} catch (error) {
 		log(`session/${resume ? "load" : "new"} failed:`, errorText(error));
 		throw error instanceof acp.RequestError ? error : new acp.RequestError(-32603, `Couldn't start Claude Code: ${errorText(error)}`);
 	}
 	sessions.set(sessionId, session);
-	log(`session/${resume ? "load" : "new"} ${sessionId} cwd=${cwd} model=${session.settings.model}${side ? ` side chat of ${side}` : ""}`);
+	log(`session/${resume ? "load" : "new"} ${sessionId} cwd=${cwd} model=${session.settings.model}${side ? ` side chat of ${side}` : ""}${fork ? ` from ${fork.from} up to ${fork.at}` : ""}`);
 	// Sent after the response is written, so the client already knows the session.
 	setImmediate(() => output.notify(STATUS_METHOD, session.status()));
 }
@@ -132,6 +140,29 @@ function sessionFor(sessionId: string): Session {
 	const session = sessions.get(sessionId);
 	if (!session) throw acp.RequestError.sessionNotFound(sessionId);
 	return session;
+}
+
+/**
+ * `session/new` going on from a copy of session `fork.sessionId`'s conversation up to just
+ * before message `fork.messageId`. Returns the new session's id.
+ */
+async function openFork(fork: ForkOf, cwd: string): Promise<string> {
+	const at = forkPoint(readEntries(fork.sessionId, cwd), fork.messageId);
+	if (!at) throw new acp.RequestError(-32602, "That message isn't in Claude's conversation any more, so the thread can't go back to it.");
+	if (at.kind === "copy") {
+		// Before a compaction: copy the transcript, then continue the copy.
+		let copy: string;
+		try {
+			copy = await copySession(fork.sessionId, cwd, at.upTo);
+		} catch (error) {
+			throw new acp.RequestError(-32603, `Couldn't copy the conversation: ${errorText(error)}`);
+		}
+		await openSession(copy, cwd, true, undefined);
+		return copy;
+	}
+	const sessionId = randomUUID();
+	await openSession(sessionId, cwd, false, undefined, at.kind === "resume" ? { from: fork.sessionId, at: at.at } : undefined);
+	return sessionId;
 }
 
 /** A provider other than ours can't be served. */
@@ -153,10 +184,17 @@ const app = acp
 			agentInfo: { name: "claude-agent", title: "Claude Agent", version: VERSION },
 			authMethods: [],
 			// The Space protocol this build speaks (the host refuses a mismatch).
-			_meta: { [PROTOCOL_VERSION_META_KEY]: PROTOCOL_VERSION, [STEER_META_KEY]: true },
+			_meta: { [PROTOCOL_VERSION_META_KEY]: PROTOCOL_VERSION, [STEER_META_KEY]: true, [REWIND_META_KEY]: true },
 		};
 	})
 	.onRequest(acp.methods.agent.session.new, async ({ params }) => {
+		let fork: ForkOf | undefined;
+		try {
+			fork = forkOf(params._meta, FORK_OF_META_KEY);
+		} catch (error) {
+			throw acp.RequestError.invalidParams(undefined, errorText(error));
+		}
+		if (fork) return { sessionId: await openFork(fork, params.cwd) };
 		// Claude Code takes the id as its own session id (a UUID).
 		const sessionId = randomUUID();
 		await openSession(sessionId, params.cwd, false, sideOf(params._meta, SIDE_OF_META_KEY));
@@ -165,14 +203,18 @@ const app = acp
 	// Continues the conversation Claude Code kept. ACP has the agent replay it here; Space
 	// already shows it (from its own saved thread), so nothing is replayed.
 	.onRequest(acp.methods.agent.session.load, async ({ params }) => {
-		if (!sessions.has(params.sessionId)) await openSession(params.sessionId, params.cwd, true, sideOf(params._meta, SIDE_OF_META_KEY));
+		const side = sideOf(params._meta, SIDE_OF_META_KEY);
+		const open = sessions.get(params.sessionId);
+		// A side chat loaded again beside its thread's new session (the thread went back to an earlier message).
+		if (open && side) open.follow(side);
+		if (!open) await openSession(params.sessionId, params.cwd, true, side);
 		return {};
 	})
 	.onRequest(acp.methods.agent.session.prompt, async ({ params }) => {
 		const session = sessionFor(params.sessionId);
 		let result: Awaited<ReturnType<Session["prompt"]>>;
 		try {
-			result = await session.prompt(params.prompt, contextFromMeta(params._meta, CONTEXT_META_KEY));
+			result = await session.prompt(params.prompt, contextFromMeta(params._meta, CONTEXT_META_KEY), messageId(params._meta, MESSAGE_ID_META_KEY));
 		} catch (error) {
 			throw new acp.RequestError(-32603, errorText(error));
 		}
@@ -213,6 +255,15 @@ const app = acp
 			throw acp.RequestError.invalidRequest(undefined, errorText(error));
 		}
 		return {};
+	})
+	// Going back to an earlier message: can the conversation, and which files to put back.
+	.onRequest(REWIND_METHOD, parseRewind, async ({ params }) => {
+		try {
+			return await sessionFor(params.sessionId).rewind(params.messageId, params.restoreFiles ?? false);
+		} catch (error) {
+			if (error instanceof acp.RequestError) throw error;
+			throw new acp.RequestError(-32603, errorText(error));
+		}
 	})
 	// Take back the steered messages Claude hasn't read.
 	.onRequest(UNSTEER_METHOD, sessionRef, async ({ params }) => ({ ids: await sessionFor(params.sessionId).unsteer() }))

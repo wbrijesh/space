@@ -94,6 +94,10 @@ impl SpaceApp {
     /// ↑/↓ at the edge of the composer's text: put the previous / next sent message of the
     /// thread there (caret at the end). `false`: nothing to recall, the key moves the caret.
     pub(crate) fn recall(&mut self, step: RecallStep, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        // Rewind mode: the message before or after.
+        if self.rewind.mode.is_some() {
+            return self.step_picked(step == RecallStep::Back, cx);
+        }
         let Some(key) = self.selected else { return false };
         let current = self.input.read(cx).value().to_string();
         let Some(thread) = self.thread_mut(key) else { return false };

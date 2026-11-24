@@ -35,6 +35,11 @@ fn generate() -> String {
         ("CONTEXT_META_KEY", format!("{CONTEXT_META_KEY:?}")),
         ("SIDE_OF_META_KEY", format!("{SIDE_OF_META_KEY:?}")),
         ("USAGE_META_KEY", format!("{USAGE_META_KEY:?}")),
+        ("REWIND_META_KEY", format!("{REWIND_META_KEY:?}")),
+        ("MESSAGE_ID_META_KEY", format!("{MESSAGE_ID_META_KEY:?}")),
+        ("FORK_OF_META_KEY", format!("{FORK_OF_META_KEY:?}")),
+        ("REWIND_METHOD", format!("{REWIND_METHOD:?}")),
+        ("SUBAGENT_META_KEY", format!("{SUBAGENT_META_KEY:?}")),
         ("TRACE_METHOD", format!("{:?}", crate::trace::TRACE_METHOD)),
     ];
     for (name, value) in consts {
@@ -63,6 +68,9 @@ fn generate() -> String {
         item::<Retry>(&cfg),
         item::<RetryState>(&cfg),
         item::<RetryKind>(&cfg),
+        item::<ForkOf>(&cfg),
+        item::<RewindSession>(&cfg),
+        item::<RewindResult>(&cfg),
         item::<ContextSection>(&cfg),
         item::<TurnUsage>(&cfg),
         item::<crate::trace::TraceBatch>(&cfg),

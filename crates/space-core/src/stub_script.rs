@@ -62,6 +62,10 @@ pub enum Step {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
     },
+    /// Write `text` to `path` (relative to the session's folder) as an edit tool would, reported
+    /// as a completed `edit` call on that file. The stub keeps what the file was before each
+    /// message, so `_space/session/rewind` can put it back.
+    Write { path: String, text: String },
     /// Report context usage in `_space/status`.
     Context { tokens: u64 },
     Sleep { ms: u64 },

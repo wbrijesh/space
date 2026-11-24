@@ -10,12 +10,14 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use space_protocol::acp::{self, Agent, ByteStreams, Client};
 use space_protocol::acp_schema as schema;
-use space_protocol::ext::{CONTEXT_META_KEY, SIDE_OF_META_KEY, PROTOCOL_VERSION_META_KEY, STEER_META_KEY, USAGE_META_KEY};
+use space_protocol::ext::{
+    CONTEXT_META_KEY, FORK_OF_META_KEY, MESSAGE_ID_META_KEY, PROTOCOL_VERSION_META_KEY, REWIND_META_KEY, SIDE_OF_META_KEY, STEER_META_KEY, USAGE_META_KEY,
+};
 use space_protocol::service::HistoryItem;
 use space_protocol::trace::{ContextFact, TraceBatch, TraceEvent};
 use space_protocol::{
-    Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, PROTOCOL_VERSION, PreExecute, SpaceStatus, SteerImage, SteerSession,
-    SteerText, Retry, Steered, UnsteerSession,
+    Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, ForkOf, PROTOCOL_VERSION, PreExecute, RewindResult, RewindSession, SpaceStatus,
+    SteerImage, SteerSession, SteerText, Retry, Steered, UnsteerSession,
 };
 use tokio::sync::oneshot;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -84,7 +86,8 @@ impl Shared {
             at.map(|i| list.remove(i))
         };
         let Some(p) = pending else { return };
-        let (host, id, input) = (&self.host, &steered.session_id, p.input);
+        let (host, id) = (&self.host, &steered.session_id);
+        let input = UserInput { id: Some(p.id.clone()), ..p.input };
         let text = input.prompt_text();
         if host.tracing() {
             let path = |p: &PathBuf| p.display().to_string();
@@ -97,7 +100,7 @@ impl Shared {
             host.trace(id, vec![prompt]);
         }
         host.record(id, HistoryItem::User { text });
-        host.emit_session(id, input.into_message(Some(now_ms())));
+        host.emit_session(id, input.into_message(Some(now_ms()), true));
         host.emit(HostEvent::Steered { session_id: steered.session_id, steer_id: steered.id });
     }
 
@@ -338,9 +341,10 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
     let can_load = init.agent_capabilities.load_session;
     let images = init.agent_capabilities.prompt_capabilities.image;
     let embedded = init.agent_capabilities.prompt_capabilities.embedded_context;
-    let steer = init.meta.as_ref().and_then(|m| m.get(STEER_META_KEY)).and_then(|v| v.as_bool()).unwrap_or(false);
+    let flag = |key: &str| init.meta.as_ref().and_then(|m| m.get(key)).and_then(|v| v.as_bool()).unwrap_or(false);
+    let (steer, rewind) = (flag(STEER_META_KEY), flag(REWIND_META_KEY));
 
-    let inner = Arc::new(AgentInner { plugin_id: plugin_id.clone(), conn, process, shared, agent_name, can_load, images, embedded, steer });
+    let inner = Arc::new(AgentInner { plugin_id: plugin_id.clone(), conn, process, shared, agent_name, can_load, images, embedded, steer, rewind });
     host.agents.lock().unwrap().insert(plugin_id, Arc::downgrade(&inner));
     Ok(AgentHandle { inner })
 }
@@ -375,12 +379,17 @@ fn text_block(t: &TextRef, embedded: bool) -> Result<schema::ContentBlock> {
     Ok(schema::ContentBlock::Resource(schema::EmbeddedResource::new(schema::EmbeddedResourceResource::TextResourceContents(contents))))
 }
 
-/// `_meta` of `session/new` and `session/load`: the session it's a side chat of.
-fn session_meta(side_of: Option<&str>) -> Option<schema::Meta> {
-    let main = side_of?;
+/// `_meta` of `session/new` and `session/load`: the session it's a side chat of, or the
+/// conversation it's a copy of.
+fn session_meta(side_of: Option<&str>, fork: Option<&ForkOf>) -> Option<schema::Meta> {
     let mut meta = schema::Meta::new();
-    meta.insert(SIDE_OF_META_KEY.into(), main.into());
-    Some(meta)
+    if let Some(main) = side_of {
+        meta.insert(SIDE_OF_META_KEY.into(), main.into());
+    }
+    if let Some(fork) = fork {
+        meta.insert(FORK_OF_META_KEY.into(), serde_json::to_value(fork).unwrap_or_default());
+    }
+    (!meta.is_empty()).then_some(meta)
 }
 
 fn acp_error(what: &str, e: acp::Error, process: &PluginProcess) -> anyhow::Error {
@@ -412,6 +421,8 @@ pub(super) struct AgentInner {
     embedded: bool,
     /// The agent takes messages between the steps of a running turn (`_space/session/steer`).
     steer: bool,
+    /// The agent can go back to an earlier message (`_space/session/rewind`, `space/forkOf`).
+    rewind: bool,
 }
 
 impl AgentHandle {
@@ -445,19 +456,29 @@ impl AgentHandle {
 
     /// `session/new` with `cwd` for thread `thread_id` (the session's traces are filed under it).
     pub async fn new_session_in(&self, cwd: impl Into<PathBuf>, thread_id: Option<&str>) -> Result<Session> {
-        self.create_session(cwd.into(), thread_id, None).await
+        self.create_session(cwd.into(), thread_id, None, None).await
+    }
+
+    /// `session/new` going on from a copy of session `fork.session_id`'s conversation up to just
+    /// before message `fork.message_id` (needs [`AgentHandle::can_rewind`]); otherwise as
+    /// [`AgentHandle::new_session_in`].
+    pub async fn fork_session(&self, fork: &ForkOf, cwd: impl Into<PathBuf>, thread_id: Option<&str>) -> Result<Session> {
+        if !self.can_rewind() {
+            bail!("{} can't go back to an earlier message", self.agent_name().unwrap_or(&self.inner.plugin_id));
+        }
+        self.create_session(cwd.into(), thread_id, None, Some(fork)).await
     }
 
     /// `session/new` for a side chat of session `side_of` (see [`SIDE_OF_META_KEY`]); otherwise as
     /// [`AgentHandle::new_session_in`].
     pub async fn new_side_session(&self, side_of: &str, cwd: impl Into<PathBuf>, thread_id: Option<&str>) -> Result<Session> {
-        self.create_session(cwd.into(), thread_id, Some(side_of)).await
+        self.create_session(cwd.into(), thread_id, Some(side_of), None).await
     }
 
-    async fn create_session(&self, cwd: PathBuf, thread_id: Option<&str>, side_of: Option<&str>) -> Result<Session> {
+    async fn create_session(&self, cwd: PathBuf, thread_id: Option<&str>, side_of: Option<&str>, fork: Option<&ForkOf>) -> Result<Session> {
         let this = self.clone();
         let host = self.inner.shared.host.clone();
-        let request = schema::NewSessionRequest::new(cwd.clone()).meta(session_meta(side_of));
+        let request = schema::NewSessionRequest::new(cwd.clone()).meta(session_meta(side_of, fork));
         let response = host
             .rt
             .spawn(async move {
@@ -495,6 +516,12 @@ impl AgentHandle {
         self.inner.steer
     }
 
+    /// Whether the agent can go back to an earlier message ([`Session::rewind`],
+    /// [`AgentHandle::fork_session`]).
+    pub fn can_rewind(&self) -> bool {
+        self.inner.rewind
+    }
+
     /// ACP `session/load`: continue session `session_id` (from an earlier run) in `cwd`. The
     /// history the agent replays while loading isn't reported; the thread already shows it.
     pub async fn load_session(&self, session_id: &str, cwd: impl Into<PathBuf>, thread_id: Option<&str>) -> Result<Session> {
@@ -513,7 +540,7 @@ impl AgentHandle {
         }
         let (this, id) = (self.clone(), session_id.to_string());
         let host = self.inner.shared.host.clone();
-        let request = schema::LoadSessionRequest::new(id.clone(), cwd.clone()).meta(session_meta(side_of));
+        let request = schema::LoadSessionRequest::new(id.clone(), cwd.clone()).meta(session_meta(side_of, None));
         self.inner.shared.loading.lock().unwrap().insert(id.clone());
         let response = host
             .rt
@@ -613,7 +640,8 @@ impl Session {
     /// takes them ([`AgentHandle::accepts_images`]). `texts` (long pastes) go inline as ACP
     /// embedded resources, or as `resource_link`s to their files for an agent that doesn't take
     /// embedded context. A quote goes before the text as a markdown blockquote.
-    pub async fn prompt_with(&self, input: UserInput) -> Result<String> {
+    pub async fn prompt_with(&self, mut input: UserInput) -> Result<String> {
+        let message_id = input.id.get_or_insert_with(crate::session::new_message_id).clone();
         let text = input.prompt_text();
         let (attachments, images, texts) = (input.attachments.clone(), input.images.clone(), input.texts.clone());
         if !images.is_empty() && !self.inner.agent.accepts_images() {
@@ -645,7 +673,7 @@ impl Session {
             };
             host.trace(&id, vec![prompt]);
         }
-        host.emit_session(&id, input.into_message(Some(now_ms())));
+        host.emit_session(&id, input.into_message(Some(now_ms()), false));
         host.emit_session(&id, SessionEvent::TurnStarted);
         host.record(&id, HistoryItem::User { text: text.clone() });
 
@@ -675,12 +703,12 @@ impl Session {
                         format!("file://{}", path.display()),
                     )));
                 }
-                let mut request = schema::PromptRequest::new(task_id, blocks);
+                let mut meta = schema::Meta::new();
+                meta.insert(MESSAGE_ID_META_KEY.into(), message_id.into());
                 if !sections.is_empty() {
-                    let mut meta = schema::Meta::new();
                     meta.insert(CONTEXT_META_KEY.into(), serde_json::to_value(&sections).unwrap_or_default());
-                    request = request.meta(meta);
                 }
+                let request = schema::PromptRequest::new(task_id, blocks).meta(meta);
                 agent
                     .inner
                     .conn
@@ -788,6 +816,22 @@ impl Session {
             list.retain(|p| !result.ids.contains(&p.id));
         }
         Ok(result.ids)
+    }
+
+    /// `_space/session/rewind`: whether the agent can go back to just before message
+    /// `message_id`, and which files its edits since changed. With `restore_files` it puts those
+    /// back as they were then (needs [`AgentHandle::can_rewind`]).
+    pub async fn rewind(&self, message_id: &str, restore_files: bool) -> Result<RewindResult> {
+        if !self.inner.agent.can_rewind() {
+            bail!("this agent can't go back to an earlier message");
+        }
+        let request = RewindSession { session_id: self.inner.id.clone(), message_id: message_id.to_string(), restore_files };
+        let agent = self.inner.agent.clone();
+        let host = agent.inner.shared.host.clone();
+        host.rt
+            .spawn(async move { agent.inner.conn.send_request(request).block_task().await.map_err(|e| acp_error("_space/session/rewind", e, &agent.inner.process)) })
+            .await
+            .map_err(|e| anyhow!("rewind task failed: {e}"))?
     }
 
     /// `session/cancel`: ask the agent to stop the running turn. Pending permission

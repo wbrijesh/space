@@ -125,8 +125,9 @@ async fn a_loaded_session_starts_with_what_the_thread_shows() {
         locations: vec![],
         blocked: None,
         held: None,
+        subagent: false,
     };
-    let shown = [TranscriptItem::User { text: "earlier".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: None }, TranscriptItem::Agent("ok".into()), TranscriptItem::Tool(call)];
+    let shown = [TranscriptItem::User { text: "earlier".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: None, id: None, steered: false }, TranscriptItem::Agent("ok".into()), TranscriptItem::Tool(call)];
     session.seed_history(&shown);
     let turn = tokio::spawn(async move { session.prompt("hello").await });
     let e = next(&mut events, |e| matches!(e, HostEvent::Session { event: SessionEvent::PermissionRequested(_), .. })).await;

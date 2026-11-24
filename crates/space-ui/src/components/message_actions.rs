@@ -1,6 +1,6 @@
 //! The row under a message, shown while the pointer is over the message: copy, the turn's usage
-//! (agent replies) and how long ago it was. Its height is always kept, so showing it doesn't
-//! move anything.
+//! (agent replies), how long ago it was, and for your messages edit and rewind. Its height is
+//! always kept, so showing it doesn't move anything.
 
 use std::rc::Rc;
 
@@ -21,16 +21,22 @@ pub const ROW_H: Pixels = px(28.);
 pub type CopyHandler = Rc<dyn Fn(SharedString, SharedString, &mut Window, &mut App)>;
 /// Open (`Some(row id)`) or close (`None`) a row's usage panel.
 pub type UsageHandler = Rc<dyn Fn(Option<SharedString>, &mut Window, &mut App)>;
+/// Acts on the message at a transcript index.
+pub type IndexHandler = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 
 #[derive(Clone)]
 pub struct ActionHandlers {
     pub on_copy: CopyHandler,
     pub on_usage: UsageHandler,
+    /// Edit one of your messages in place (sent again in its place).
+    pub on_edit: Option<IndexHandler>,
+    /// Go back to just before one of your messages.
+    pub on_rewind: Option<IndexHandler>,
 }
 
 impl Default for ActionHandlers {
     fn default() -> Self {
-        Self { on_copy: Rc::new(|_, _, _, _| {}), on_usage: Rc::new(|_, _, _| {}) }
+        Self { on_copy: Rc::new(|_, _, _, _| {}), on_usage: Rc::new(|_, _, _| {}), on_edit: None, on_rewind: None }
     }
 }
 
@@ -53,10 +59,33 @@ pub struct MessageActions {
     pub end: bool,
     /// Shown without hovering (previews).
     pub shown: bool,
+    /// Your message at this transcript index can be edited and rewound to.
+    pub rewind: Option<usize>,
 }
 
 pub fn message_actions(a: MessageActions, h: &ActionHandlers) -> Div {
-    let MessageActions { id, group, copy_text, copied, at_ms, now_ms, usage, usage_open, end, shown } = a;
+    let MessageActions { id, group, copy_text, copied, at_ms, now_ms, usage, usage_open, end, shown, rewind } = a;
+    let button = |name: &str, icon: Lucide, tip: &'static str, handler: Option<IndexHandler>| {
+        let (handler, ix) = (handler?, rewind?);
+        Some(
+            div()
+                .id(ElementId::Name(format!("{id}-{name}").into()))
+                .size(px(24.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(radius::MD)
+                .text_color(color::text_3())
+                .cursor_pointer()
+                .hover(|s| s.bg(color::hover()).text_color(color::text()))
+                .child(Icon::new(icon).size(size::ICON))
+                .tip(tip)
+                .on_click(move |_, w, cx| handler(ix, w, cx))
+                .into_any_element(),
+        )
+    };
+    let edit = button("edit", Lucide::Pencil, "Edit", h.on_edit.clone());
+    let back = button("rewind", Lucide::RotateCcw, "Rewind to here", h.on_rewind.clone());
     let copy = copy_text.map(|copy_text| {
         let (on_copy, row) = (h.on_copy.clone(), id.clone());
         div()
@@ -84,7 +113,8 @@ pub fn message_actions(a: MessageActions, h: &ActionHandlers) -> Div {
             .tip(format::exact_time(at))
             .into_any_element()
     });
-    let items: Vec<AnyElement> = if end { [time, copy].into_iter().flatten().collect() } else { [copy, usage, time].into_iter().flatten().collect() };
+    let items: Vec<AnyElement> =
+        if end { [time, edit, back, copy].into_iter().flatten().collect() } else { [copy, usage, time].into_iter().flatten().collect() };
     div()
         .h(ROW_H)
         .flex()
@@ -214,8 +244,10 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             usage_open: false,
             end,
             shown: true,
+            rewind: end.then_some(0),
         };
-        message_actions(a, &ActionHandlers::default())
+        let h = ActionHandlers { on_edit: Some(Rc::new(|_, _, _| {})), on_rewind: Some(Rc::new(|_, _, _| {})), ..Default::default() };
+        message_actions(a, &h)
     };
     vec![ComponentPreview::new(Area::Transcript, "Message actions", "Shown while the pointer is over the message.")
         .stacked()

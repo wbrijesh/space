@@ -5,6 +5,8 @@
 import {
 	type AccountInfo,
 	type CanUseTool,
+	forkSession,
+	getSessionInfo,
 	getSessionMessages,
 	type HookCallbackMatcher,
 	type HookEvent,
@@ -14,6 +16,7 @@ import {
 	type PreToolUseHookInput,
 	type Query,
 	query,
+	type RewindFilesResult,
 	type SDKMessage,
 	type SDKUserMessage,
 	type SessionMessage,
@@ -22,7 +25,7 @@ import {
 import { errorText, log } from "./env.js";
 import type { UserContent } from "./translate.js";
 
-export type { ModelInfo, SDKMessage, SessionMessage, SlashCommand };
+export type { ModelInfo, RewindFilesResult, SDKMessage, SessionMessage, SlashCommand };
 
 /** The provider id Space knows the models by: the signed-in Claude Code CLI. */
 export const PROVIDER = "claude-cli";
@@ -101,8 +104,10 @@ export interface EngineOptions {
 	sessionId: string;
 	/** Continue the transcript kept under `sessionId` instead of starting it. */
 	resume: boolean;
-	/** Not resuming: start as a copy of this session's conversation (a side chat). */
+	/** Not resuming: start as a copy of this session's conversation (a side chat, or going back). */
 	forkFrom?: string;
+	/** With `forkFrom`: copy it only up to this entry (going back to an earlier message). */
+	forkAt?: string;
 	/** The tools Claude may use. */
 	tools: string[];
 	/** Added to Claude Code's system prompt. */
@@ -176,8 +181,11 @@ export class Engine {
 				...(options.resume
 					? { resume: options.sessionId }
 					: options.forkFrom
-						? { resume: options.forkFrom, forkSession: true, sessionId: options.sessionId }
+						? { resume: options.forkFrom, forkSession: true, sessionId: options.sessionId, ...(options.forkAt ? { resumeSessionAt: options.forkAt } : {}) }
 						: { sessionId: options.sessionId }),
+				// Claude Code keeps the files its edits change as they were before each message,
+				// so going back to one can put them back (`rewindFiles`).
+				enableFileCheckpointing: true,
 			},
 		});
 		void this.pump(onMessage, onExit);
@@ -212,6 +220,14 @@ export class Engine {
 	async cancelQueued(uuid: string): Promise<boolean> {
 		if (!canCancelQueued(this.q)) throw new Error("this Claude Agent SDK can't withdraw queued messages");
 		return this.q.cancelAsyncMessage(uuid);
+	}
+
+	/**
+	 * The files Claude's edits changed since message `uuid` (a prompt sent while no turn ran),
+	 * and with `dryRun: false` put back as they were before it.
+	 */
+	rewindFiles(uuid: string, dryRun: boolean): Promise<RewindFilesResult> {
+		return this.q.rewindFiles(uuid, { dryRun });
 	}
 
 	setModel(model: string): Promise<void> {
@@ -272,6 +288,19 @@ export function complete(cli: string, cwd: string, prompt: string, model: string
  */
 export async function savedMessages(sessionId: string, cwd: string): Promise<SessionMessage[]> {
 	return getSessionMessages(sessionId, { dir: cwd });
+}
+
+/**
+ * A copy of session `sessionId`'s transcript up to entry `upTo` (even one from before a
+ * compaction, which a resume can't reach), as a new session; returns its id. Its entries get new
+ * uuids, and keep the old ones in `forkedFrom`.
+ */
+export async function copySession(sessionId: string, cwd: string, upTo: string): Promise<string> {
+	const info = await getSessionInfo(sessionId, { dir: cwd }).catch(() => undefined);
+	// The copy keeps the conversation's name (else it gets "(fork)" added).
+	const title = info?.customTitle ?? info?.summary;
+	const { sessionId: copy } = await forkSession(sessionId, { dir: cwd, upToMessageId: upTo, ...(title ? { title } : {}) });
+	return copy;
 }
 
 /** An async queue: the messages Claude Code reads, in order, until it's closed. */

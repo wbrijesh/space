@@ -6,9 +6,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import type { HookJSONOutput, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
-import type { EngineOptions, ModelInfo, SDKMessage, SlashCommand, userMessage } from "./claude.js";
+import type { EngineOptions, ModelInfo, RewindFilesResult, SDKMessage, SlashCommand, userMessage } from "./claude.js";
 import type { ConfineResult, PreExecute, PreExecuteResult, TraceEvent } from "./generated/protocol.js";
 import { availableModels, clampEffort, type EngineLike, menuCommands, Session } from "./session.js";
+import type { Entry } from "./rewind.js";
 import { type SavedMessage, SIDE_TOOLS } from "./side.js";
 import { TraceRecorder } from "./trace.js";
 
@@ -95,6 +96,15 @@ class FakeEngine implements EngineLike {
 		return this.queued.delete(uuid);
 	}
 
+	/** `rewindFiles` calls, and what they answer. */
+	readonly rewinds: { uuid: string; dryRun: boolean }[] = [];
+	rewindResult: (uuid: string, dryRun: boolean) => RewindFilesResult = (_uuid, dryRun) => (dryRun ? { canRewind: true, filesChanged: ["/work/project/a.txt"], insertions: 1, deletions: 2 } : { canRewind: true, skippedLinks: 0 });
+
+	async rewindFiles(uuid: string, dryRun: boolean): Promise<RewindFilesResult> {
+		this.rewinds.push({ uuid, dryRun });
+		return this.rewindResult(uuid, dryRun);
+	}
+
 	async setModel(model: string): Promise<void> {
 		this.model = model;
 	}
@@ -125,6 +135,10 @@ interface Options {
 	sideOf?: string;
 	/** Sessions' saved messages, by id (changed by tests as the main thread goes on). */
 	saved?: Record<string, SavedMessage[]>;
+	/** Sessions' transcript entries, by id. */
+	entries?: Record<string, Entry[]>;
+	/** Start as a copy of this conversation up to an entry. */
+	fork?: { from: string; at: string };
 }
 
 async function harness(options: Options = {}) {
@@ -156,7 +170,9 @@ async function harness(options: Options = {}) {
 			return engine;
 		},
 		read: async (id) => options.saved?.[id] ?? [],
+		entries: (id) => options.entries?.[id] ?? [],
 		...(options.sideOf ? { sideOf: options.sideOf } : {}),
+		...(options.fork ? { fork: options.fork } : {}),
 	});
 	const engine = () => {
 		const e = engines.at(-1);
@@ -168,7 +184,12 @@ async function harness(options: Options = {}) {
 		engine().turns.push(...turns);
 		return session.prompt([{ type: "text", text: t }], []);
 	};
-	return { session, updates, notes, traces, engines, engine, text, prompt };
+	/** A prompt sent with Space's id for it. */
+	const promptWithId = (t: string, id: string, ...turns: SDKMessage[][]) => {
+		engine().turns.push(...turns);
+		return session.prompt([{ type: "text", text: t }], [], id);
+	};
+	return { session, updates, notes, traces, engines, engine, text, prompt, promptWithId };
 }
 
 function hookInput(tool: string, input: Record<string, unknown>): PreToolUseHookInput {
@@ -562,5 +583,83 @@ describe("side chats", () => {
 		const h = await harness({ sideOf: MAIN, saved: { [MAIN]: [saved("m1", "User: x")] } });
 		await h.prompt("/compact", fixture("plain"));
 		expect(h.engine().sent[0]?.message.content).toBe("/compact");
+	});
+});
+
+describe("going back to an earlier message", () => {
+	const PROMPT = "6f1d2c3b-aaaa-4bbb-8ccc-0123456789ab";
+	const LATER = "7a2e3d4c-aaaa-4bbb-8ccc-0123456789ab";
+
+	test("a prompt and a steered message go to Claude Code under Space's ids", async () => {
+		const h = await harness();
+		h.engine().onPlay = (m) => {
+			if (m.type === "assistant" && h.engine().sent.length === 1) h.session.steer(LATER, [{ type: "text", text: "Also say FLAMINGO" }]);
+		};
+		await h.promptWithId("Reply with the codeword", PROMPT, fixture("steer"));
+		expect(h.engine().sent.map((m) => m.uuid)).toEqual([PROMPT, LATER]);
+		// An id that isn't a UUID can't be Claude Code's: it gets one of its own.
+		await h.prompt("again", fixture("plain"));
+		expect(h.engine().sent.at(-1)?.uuid).not.toBe(PROMPT);
+	});
+
+	test("says whether the conversation can go back, and which files would come back, without changing any", async () => {
+		const h = await harness({ entries: { "0b9a2c1e-1111-4222-8333-444455556666": [{ uuid: PROMPT, parentUuid: "p0", type: "user" }] } });
+		expect(await h.session.rewind(PROMPT, false)).toEqual({ found: true, files: true, changed: ["/work/project/a.txt"] });
+		expect(h.engine().rewinds).toEqual([{ uuid: PROMPT, dryRun: true }]);
+		// Not in the transcript (an old message, or a copy that lost it).
+		expect((await h.session.rewind(LATER, false)).found).toBe(false);
+	});
+
+	test("puts the files back, after checking which", async () => {
+		const h = await harness();
+		h.engine().rewindResult = (_uuid, dryRun) => (dryRun ? { canRewind: true, filesChanged: ["/work/project/a.txt"] } : { canRewind: true, skippedLinks: 1 });
+		expect(await h.session.rewind(PROMPT, true)).toEqual({ found: false, files: true, changed: ["/work/project/a.txt"], skipped: 1 });
+		expect(h.engine().rewinds.map((r) => r.dryRun)).toEqual([true, false]);
+	});
+
+	test("a message without a file checkpoint, or a rewind that fails, says why and changes nothing", async () => {
+		const h = await harness();
+		h.engine().rewindResult = () => ({ canRewind: false, error: "No file checkpoint found for this message." });
+		expect(await h.session.rewind(LATER, true)).toEqual({ found: false, files: false, reason: "No file checkpoint found for this message.", changed: [] });
+		expect(h.engine().rewinds.map((r) => r.dryRun)).toEqual([true]);
+		h.engine().rewindResult = (_uuid, dryRun) => {
+			if (dryRun) return { canRewind: true, filesChanged: ["/work/project/a.txt"] };
+			throw new Error("Failed to rewind: No files were restored");
+		};
+		expect(await h.session.rewind(PROMPT, true)).toMatchObject({ files: false, reason: expect.stringContaining("No files were restored"), changed: ["/work/project/a.txt"] });
+	});
+
+	test("not while a turn runs", async () => {
+		const h = await harness();
+		const turn = h.prompt("hi", fixture("plain"));
+		await Bun.sleep(0);
+		await expect(h.session.rewind(PROMPT, false)).rejects.toThrow(/stop it first/);
+		await turn;
+	});
+
+	test("a copy starts Claude Code from the other session up to the entry before the message", async () => {
+		const h = await harness({ fork: { from: "main-session", at: "entry-9" } });
+		expect(h.engine().options).toMatchObject({ resume: false, forkFrom: "main-session", forkAt: "entry-9" });
+		await h.prompt("hi", fixture("plain"));
+		// Once it has its own conversation, a restart resumes that.
+		h.engine().exit(new Error("killed"));
+		const again = h.session.prompt([{ type: "text", text: "again" }], []);
+		await Bun.sleep(0);
+		expect(h.engine().options).toMatchObject({ resume: true });
+		expect(h.engine().options.forkFrom).toBeUndefined();
+		void h.engine().play(fixture("plain"));
+		await again;
+	});
+
+	test("an edit names its file, so Space knows what Claude wrote", async () => {
+		const h = await harness();
+		const edit = {
+			type: "assistant",
+			uuid: "e1",
+			parent_tool_use_id: null,
+			message: { content: [{ type: "tool_use", id: "toolu_w", name: "Write", input: { file_path: "/work/project/a.txt", content: "x" } }] },
+		} as unknown as SDKMessage;
+		await h.prompt("write", [edit, ...fixture("plain")]);
+		expect(h.updates.find((u) => u.sessionUpdate === "tool_call")).toMatchObject({ toolCallId: "toolu_w", locations: [{ path: "/work/project/a.txt" }] });
 	});
 });

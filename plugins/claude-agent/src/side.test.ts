@@ -36,7 +36,7 @@ test("an update has what the main thread said and did after the last message see
 test("from the start, or all of it when the last message seen is gone (compacted)", () => {
 	expect(mainUpdate(MAIN, undefined)?.text).toContain("User: make the tree resizable");
 	const gone = mainUpdate(MAIN, "zz")?.text ?? "";
-	expect(gone).toContain("compacted or started over");
+	expect(gone).toContain("compacted, started over or went back to an earlier message");
 	expect(gone).toContain("User: make the tree resizable");
 });
 

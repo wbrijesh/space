@@ -36,6 +36,11 @@
 //!                     shown, whether it's maximized, its set width; and whether the sidebar is open
 //! open src/main.rs    show a file (relative to the thread's folder) in the Files view, as a click on its row would
 //! changes             print the selected thread's Changes bar: status, main step, ▾ steps, files, the open one, error, done
+//! rewind              print the selected thread's going-back state: its messages (index, id, can go back), the
+//!                     fork waiting, rewinds that can be undone, the editor, rewind mode, the notice
+//! edit 3              start editing the 3rd message of yours (from 1), as ✎ would
+//! rewindto 3          rewind to the 3rd message of yours, as ↺ would
+//! undo                undo the last rewind, as ⌘Z or the notice's Undo would
 //! shot name           capture this window to `$SPACE_SHOT_DIR/name.png` (or run `$SPACE_SHOT_CMD name`)
 //! shotnow name        same as `shot` without the 250 ms settle delay (animation frames)
 //! quit                quit the app
@@ -424,6 +429,31 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                                 let Some(cwd) = app.thread(key).map(|t| t.cwd.clone()) else { return };
                                 let path = cwd.canonicalize().unwrap_or(cwd).join(&rel);
                                 app.show_file(key, &path, window, cx);
+                            });
+                        }
+                    });
+                }
+                "rewind" | "edit" | "rewindto" | "undo" => {
+                    let nth: Option<usize> = args.first().and_then(|a| a.parse().ok());
+                    let _ = window.update(cx, |root, window, cx| {
+                        let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
+                        if let Some(app) = app {
+                            app.update(cx, |app, cx| {
+                                let ix = app.current().and_then(|t| {
+                                    let users: Vec<usize> = t.state.items.iter().enumerate().filter(|(_, i)| matches!(i, space_core::TranscriptItem::User { .. })).map(|(ix, _)| ix).collect();
+                                    users.get(nth?.checked_sub(1)?).copied()
+                                });
+                                match (cmd, ix) {
+                                    ("edit", Some(ix)) => app.start_edit(ix, window, cx),
+                                    ("rewindto", Some(ix)) => app.rewind_at(ix, window, cx),
+                                    ("undo", _) => {
+                                        if let Some(key) = app.selected {
+                                            app.undo_rewind(key, cx);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                                eprintln!("script: rewind {}", app.rewind_summary(cx));
                             });
                         }
                     });

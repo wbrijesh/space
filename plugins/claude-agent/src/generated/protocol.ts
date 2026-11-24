@@ -15,6 +15,11 @@ export const STEER_META_KEY = "space/steer";
 export const CONTEXT_META_KEY = "space/context";
 export const SIDE_OF_META_KEY = "space/sideOf";
 export const USAGE_META_KEY = "space/usage";
+export const REWIND_META_KEY = "space/rewind";
+export const MESSAGE_ID_META_KEY = "space/messageId";
+export const FORK_OF_META_KEY = "space/forkOf";
+export const REWIND_METHOD = "_space/session/rewind";
+export const SUBAGENT_META_KEY = "space/subagent";
 export const TRACE_METHOD = "_space/trace";
 
 /**
@@ -238,6 +243,48 @@ attempt: number,
 reason: string, };
 
 export type RetryKind = "offline" | "retrying" | "busy";
+
+/**
+ * The value of [`FORK_OF_META_KEY`]: the session to copy, and the message the copy stops before
+ * (it and everything after it are left out).
+ */
+export type ForkOf = { sessionId: string, messageId: string, };
+
+/**
+ * `_space/session/rewind` (client → agent request): going back to just before message
+ * `messageId` (a [`MESSAGE_ID_META_KEY`] id). The agent says whether its conversation can go back
+ * there (the client then starts a session with [`FORK_OF_META_KEY`] for the next message), and
+ * which files its own edits since then changed. With `restoreFiles` it also puts those files back
+ * as they were before the message; otherwise it changes nothing. Only for agents that set
+ * [`REWIND_META_KEY`].
+ */
+export type RewindSession = { sessionId: string, messageId: string, restoreFiles?: boolean, };
+
+/**
+ * The answer to [`RewindSession`].
+ */
+export type RewindResult = { 
+/**
+ * The conversation can go back to before the message.
+ */
+found: boolean, 
+/**
+ * The agent kept the files as they were before the message (`false`: it can't put them
+ * back, see `reason`).
+ */
+files: boolean, 
+/**
+ * Why the files can't be put back.
+ */
+reason?: string, 
+/**
+ * Absolute paths of the files that differ from then (and are, or were, put back).
+ */
+changed: Array<string>, 
+/**
+ * Files left as they are because putting them back wasn't safe (a link in the way).
+ */
+skipped?: number, };
 
 /**
  * Hidden text a plugin adds to a prompt (the agent puts it in its system prompt, never in

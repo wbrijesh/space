@@ -1,6 +1,7 @@
 //! ACP wire types → Space session model.
 
 use space_protocol::acp_schema as acp;
+use space_protocol::ext::SUBAGENT_META_KEY;
 
 use crate::session::{
     PermissionKind, PermissionOption, PlanEntry, SessionEvent, ToolCallInfo, ToolCallPatch, ToolStatus,
@@ -37,6 +38,7 @@ pub(crate) fn tool_call(call: acp::ToolCall) -> ToolCallInfo {
         locations: call.locations.iter().map(|l| l.path.display().to_string()).collect(),
         blocked: None,
         held: None,
+        subagent: call.meta.as_ref().and_then(|m| m.get(SUBAGENT_META_KEY)).and_then(|v| v.as_bool()).unwrap_or(false),
     }
 }
 

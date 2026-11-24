@@ -512,3 +512,57 @@ async fn a_reply_sent_again_after_a_dropped_connection_shows_once() {
     assert_eq!(replies, ["Hello from the stub agent."]);
     assert_eq!(state.retry, None);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn going_back_forks_the_conversation_and_puts_files_back() {
+    use space_core::protocol::ForkOf;
+    use space_core::stub_script::{ScriptedTurn, Step, StubScript};
+    let work = tempfile::tempdir().unwrap();
+    let file = work.path().join("notes.txt");
+    std::fs::write(&file, "before").unwrap();
+    // A turn that writes the file, as an edit tool would.
+    let script = StubScript { turns: vec![ScriptedTurn { prompt: "write it".into(), steps: vec![Step::Write { path: "notes.txt".into(), text: "after".into() }] }] };
+    let script_path = work.path().join("script.json");
+    std::fs::write(&script_path, serde_json::to_string(&script).unwrap()).unwrap();
+    let root = stub_root();
+    let manifest = root.path().join("stub/space-plugin.toml");
+    let with_script = format!("{}[run.env]\n{} = '{}'\n", std::fs::read_to_string(&manifest).unwrap(), space_core::stub_script::SCRIPT_ENV, script_path.display());
+    std::fs::write(&manifest, with_script).unwrap();
+    let (host, mut events) = host(root.path());
+    let agent = host.start_agent("stub").await.unwrap();
+    assert!(agent.can_rewind());
+    let session = agent.new_session(work.path()).await.unwrap();
+    let mut state = SessionState::new(session.id());
+    let mut seen = Vec::new();
+
+    // Each message goes out with its id, and the transcript keeps it.
+    let (first, second) = (space_core::new_message_id(), space_core::new_message_id());
+    session.prompt_with(UserInput { id: Some(first.clone()), ..UserInput::text("hello") }).await.unwrap();
+    until(&mut events, &mut state, &mut seen, turn_ended).await;
+    session.prompt_with(UserInput { id: Some(second.clone()), ..UserInput::text("write it") }).await.unwrap();
+    until(&mut events, &mut state, &mut seen, turn_ended).await;
+    assert_eq!(state.message_index(&second), Some(state.items.len() - 3), "{:?}", state.items);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "after");
+    // The edit names its file.
+    assert!(state.items.iter().any(|i| matches!(i, TranscriptItem::Tool(t) if t.kind == "edit" && t.locations == [file.display().to_string()])));
+
+    // Asking changes nothing; restoring puts the file back.
+    let preview = session.rewind(&second, false).await.unwrap();
+    assert!(preview.found && preview.files);
+    assert_eq!(preview.changed, [file.display().to_string()]);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "after");
+    session.rewind(&second, true).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "before");
+    // A message it never had.
+    assert!(!session.rewind(&space_core::new_message_id(), false).await.unwrap().found);
+
+    // A copy of the conversation up to the second message remembers only the first.
+    let fork = agent.fork_session(&ForkOf { session_id: session.id().into(), message_id: second.clone() }, work.path(), None).await.unwrap();
+    let mut fork_state = SessionState::new(fork.id());
+    fork.prompt("recall").await.unwrap();
+    until(&mut events, &mut fork_state, &mut seen, turn_ended).await;
+    assert!(agent_text(&fork_state).contains("I remember 1 earlier prompt(s)."), "{}", agent_text(&fork_state));
+    // Not before a message it doesn't have.
+    let missing = ForkOf { session_id: session.id().into(), message_id: space_core::new_message_id() };
+    assert!(agent.fork_session(&missing, work.path(), None).await.is_err());
+}

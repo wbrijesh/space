@@ -36,6 +36,7 @@ mod queue;
 mod recall;
 #[cfg(feature = "dev")]
 mod reload;
+mod rewind;
 #[cfg(feature = "dev")]
 mod scenarios;
 mod settings;

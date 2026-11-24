@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui::assets::IconName as Lucide;
+use gpui::component::input::{Textarea, TextareaState};
 use gpui::component::text::{TextView, TextViewMotion, TextViewState};
-use gpui::component::{Icon, IconName};
+use gpui::component::{Icon, IconName, Sizable as _};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::protocol::{RetryKind, RetryState, TurnUsage};
@@ -80,11 +81,13 @@ pub struct UserExtras<'a> {
     pub on_open_text: Option<OpenTextHandler>,
     /// Text it quotes from the transcript.
     pub quote: Option<&'a str>,
+    /// Picked from the keyboard to go back to (rewind mode): its bubble is highlighted.
+    pub picked: bool,
 }
 
 pub fn user_message(id: impl Into<SharedString>, text_: &str, extras: UserExtras<'_>, fold: Option<UserFold>, marks: Option<BubbleMarks>) -> Div {
     let id = id.into();
-    let UserExtras { attachments, pics, on_open, texts, unsaved_texts, on_open_text, quote } = extras;
+    let UserExtras { attachments, pics, on_open, texts, unsaved_texts, on_open_text, quote, picked } = extras;
     let pastes: Vec<Stateful<Div>> = texts
         .iter()
         .enumerate()
@@ -110,9 +113,57 @@ pub fn user_message(id: impl Into<SharedString>, text_: &str, extras: UserExtras
         .children(alone)
         .when(!pics.is_empty(), |d| d.child(message_images(id.clone(), pics, on_open)))
         .when(has_bubble, |d| {
-            let (quote, bubble) = bubble_with(id, text_, attachments, pastes, fold, marks, over_bubble);
+            let (quote, bubble) = bubble_with(id, text_, attachments, pastes, fold, marks, over_bubble, picked);
             d.children(quote).child(bubble)
         })
+}
+
+/// One of your messages being edited in place: its bubble holds a text field (⏎ sends it again
+/// in the message's place, Esc leaves it as it was), with its pictures, pasted texts and files as
+/// they were sent.
+pub fn editing_message(id: impl Into<SharedString>, input: &Entity<TextareaState>, extras: UserExtras<'_>) -> Div {
+    let id = id.into();
+    let UserExtras { attachments, pics, on_open, texts, .. } = extras;
+    let chips: Vec<AnyElement> = texts
+        .iter()
+        .enumerate()
+        .map(|(ix, t)| paste_chip(format!("{id}-text-{ix}"), t.chars, None, None).into_any_element())
+        .chain(attachments.iter().map(|p| attachment_chip(p).into_any_element()))
+        .collect();
+    let field = Textarea::new(input).appearance(false).xsmall().text_size(text::BODY);
+    let bubble = div()
+        .w(relative(BUBBLE_SHARE))
+        .max_w(size::USER_BUBBLE_MAX_W)
+        .flex()
+        .flex_col()
+        .gap_2()
+        .px(BUBBLE_PAD_X - px(4.))
+        .py_2()
+        .rounded(radius::CARD)
+        .bg(color::surface_2())
+        .border_1()
+        .border_color(color::border_strong())
+        .line_height(relative(text::LEADING))
+        .when(!chips.is_empty(), |d| d.child(div().px_1().flex().flex_wrap().gap_1p5().children(chips)))
+        .child(field);
+    let hint = div()
+        .h(super::message_actions::ROW_H)
+        .flex()
+        .items_center()
+        .justify_end()
+        .gap_3()
+        .px_1()
+        .text_size(text::SM)
+        .text_color(color::text_3())
+        .child("Esc to cancel")
+        .child(div().text_color(color::text_2()).child("⏎ to send"));
+    div()
+        .flex()
+        .flex_col()
+        .gap_1p5()
+        .when(!pics.is_empty(), |d| d.child(message_images(id.clone(), pics, on_open)))
+        .child(div().flex().justify_end().child(bubble))
+        .child(hint)
 }
 
 /// Share of the column a bubble may take (and never more than [`size::USER_BUBBLE_MAX_W`]).
@@ -196,11 +247,12 @@ pub fn user_bubble(
     fold: Option<UserFold>,
     marks: Option<BubbleMarks>,
 ) -> Div {
-    bubble_with(id, text_, attachments, pastes, fold, marks, None).1
+    bubble_with(id, text_, attachments, pastes, fold, marks, None, false).1
 }
 
 /// [`user_bubble`], with `quote` over it at its width: the bubble's width is measured as it's
 /// laid out and the quote takes it (its text shortened to fit), so the two line up.
+#[allow(clippy::too_many_arguments)]
 fn bubble_with(
     id: impl Into<SharedString>,
     text_: &str,
@@ -209,6 +261,7 @@ fn bubble_with(
     fold: Option<UserFold>,
     marks: Option<BubbleMarks>,
     quote: Option<Div>,
+    picked: bool,
 ) -> (Option<Div>, Div) {
     let text_id: SharedString = format!("{}-text", id.into()).into();
     let quote_key = text_id.clone();
@@ -221,7 +274,7 @@ fn bubble_with(
         .px(BUBBLE_PAD_X)
         .py_2p5()
         .rounded(radius::CARD)
-        .bg(color::surface_2())
+        .bg(if picked { color::menu_highlight() } else { color::surface_2() })
         .text_size(text::BODY)
         .line_height(relative(text::LEADING));
     if !attachments.is_empty() || !pastes.is_empty() {
@@ -905,6 +958,19 @@ pub struct TranscriptView<'a> {
     pub on_reveal: Option<RevealHandler>,
     /// Continue after a failed turn (on its last error card), when no turn runs.
     pub on_continue: Option<ContinueHandler>,
+    /// Going back to an earlier message.
+    pub rewind: RewindMarks<'a>,
+}
+
+/// Going back to one of your messages: which can be edited and rewound to, the one being edited
+/// (its field in the bubble's place) and the one picked from the keyboard. What comes after
+/// either is dimmed: it's what would go.
+#[derive(Default)]
+pub struct RewindMarks<'a> {
+    /// Transcript indices of your messages that can be gone back to.
+    pub can: HashSet<usize>,
+    pub editing: Option<(usize, &'a Entity<TextareaState>)>,
+    pub picked: Option<usize>,
 }
 
 /// The transcript's elements, spaced, with a trailing working row while a turn runs. Each
@@ -933,7 +999,12 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
         find,
         on_reveal,
         on_continue,
+        rewind,
     } = view;
+    // What comes after the message being edited or picked: dimmed (it's what would go).
+    let dim_after = rewind.editing.map(|(ix, _)| ix).or(rewind.picked);
+    let dimmed = |ix: usize| dim_after.is_some_and(|at| ix > at);
+    const DIM: f32 = 0.35;
     // Only the last error, at the end of the transcript, offers to continue.
     let continue_at = on_continue.as_ref().and(state.items.iter().rposition(|i| !matches!(i, TranscriptItem::TurnEnd { .. }))).filter(|&ix| matches!(state.items[ix], TranscriptItem::Error(_)));
     let items = &state.items;
@@ -947,7 +1018,7 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
     let compact = |i: &TranscriptItem| {
         matches!(i, TranscriptItem::Tool(_) | TranscriptItem::Thought(_) | TranscriptItem::Permission { resolved: Some(_), .. })
     };
-    let row = |id: String, group: &SharedString, copy: Option<&str>, at_ms: Option<u64>, usage: Option<&TurnUsage>, end: bool| {
+    let row = |id: String, group: &SharedString, copy: Option<&str>, at_ms: Option<u64>, usage: Option<&TurnUsage>, end: bool, rewind_ix: Option<usize>| {
         message_actions(
             MessageActions {
                 copied: copied == Some(id.as_str()),
@@ -959,7 +1030,8 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
                 now_ms,
                 usage: usage.cloned(),
                 end,
-                shown: false,
+                shown: rewind_ix.is_some_and(|ix| rewind.picked == Some(ix)),
+                rewind: rewind_ix.filter(|ix| rewind.can.contains(ix)),
             },
             &actions,
         )
@@ -983,7 +1055,7 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
             continue;
         }
         let el = match item {
-            TranscriptItem::User { text, quote, attachments, images, texts, at_ms } => {
+            TranscriptItem::User { text, quote, attachments, images, texts, at_ms, .. } => {
                 // An unfinished turn before it (no end): as it is, without a row.
                 if !turn.is_empty() {
                     out.push(div().flex().flex_col().children(std::mem::take(&mut turn)).into_any_element());
@@ -1003,24 +1075,28 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
                     texts,
                     on_open_text: on_open_text.clone(),
                     quote: quote.as_deref(),
+                    picked: rewind.picked == Some(ix),
                     ..Default::default()
                 };
-                let message = user_message(format!("pics-{key}-{ix}"), text, extras, fold, marks);
-                out.push(
-                    div()
-                        .group(group.clone())
-                        .mt(gap)
-                        .child(message)
-                        .child(row(format!("user-{key}-{ix}"), &group, Some(text), *at_ms, None, true))
-                        .into_any_element(),
-                );
+                let el = match rewind.editing.filter(|(at, _)| *at == ix) {
+                    Some((_, input)) => div().mt(gap).child(editing_message(format!("pics-{key}-{ix}"), input, extras)),
+                    None => {
+                        let message = user_message(format!("pics-{key}-{ix}"), text, extras, fold, marks);
+                        div()
+                            .group(group.clone())
+                            .mt(gap)
+                            .child(message)
+                            .child(row(format!("user-{key}-{ix}"), &group, Some(text), *at_ms, None, true, Some(ix)))
+                    }
+                };
+                out.push(el.when(dimmed(ix), |d| d.opacity(DIM)).into_any_element());
                 (prev, after_row, reply) = (Some(item), true, None);
                 // A finished turn: its summary row comes first; its work is hidden unless opened.
                 if let Some(fold) = folds.get(&ix).copied() {
                     let open = open_turns.contains(&ix);
                     folded = (!open).then_some(fold);
                     let summary = turn_summary_row(ix, fold.duration_ms, open, window, cx, on_toggle_turn.clone());
-                    turn.push(div().mt(px(6.)).child(summary).into_any_element());
+                    turn.push(div().mt(px(6.)).child(summary).when(dimmed(ix + 1), |d| d.opacity(DIM)).into_any_element());
                     (prev, after_row) = (Some(&summary_marker), false);
                 } else {
                     folded = None;
@@ -1030,7 +1106,7 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
             TranscriptItem::TurnEnd { reason, at_ms, usage } => {
                 let divider = !matches!(reason.as_str(), "end_turn" | "error");
                 if divider {
-                    turn.push(div().mt(gap).child(turn_divider(reason)).into_any_element());
+                    turn.push(div().mt(gap).child(turn_divider(reason)).when(dimmed(ix), |d| d.opacity(DIM)).into_any_element());
                 }
                 let group = SharedString::from(format!("turn-{key}-{ix}"));
                 let has_row = reply.is_some() || at_ms.is_some() || usage.is_some();
@@ -1041,7 +1117,9 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
                             .flex()
                             .flex_col()
                             .children(std::mem::take(&mut turn))
-                            .when(has_row, |d| d.child(row(format!("turn-{key}-{ix}"), &group, reply, *at_ms, usage.as_ref(), false)))
+                            .when(has_row, |d| {
+                                d.child(row(format!("turn-{key}-{ix}"), &group, reply, *at_ms, usage.as_ref(), false, None).when(dimmed(ix), |r| r.opacity(DIM)))
+                            })
                             .into_any_element(),
                     );
                 }
@@ -1073,7 +1151,7 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
             TranscriptItem::Plan(entries) => plan_card(entries),
             TranscriptItem::Error(msg) => error_card_with(msg, if continue_at == Some(ix) { on_continue.clone() } else { None }),
         };
-        turn.push(div().mt(gap).child(el).into_any_element());
+        turn.push(div().mt(gap).child(el).when(dimmed(ix), |d| d.opacity(DIM)).into_any_element());
         (prev, after_row) = (Some(item), false);
     }
     // The running turn: no row until it ends.
@@ -1099,7 +1177,7 @@ pub fn transcript_items(view: TranscriptView<'_>, window: &mut Window, cx: &mut 
             Some(retry) => retry_row(retry).into_any_element(),
             None => working_row("Working…").into_any_element(),
         };
-        out.push(div().mt(gap).child(row).into_any_element());
+        out.push(div().mt(gap).child(row).when(dim_after.is_some(), |d| d.opacity(DIM)).into_any_element());
     }
     out
 }
@@ -1170,6 +1248,7 @@ Long lines wrap only at spaces, and wrapped rows hang past their line:\n\n\
             locations: vec![],
             blocked: None,
             held: None,
+            subagent: false,
         }
     }
 
@@ -1184,6 +1263,7 @@ Long lines wrap only at spaces, and wrapped rows hang past their line:\n\n\
             locations: vec![],
             blocked: Some("Blocked by guardrail: it changes files outside the project folder.".into()),
             held: None,
+            subagent: false,
         }
     }
 
@@ -1198,6 +1278,7 @@ Long lines wrap only at spaces, and wrapped rows hang past their line:\n\n\
             locations: vec![],
             blocked: None,
             held: Some("The guard can't decide right now, so actions are paused.".into()),
+            subagent: false,
         }
     }
 
@@ -1265,6 +1346,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 }
                 let open_turns: HashSet<usize> = if open { HashSet::from([0]) } else { HashSet::new() };
                 let view = TranscriptView {
+                    rewind: Default::default(),
                     state: &s,
                     key: 0,
                     expanded: &HashSet::new(),
@@ -1293,7 +1375,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     };
     let work = |at: Option<u64>| {
         vec![
-            SessionEvent::UserMessage { text: "Run the tests and fix what fails".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: at },
+            SessionEvent::UserMessage { text: "Run the tests and fix what fails".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: at, id: None, steered: false },
             SessionEvent::TurnStarted,
             SessionEvent::AgentThought { text: "Run the suite first.".into() },
             SessionEvent::ToolCall(tool(ToolStatus::Completed, TEST_OUTPUT)),

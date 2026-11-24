@@ -474,7 +474,7 @@ mod tests {
     fn chunks_merge_and_holds_are_left_out() {
         let mut unsaved = Vec::new();
         let events = [
-            SessionEvent::UserMessage { text: "hi".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: None },
+            SessionEvent::UserMessage { text: "hi".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: None, id: None, steered: false },
             SessionEvent::TurnStarted,
             SessionEvent::AgentThought { text: "a".into() },
             SessionEvent::AgentThought { text: "b".into() },
@@ -494,6 +494,7 @@ mod tests {
                 locations: vec![],
                 blocked: None,
                 held: None,
+                subagent: false,
             }),
             SessionEvent::AgentText { text: "Hel".into() },
             SessionEvent::AgentText { text: "lo".into() },

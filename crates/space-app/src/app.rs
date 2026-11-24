@@ -28,7 +28,7 @@ use space_core::{
 use space_ui::components::settings::FieldCheck;
 
 pub use space_ui::actions::{
-    CloseSettings, CloseThread, CyclePermissionMode, FocusComposer, NextThread, PreviousThread, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious, CompleteCommand,
+    CloseSettings, CloseThread, CyclePermissionMode, FocusComposer, NextThread, PreviousThread, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious, UndoRewind, CompleteCommand,
     ScrollToBottom,
     ToggleSidebar,
     ToggleTrajectory, OpenInLastApp,
@@ -98,6 +98,8 @@ pub struct SeedThread {
     /// Dev scenarios: a quote sent with `prompt`, and one in the composer.
     pub quote: Option<String>,
     pub draft_quote: Option<String>,
+    /// Dev scenarios: messages sent after `prompt`, one per turn.
+    pub followups: Vec<String>,
 }
 
 /// What the process opens.
@@ -164,6 +166,9 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("escape", CloseSettings, Some("Space")),
             // ↑ on the composer's first line / ↓ on its last step through the thread's sent
             // messages; otherwise they reach the text field (its MoveUp/MoveDown).
+            // ⌘Z undoes the last rewind when no text field is focused (in the composer, too, while
+            // it holds nothing of yours since: see `rewind::undo_key`).
+            KeyBinding::new("cmd-z", UndoRewind, Some("Space")),
             KeyBinding::new("up", RecallPrevious, Some("Composer > Input")),
             KeyBinding::new("down", RecallNext, Some("Composer > Input")),
             // Tab completes the `/` menu's selected command; with the menu closed it goes on.
@@ -506,8 +511,8 @@ pub struct SpaceApp {
     /// The `claude` CLI claude-agent needs was found (checked at launch and on each restart).
     pub(crate) claude_cli: bool,
     pub(crate) _subscriptions: Vec<Subscription>,
-    /// Numbers queued messages.
-    pub(crate) next_pending: u64,
+    /// Going back to an earlier message: its notice, rewind mode and the message editor.
+    pub(crate) rewind: crate::rewind::RewindUi,
     /// ⌘ is held (the composer's send button shows "after this step").
     pub(crate) cmd_held: bool,
     /// The composer's `/` menu.
@@ -544,6 +549,10 @@ impl SpaceApp {
             }
             match event {
                 InputEvent::PressEnter { shift: false, secondary } => {
+                    // Rewind mode: ⏎ edits the picked message, ⌘⏎ rewinds to it.
+                    if this.act_on_picked(*secondary, window, cx) {
+                        return;
+                    }
                     if *secondary {
                         this.send_after_step(window, cx)
                     } else {
@@ -558,6 +567,7 @@ impl SpaceApp {
                         return;
                     }
                     this.end_recall();
+                    this.leave_rewind_mode(cx);
                     let text = this.input.read(cx).value().to_string();
                     // `/btw` and a space: to the side chat, with what follows.
                     if let Some(rest) = crate::slash::side_opening(&text, &this.commands()).map(str::to_string) {
@@ -765,7 +775,7 @@ impl SpaceApp {
             claude_cli: claude_cli_installed(),
             _subscriptions: vec![sub, activation, resize, quit, shortcuts],
             terminals: crate::terminal::Terminals::new(&host_for_terminals, pane_width),
-            next_pending: 0,
+            rewind: Default::default(),
             cmd_held: false,
             slash: Default::default(),
             swipe: Default::default(),

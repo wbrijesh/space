@@ -29,8 +29,8 @@ pub use host::{
 };
 pub use secrets::Secrets;
 pub use session::{
-    ImageRef, TextRef, UserInput, PermissionDecision, PermissionKind, PermissionOption, PermissionRequest, PlanEntry, SessionEvent, SessionId,
-    SessionState, ToolCallInfo, ToolCallPatch, ToolStatus, TranscriptItem,
+    ImageRef, NEW_SESSION, PermissionDecision, PermissionKind, PermissionOption, PermissionRequest, PlanEntry, Rewind, SessionEvent, SessionId, SessionState,
+    TextRef, ToolCallInfo, ToolCallPatch, ToolStatus, TranscriptItem, UserInput, new_message_id,
 };
 pub use space_protocol as protocol;
 

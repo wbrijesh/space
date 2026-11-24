@@ -5,10 +5,11 @@
 //! Events serialize as they are, so a saved thread is the list of its events, replayed through
 //! the same reducer.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use space_protocol::{RetryState, SpaceStatus, TurnUsage};
+use space_protocol::{ForkOf, RetryState, SpaceStatus, TurnUsage};
 
 /// Opaque ACP session id.
 pub type SessionId = String;
@@ -50,6 +51,9 @@ pub struct ToolCallInfo {
     pub blocked: Option<String>,
     /// The pipeline is holding this call until a guard can decide again, and why.
     pub held: Option<String>,
+    /// A subagent made the call (not the conversation itself).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub subagent: bool,
 }
 
 /// Partial update to a tool call; `None` fields are unchanged.
@@ -134,6 +138,11 @@ pub struct TextRef {
     pub chars: u64,
 }
 
+/// A new message id (a UUID, as agents take them).
+pub fn new_message_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
 /// What the user sends: the text, a quote it answers, and what goes with it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UserInput {
@@ -146,6 +155,9 @@ pub struct UserInput {
     /// Told to the agent before the message but not part of it (the transcript doesn't show
     /// it): say, that the folder was switched to another branch.
     pub note: Option<String>,
+    /// The client's id for the message (a UUID): the agent knows it by this when asked to go back
+    /// to it. `None`: one is made when it's sent.
+    pub id: Option<String>,
 }
 
 impl UserInput {
@@ -170,9 +182,18 @@ impl UserInput {
         if self.text.trim().is_empty() { quoted } else { format!("{quoted}\n\n{}", self.text) }
     }
 
-    /// The transcript's record of it.
-    pub fn into_message(self, at_ms: Option<u64>) -> SessionEvent {
-        SessionEvent::UserMessage { text: self.text, quote: self.quote, attachments: self.attachments, images: self.images, texts: self.texts, at_ms }
+    /// The transcript's record of it. `steered`: it went to a running turn.
+    pub fn into_message(self, at_ms: Option<u64>, steered: bool) -> SessionEvent {
+        SessionEvent::UserMessage {
+            text: self.text,
+            quote: self.quote,
+            attachments: self.attachments,
+            images: self.images,
+            texts: self.texts,
+            at_ms,
+            id: self.id,
+            steered,
+        }
     }
 }
 
@@ -196,6 +217,12 @@ pub enum SessionEvent {
         /// When it was sent (Unix ms; `None` in threads saved before Space kept times).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         at_ms: Option<u64>,
+        /// Its id (see [`UserInput::id`]; `None` in threads saved before Space kept them).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// It went to a running turn (steered), so no turn starts with it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        steered: bool,
     },
     TurnStarted,
     AgentText { text: String },
@@ -227,12 +254,37 @@ pub enum SessionEvent {
     /// A model request failed after part of its reply streamed and is sent again: that part
     /// (the text and thoughts since the last other item) leaves the transcript.
     AttemptDiscarded,
+    /// The thread goes on in a new agent session (the saved one couldn't be continued): what came
+    /// before isn't in the agent's conversation.
+    NewSession,
+    /// The thread went back to just before message `message_id` (emitted by Space): it and
+    /// everything after it leave the transcript, and the next message goes on from a copy of
+    /// session `session_id`'s conversation up to there ([`SessionState::fork`]).
+    Rewound { message_id: String, session_id: String },
+    /// The last [`SessionEvent::Rewound`] is undone: what it took away comes back (and what was
+    /// sent since goes), and the thread goes on in the session it rewound.
+    RewindUndone,
+    /// The files the turn's edits wrote, as they were when it ended: a hash of the contents
+    /// (`None`: no such file). Emitted by Space; going back compares them to tell your own
+    /// later changes from the agent's.
+    Written { files: Vec<(PathBuf, Option<String>)> },
 }
 
 /// One entry in the rendered transcript.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TranscriptItem {
-    User { text: String, quote: Option<String>, attachments: Vec<PathBuf>, images: Vec<ImageRef>, texts: Vec<TextRef>, at_ms: Option<u64> },
+    User {
+        text: String,
+        quote: Option<String>,
+        attachments: Vec<PathBuf>,
+        images: Vec<ImageRef>,
+        texts: Vec<TextRef>,
+        at_ms: Option<u64>,
+        /// The message's id (`None` in threads saved before Space kept them).
+        id: Option<String>,
+        /// It went to a running turn.
+        steered: bool,
+    },
     Agent(String),
     Thought(String),
     Tool(ToolCallInfo),
@@ -250,11 +302,28 @@ impl SessionEvent {
     }
 }
 
+/// The divider's reason when the thread goes on in a new session ([`SessionEvent::NewSession`]).
+pub const NEW_SESSION: &str = "new-session";
+
 impl TranscriptItem {
     /// A divider Space adds itself (e.g. `new-session`), with no time or usage.
     pub fn divider(reason: impl Into<String>) -> Self {
         TranscriptItem::TurnEnd { reason: reason.into(), at_ms: None, usage: None }
     }
+}
+
+/// What a [`SessionEvent::Rewound`] took away, to undo it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rewind {
+    /// Where it cut the transcript.
+    pub at: usize,
+    pub message_id: String,
+    /// The session the thread was in.
+    pub session_id: String,
+    /// What it took away.
+    pub items: Vec<TranscriptItem>,
+    /// The fork the thread was waiting to make before it.
+    pub fork: Option<ForkOf>,
 }
 
 /// Folded state of a session.
@@ -269,6 +338,13 @@ pub struct SessionState {
     pub running: bool,
     /// The running turn's model request waits out a bad network.
     pub retry: Option<RetryState>,
+    /// The thread went back to an earlier message and nothing was sent since: the next message
+    /// goes to a copy of this session's conversation up to there.
+    pub fork: Option<ForkOf>,
+    /// The rewinds that can be undone, the last one last.
+    pub rewinds: Vec<Rewind>,
+    /// What the agent's edits last wrote to each file ([`SessionEvent::Written`]).
+    pub written: HashMap<PathBuf, Option<String>>,
 }
 
 impl SessionState {
@@ -290,14 +366,20 @@ impl SessionState {
                 self.plugin_id.clone_from(plugin_id);
                 self.cwd.clone_from(cwd);
             }
-            SessionEvent::UserMessage { text, quote, attachments, images, texts, at_ms } => self.items.push(TranscriptItem::User {
-                text: text.clone(),
-                quote: quote.clone(),
-                attachments: attachments.clone(),
-                images: images.clone(),
-                texts: texts.clone(),
-                at_ms: *at_ms,
-            }),
+            SessionEvent::UserMessage { text, quote, attachments, images, texts, at_ms, id, steered } => {
+                // The fork (if one was waiting) was made for this message.
+                self.fork = None;
+                self.items.push(TranscriptItem::User {
+                    text: text.clone(),
+                    quote: quote.clone(),
+                    attachments: attachments.clone(),
+                    images: images.clone(),
+                    texts: texts.clone(),
+                    at_ms: *at_ms,
+                    id: id.clone(),
+                    steered: *steered,
+                })
+            }
             SessionEvent::TurnStarted => self.running = true,
             SessionEvent::AgentText { text } => match self.items.last_mut() {
                 Some(TranscriptItem::Agent(buf)) => buf.push_str(text),
@@ -331,6 +413,7 @@ impl SessionState {
                         locations: Vec::new(),
                         blocked: None,
                         held: None,
+                        subagent: false,
                     };
                     patch_tool(&mut call, patch);
                     self.items.push(TranscriptItem::Tool(call));
@@ -357,6 +440,7 @@ impl SessionState {
                     locations: Vec::new(),
                     blocked: Some(reason.clone()),
                     held: None,
+                    subagent: false,
                 })),
             },
             SessionEvent::ToolCallHeld { id, title, reason } => match self.tool_mut(id) {
@@ -370,6 +454,7 @@ impl SessionState {
                     locations: Vec::new(),
                     blocked: None,
                     held: reason.clone(),
+                    subagent: false,
                 })),
                 None => {}
             },
@@ -409,7 +494,47 @@ impl SessionState {
                     self.items.pop();
                 }
             }
+            SessionEvent::NewSession => self.items.push(TranscriptItem::divider(NEW_SESSION)),
+            SessionEvent::Rewound { message_id, session_id } => {
+                let Some(at) = self.message_index(message_id) else {
+                    tracing::warn!("rewind to message {message_id}, which isn't in the transcript");
+                    return;
+                };
+                let items = self.items.split_off(at);
+                let fork = self.fork.replace(ForkOf { session_id: session_id.clone(), message_id: message_id.clone() });
+                self.rewinds.push(Rewind { at, message_id: message_id.clone(), session_id: session_id.clone(), items, fork });
+                self.running = false;
+                self.retry = None;
+                // The context gauge shows the discarded conversation until the agent says again.
+                self.status.context_tokens = None;
+            }
+            SessionEvent::RewindUndone => {
+                let Some(r) = self.rewinds.pop() else { return };
+                self.items.truncate(r.at);
+                self.items.extend(r.items);
+                self.fork = r.fork;
+                self.running = false;
+                self.retry = None;
+                self.status.context_tokens = None;
+            }
+            SessionEvent::Written { files } => {
+                for (path, hash) in files {
+                    self.written.insert(path.clone(), hash.clone());
+                }
+            }
         }
+    }
+
+    /// Where message `id` is in the transcript.
+    pub fn message_index(&self, id: &str) -> Option<usize> {
+        self.items.iter().position(|i| matches!(i, TranscriptItem::User { id: Some(m), .. } if m == id))
+    }
+
+    /// Whether the agent can go back to the message at `ix`: it has an id and is in the agent's
+    /// current conversation (not before a [`SessionEvent::NewSession`]).
+    pub fn can_rewind_to(&self, ix: usize) -> bool {
+        let Some(TranscriptItem::User { id: Some(_), .. }) = self.items.get(ix) else { return false };
+        !self.items[ix..].iter().any(|i| matches!(i, TranscriptItem::TurnEnd { reason, .. } if reason == NEW_SESSION))
     }
 
     /// Why the turn is paused: the reason of a tool call the pipeline is holding, if any.
@@ -467,7 +592,7 @@ mod tests {
         assert_eq!(input("why?", Some("  ")).prompt_text(), "why?");
         let noted = UserInput { note: Some("<branch-changed/>".into()), ..input("why?", Some("q")) };
         assert_eq!(noted.prompt_text(), "<branch-changed/>\n\n> q\n\nwhy?");
-        let SessionEvent::UserMessage { text, quote, .. } = input("why?", Some("one")).into_message(None) else { panic!() };
+        let SessionEvent::UserMessage { text, quote, .. } = input("why?", Some("one")).into_message(None, false) else { panic!() };
         assert_eq!((text.as_str(), quote.as_deref()), ("why?", Some("one")));
         // Threads saved before quotes load.
         let old: SessionEvent = serde_json::from_str(r#"{"UserMessage":{"text":"hi","attachments":[]}}"#).unwrap();
@@ -479,7 +604,7 @@ mod tests {
         let mut s = SessionState::new("s1");
         let ev = |e: SessionEvent| e;
         for e in [
-            ev(SessionEvent::UserMessage { text: "hi".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: None }),
+            ev(SessionEvent::UserMessage { text: "hi".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: None, id: None, steered: false }),
             ev(SessionEvent::TurnStarted),
             ev(SessionEvent::AgentThought { text: "think".into() }),
             ev(SessionEvent::AgentThought { text: "ing".into() }),
@@ -494,6 +619,7 @@ mod tests {
                 locations: vec![],
                 blocked: None,
                 held: None,
+                subagent: false,
             })),
             ev(SessionEvent::ToolCallUpdate(ToolCallPatch {
                 id: "t1".into(),
@@ -535,6 +661,7 @@ mod tests {
             locations: Vec::new(),
             blocked: None,
             held: None,
+            subagent: false,
         };
         let waiting = RetryState { kind: RetryKind::Offline, attempt: 1, reason: "ECONNRESET".into() };
         for e in [
@@ -573,6 +700,7 @@ mod tests {
             locations: vec![],
             blocked: None,
             held: None,
+            subagent: false,
         }));
         s.apply(&SessionEvent::ToolCallUpdate(ToolCallPatch {
             id: "t".into(),
@@ -590,7 +718,7 @@ mod tests {
     fn times_and_usage_round_trip_and_old_events_still_load() {
         let usage = TurnUsage { input: 4, output: 4, cache_read: Some(0), cache_write: Some(2668), reasoning: None, models: vec!["a/b".into()] };
         let events = [
-            SessionEvent::UserMessage { text: "hi".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: Some(5) },
+            SessionEvent::UserMessage { text: "hi".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: Some(5), id: Some("m1".into()), steered: true },
             SessionEvent::TurnEnded { stop_reason: "end_turn".into(), at_ms: Some(9), usage: Some(usage) },
         ];
         for e in &events {
@@ -627,6 +755,7 @@ mod tests {
             locations: vec![],
             blocked: None,
             held: None,
+            subagent: false,
         }));
         assert_eq!(s.held(), Some("the guard is restarting"));
         s.apply(&held(None));
@@ -655,6 +784,87 @@ mod tests {
             decision: PermissionDecision::Selected("ok".into()),
         });
         assert!(s.pending_permission().is_none());
+    }
+
+    fn said(id: &str) -> SessionEvent {
+        SessionEvent::UserMessage { text: id.into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: None, id: Some(id.into()), steered: false }
+    }
+
+    fn turn(s: &mut SessionState, id: &str, reply: &str) {
+        for e in [said(id), SessionEvent::TurnStarted, SessionEvent::AgentText { text: reply.into() }, SessionEvent::turn_ended("end_turn")] {
+            s.apply(&e);
+        }
+    }
+
+    fn texts(s: &SessionState) -> Vec<String> {
+        s.items
+            .iter()
+            .filter_map(|i| match i {
+                TranscriptItem::User { text, .. } | TranscriptItem::Agent(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_rewind_cuts_before_the_message_and_undo_brings_it_back() {
+        let mut s = SessionState::new("s1");
+        turn(&mut s, "a", "A");
+        turn(&mut s, "b", "B");
+        turn(&mut s, "c", "C");
+        s.status.context_tokens = Some(900);
+        s.apply(&SessionEvent::Rewound { message_id: "b".into(), session_id: "s1".into() });
+        assert_eq!(texts(&s), ["a", "A"]);
+        assert_eq!(s.fork, Some(ForkOf { session_id: "s1".into(), message_id: "b".into() }));
+        assert_eq!(s.status.context_tokens, None);
+        // The edited message goes out (the fork is made for it), and its turn runs.
+        turn(&mut s, "b2", "B2");
+        assert_eq!(s.fork, None);
+        assert_eq!(texts(&s), ["a", "A", "b2", "B2"]);
+        // Undo: the edit and its turn go, what the rewind took comes back.
+        s.apply(&SessionEvent::RewindUndone);
+        assert_eq!(texts(&s), ["a", "A", "b", "B", "c", "C"]);
+        assert!(s.rewinds.is_empty() && s.fork.is_none());
+        // Nothing to undo, or an unknown message: nothing happens.
+        s.apply(&SessionEvent::RewindUndone);
+        s.apply(&SessionEvent::Rewound { message_id: "zzz".into(), session_id: "s1".into() });
+        assert_eq!(texts(&s).len(), 6);
+    }
+
+    #[test]
+    fn rewinds_stack_and_undo_one_at_a_time() {
+        let mut s = SessionState::new("s1");
+        for id in ["a", "b", "c"] {
+            turn(&mut s, id, &id.to_uppercase());
+        }
+        s.apply(&SessionEvent::Rewound { message_id: "c".into(), session_id: "s1".into() });
+        s.apply(&SessionEvent::Rewound { message_id: "b".into(), session_id: "s1".into() });
+        assert_eq!(texts(&s), ["a", "A"]);
+        assert_eq!(s.fork.as_ref().map(|f| f.message_id.as_str()), Some("b"));
+        s.apply(&SessionEvent::RewindUndone);
+        assert_eq!(texts(&s), ["a", "A", "b", "B"]);
+        // Back to waiting to fork before `c`.
+        assert_eq!(s.fork.as_ref().map(|f| f.message_id.as_str()), Some("c"));
+        s.apply(&SessionEvent::RewindUndone);
+        assert_eq!(texts(&s), ["a", "A", "b", "B", "c", "C"]);
+        assert_eq!(s.fork, None);
+    }
+
+    #[test]
+    fn messages_before_a_new_session_cant_be_rewound_to() {
+        let mut s = SessionState::new("s1");
+        turn(&mut s, "a", "A");
+        s.apply(&SessionEvent::NewSession);
+        turn(&mut s, "b", "B");
+        let ix = |id| s.message_index(id).unwrap();
+        assert!(!s.can_rewind_to(ix("a")));
+        assert!(s.can_rewind_to(ix("b")));
+        // Saved before Space kept ids: no id, no rewind.
+        let old: SessionEvent = serde_json::from_str(r#"{"UserMessage":{"text":"hi","attachments":[]}}"#).unwrap();
+        s.apply(&old);
+        assert!(!s.can_rewind_to(s.items.len() - 1));
+        let json = serde_json::to_string(&SessionEvent::Rewound { message_id: "b".into(), session_id: "s".into() }).unwrap();
+        assert_eq!(serde_json::from_str::<SessionEvent>(&json).unwrap(), SessionEvent::Rewound { message_id: "b".into(), session_id: "s".into() });
     }
 
     #[test]

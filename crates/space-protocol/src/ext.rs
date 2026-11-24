@@ -37,6 +37,22 @@ pub const SIDE_OF_META_KEY: &str = "space/sideOf";
 /// `_meta` key of a `session/prompt` response carrying the turn's [`TurnUsage`] (ACP's own
 /// `usage` field is still unstable).
 pub const USAGE_META_KEY: &str = "space/usage";
+/// `_meta` key of the ACP `initialize` response: `true` when the agent can go back to an earlier
+/// message ([`RewindSession`], [`FORK_OF_META_KEY`]). Needs [`MESSAGE_ID_META_KEY`] on prompts.
+pub const REWIND_META_KEY: &str = "space/rewind";
+/// `_meta` key of a `session/prompt` carrying the client's id for the message (a UUID): the agent
+/// knows the message by it when asked to go back to it. A steered message's id is
+/// [`SteerSession::id`].
+pub const MESSAGE_ID_META_KEY: &str = "space/messageId";
+/// `_meta` key of ACP `session/new` making the session a copy of another one's conversation up to
+/// just before one of its messages ([`ForkOf`]): the conversation goes on from there, and the
+/// other session stays as it was.
+pub const FORK_OF_META_KEY: &str = "space/forkOf";
+/// `_meta` key of an ACP `tool_call`: `true` when a subagent made the call, not the conversation
+/// itself (Claude Code's file checkpoints don't cover a subagent's edits).
+pub const SUBAGENT_META_KEY: &str = "space/subagent";
+/// Method name of the [`RewindSession`] request (client → agent).
+pub const REWIND_METHOD: &str = "_space/session/rewind";
 /// `_meta` key of ACP `initialize` carrying [`crate::PROTOCOL_VERSION`], both ways. An agent that
 /// speaks the `_space/*` methods answers with the version it was built for, and the host refuses
 /// it on a mismatch; a plain ACP agent leaves it out.
@@ -424,6 +440,55 @@ pub struct Complete {
 #[serde(rename_all = "camelCase")]
 pub struct CompleteResult {
     pub text: String,
+}
+
+/// The value of [`FORK_OF_META_KEY`]: the session to copy, and the message the copy stops before
+/// (it and everything after it are left out).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct ForkOf {
+    pub session_id: String,
+    pub message_id: String,
+}
+
+/// `_space/session/rewind` (client → agent request): going back to just before message
+/// `messageId` (a [`MESSAGE_ID_META_KEY`] id). The agent says whether its conversation can go back
+/// there (the client then starts a session with [`FORK_OF_META_KEY`] for the next message), and
+/// which files its own edits since then changed. With `restoreFiles` it also puts those files back
+/// as they were before the message; otherwise it changes nothing. Only for agents that set
+/// [`REWIND_META_KEY`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
+#[request(method = "_space/session/rewind", response = RewindResult)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+#[serde(rename_all = "camelCase")]
+pub struct RewindSession {
+    pub session_id: String,
+    pub message_id: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(test, ts(optional, as = "Option<bool>"))]
+    pub restore_files: bool,
+}
+
+/// The answer to [`RewindSession`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, JsonRpcResponse)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+#[serde(rename_all = "camelCase")]
+pub struct RewindResult {
+    /// The conversation can go back to before the message.
+    pub found: bool,
+    /// The agent kept the files as they were before the message (`false`: it can't put them
+    /// back, see `reason`).
+    pub files: bool,
+    /// Why the files can't be put back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Absolute paths of the files that differ from then (and are, or were, put back).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed: Vec<String>,
+    /// Files left as they are because putting them back wasn't safe (a link in the way).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<u32>,
 }
 
 /// Hidden text a plugin adds to a prompt (the agent puts it in its system prompt, never in

@@ -95,6 +95,14 @@ pub struct Thread {
     /// Told to the agent with the next message: the folder was switched to another branch
     /// from the Changes view (see `changes`).
     pub branch_note: Option<String>,
+    /// Going back to an earlier message (see `rewind`): what undoes each rewind, the last one
+    /// last; what waits for the turn to stop or the session to load; one under way; the
+    /// rewound message on its way into the composer, and the composer as it was before it.
+    pub undo: Vec<crate::rewind::UndoEntry>,
+    pub waiting: Option<crate::rewind::Waiting>,
+    pub rewinding: bool,
+    pub to_composer: Option<Outgoing>,
+    pub composer_undo: Option<(String, usize, usize, usize, Option<String>, String)>,
 }
 
 /// A message on its way: what the composer held when it was sent.
@@ -106,12 +114,30 @@ pub struct Outgoing {
     pub attachments: Vec<PathBuf>,
     pub images: Vec<Prepared>,
     pub pastes: Vec<Paste>,
+    /// Its id (a UUID; empty until it's given one, when it's sent or queued).
+    pub id: String,
 }
 
 impl Outgoing {
     /// The message as the agent gets it, once its images and pastes are saved.
     pub fn input(&self, images: Vec<space_core::ImageRef>, texts: Vec<space_core::TextRef>) -> space_core::UserInput {
-        space_core::UserInput { text: self.text.clone(), quote: self.quote.clone(), attachments: self.attachments.clone(), images, texts, note: None }
+        space_core::UserInput {
+            text: self.text.clone(),
+            quote: self.quote.clone(),
+            attachments: self.attachments.clone(),
+            images,
+            texts,
+            note: None,
+            id: (!self.id.is_empty()).then(|| self.id.clone()),
+        }
+    }
+
+    /// Give it an id unless it has one (it keeps it through the queue and a steer).
+    pub fn with_id(mut self) -> Self {
+        if self.id.is_empty() {
+            self.id = space_core::new_message_id();
+        }
+        self
     }
 }
 
@@ -162,7 +188,18 @@ impl Thread {
             thought_secs: HashMap::new(),
             side_of: None,
             branch_note: None,
+            undo: Vec::new(),
+            waiting: None,
+            rewinding: false,
+            to_composer: None,
+            composer_undo: None,
         }
+    }
+
+    /// Thoughts' timings from transcript index `at` on are gone (the transcript was cut there).
+    pub(crate) fn forget_thoughts_from(&mut self, at: usize) {
+        self.thought_started.retain(|ix, _| *ix < at);
+        self.thought_secs.retain(|ix, _| *ix < at);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -235,7 +272,10 @@ impl SpaceApp {
             }
         }
         if let SessionEvent::TurnEnded { stop_reason, .. } = event {
+            self.note_written(key, cx);
             self.turn_ended_with_queue(key, stop_reason, cx);
+            // A rewind or Undo waiting for the turn to stop.
+            self.run_waiting(key, cx);
         }
         if self.saving_threads() {
             let thread = self.thread_mut(key).expect("thread exists");
@@ -267,6 +307,18 @@ impl SpaceApp {
         }
     }
 
+    /// The thread goes on in a new agent session: a divider says so (and is saved, so going back
+    /// knows the messages before it aren't in the new conversation).
+    fn emit_new_session(&mut self, key: u64, cx: &mut Context<Self>) {
+        let saving = self.saving_threads();
+        let Some(thread) = self.thread_mut(key) else { return };
+        thread.apply(&SessionEvent::NewSession);
+        if saving {
+            crate::persist::record(&mut thread.unsaved, &SessionEvent::NewSession);
+            self.save_thread(key, cx);
+        }
+    }
+
     pub(crate) fn add_thread(&mut self, cwd: PathBuf) -> u64 {
         let key = self.next_key;
         self.next_key += 1;
@@ -287,6 +339,7 @@ impl SpaceApp {
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(agent) => {
+                        this.rewind.agent_can = agent.can_rewind();
                         this.agent = Some(agent);
                         this.agent_status = PluginStatus::Running;
                         let woke = std::mem::take(&mut this.agent_asleep);
@@ -353,14 +406,15 @@ impl SpaceApp {
         let host = self.host.clone();
         // Sessions are kept (and can be loaded) only with a session store.
         let can_load = agent.can_load_session() && self.saving_threads();
+        // The thread went back to an earlier message: the next message goes on from a copy of
+        // the conversation up to there. (A rewind waiting for the session loads it instead.)
+        let fork = thread.state.fork.clone().filter(|_| agent.can_rewind() && thread.waiting.is_none() && thread.side_of.is_none());
         let Some(thread) = self.thread_mut(key) else { return };
         thread.creating = true;
         thread.error = None;
         // Continue the saved conversation (a new session when it can't be loaded).
-        let resume = thread.resume.take().filter(|_| can_load);
-        if resume.is_none() && !thread.state.items.is_empty() {
-            thread.state.items.push(TranscriptItem::divider("new-session"));
-        }
+        let resume = thread.resume.take().filter(|_| can_load && fork.is_none());
+        let new_session = resume.is_none() && fork.is_none() && !thread.state.items.is_empty();
         let (cwd, id) = (thread.cwd.clone(), thread.id.clone());
         cx.spawn(async move |this, cx| {
             let attachments = host.thread_attachments_dir(&id).await;
@@ -369,11 +423,12 @@ impl SpaceApp {
                     t.attachments_dir = Some(attachments);
                 }
             });
-            let result = match (&resume, &side_of) {
-                (Some(session_id), Some(main)) => agent.load_side_session(session_id, main, cwd, Some(&id)).await,
-                (Some(session_id), None) => agent.load_session(session_id, cwd, Some(&id)).await,
-                (None, Some(main)) => agent.new_side_session(main, cwd, Some(&id)).await,
-                (None, None) => agent.new_session_in(cwd, Some(&id)).await,
+            let result = match (&resume, &side_of, &fork) {
+                (_, None, Some(fork)) => agent.fork_session(fork, cwd, Some(&id)).await,
+                (Some(session_id), Some(main), _) => agent.load_side_session(session_id, main, cwd, Some(&id)).await,
+                (Some(session_id), None, _) => agent.load_session(session_id, cwd, Some(&id)).await,
+                (None, Some(main), _) => agent.new_side_session(main, cwd, Some(&id)).await,
+                (None, None, None) => agent.new_session_in(cwd, Some(&id)).await,
             };
             let session = match result {
                 Ok(s) => s,
@@ -381,12 +436,18 @@ impl SpaceApp {
                     let _ = this.update(cx, |this, cx| {
                         let Some(t) = this.thread_mut(key) else { return };
                         t.creating = false;
-                        if resume.is_some() {
+                        if fork.is_some() {
+                            // Not silently in a new conversation: say so, and keep the message.
+                            t.error = Some(format!("Couldn't go back to that message: {e:#}"));
+                        } else if resume.is_some() {
                             // The saved session is gone: go on in a new one.
                             tracing::warn!("loading the saved session failed: {e:#}");
                             this.create_session(key, cx);
                         } else {
                             t.error = Some(format!("{e:#}"));
+                            if t.waiting.take().is_some() {
+                                t.rewinding = false;
+                            }
                         }
                         cx.notify();
                     });
@@ -394,8 +455,12 @@ impl SpaceApp {
                 }
             };
             let _ = this.update(cx, |this, cx| {
-                // Guards judge a loaded session's calls with what the thread already shows.
-                if resume.is_some()
+                // The thread goes on in a new conversation: what came before isn't in it.
+                if new_session {
+                    this.emit_new_session(key, cx);
+                }
+                // Guards judge a loaded (or copied) session's calls with what the thread already shows.
+                if (resume.is_some() || fork.is_some())
                     && let Some(t) = this.thread(key)
                 {
                     session.seed_history(&t.state.items);
@@ -412,6 +477,8 @@ impl SpaceApp {
                         this.prompt(key, q, cx);
                     }
                 }
+                // A rewind waiting for the session.
+                this.run_waiting(key, cx);
                 cx.notify();
             });
         })
@@ -487,6 +554,15 @@ impl SpaceApp {
             self.next_image_id += drafts.len() as u64;
             if let Some(t) = self.thread_mut(key) {
                 t.queued = s.prompt.map(|text| Queued { text, images, quote: s.quote, ..Default::default() });
+                // Each goes when the turn before it ends.
+                t.pending = s
+                    .followups
+                    .into_iter()
+                    .map(|text| {
+                        let message = Outgoing { text, ..Default::default() }.with_id();
+                        crate::queue::Pending { id: message.id.clone(), message, when: crate::queue::When::Done }
+                    })
+                    .collect();
                 t.quote = s.draft_quote;
                 t.images = drafts.into_iter().zip(first_id..).map(|(p, id)| DraftImage::ready(id, p)).collect();
                 t.draft = s.draft.unwrap_or_default();
@@ -563,7 +639,9 @@ impl SpaceApp {
         let quote = thread.quote.take();
         thread.draft.clear();
         self.input.update(cx, |s, cx| s.clean(window, cx));
-        let message = Outgoing { text, quote, attachments, images, pastes };
+        let message = Outgoing { text, quote, attachments, images, pastes, id: space_core::new_message_id() };
+        // Another message: the last rewind stays.
+        self.forget_undo(key);
         self.dispatch(key, when, running, message, cx);
     }
 
@@ -576,19 +654,22 @@ impl SpaceApp {
         if thread.state.running || thread.queued.is_some() || thread.loading || thread.unloaded || self.blocker(thread).is_some() {
             return;
         }
-        let message = Outgoing { text: "Continue".into(), quote: None, attachments: Vec::new(), images: Vec::new(), pastes: Vec::new() };
+        let message = Outgoing { text: "Continue".into(), id: space_core::new_message_id(), ..Default::default() };
+        self.forget_undo(key);
         self.dispatch(key, crate::queue::When::Done, false, message, cx);
     }
 
     /// Send `message` in thread `key`: now, queued while the agent works, or once a session is up.
     pub(crate) fn dispatch(&mut self, key: u64, when: crate::queue::When, running: bool, message: Outgoing, cx: &mut Context<Self>) {
+        let message = message.with_id();
         // The agent is working: the message waits (for the turn, or for the current step).
         if running {
             self.queue_message(key, when, message, cx);
             return;
         }
         let thread = self.thread_mut(key).expect("thread exists");
-        if thread.live_session().is_some() {
+        // After going back to an earlier message, the next one goes to a copy of the conversation.
+        if thread.live_session().is_some() && thread.state.fork.is_none() {
             self.prompt(key, message, cx);
         } else {
             // No session yet (agent starting) or its agent exited: send once there is one (the
@@ -611,6 +692,7 @@ impl SpaceApp {
     /// Send a message: its images and long pastes are saved in the thread's attachments folder
     /// first (one that can't be saved stops the send and says why), then the prompt goes out.
     pub(crate) fn prompt(&mut self, key: u64, message: Outgoing, cx: &mut Context<Self>) {
+        let message = message.with_id();
         let Some(thread) = self.thread(key) else { return };
         let Some(session) = thread.session.clone() else { return };
         // A thread that was saved already had its first message.
@@ -689,7 +771,7 @@ mod tests {
     fn a_generated_title_replaces_the_first_line() {
         let mut thread = Thread::new(1, PathBuf::from("/nonexistent"));
         assert_eq!(thread.title(), "New thread");
-        thread.apply(&SessionEvent::UserMessage { text: "please fix the login page\nit redirects".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: None });
+        thread.apply(&SessionEvent::UserMessage { text: "please fix the login page\nit redirects".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: None, id: None, steered: false });
         // Until a title arrives (or if none does): the first line.
         assert_eq!(thread.title(), "please fix the login page");
         thread.name = Some("Fix login redirect".into());

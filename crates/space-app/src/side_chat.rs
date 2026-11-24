@@ -341,6 +341,7 @@ pub(crate) fn side_chat_content(app: &mut SpaceApp, key: u64, window: &mut Windo
         };
         let items = transcript_items(
             TranscriptView {
+                rewind: Default::default(),
                 state: &thread.state,
                 key: thread.key,
                 expanded: &thread.expanded,
@@ -356,6 +357,9 @@ pub(crate) fn side_chat_content(app: &mut SpaceApp, key: u64, window: &mut Windo
                 actions: ActionHandlers {
                     on_copy: Rc::new(|_, text, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()))),
                     on_usage: Rc::new(|_, _, _| {}),
+                    // A side chat can't go back: it only reads.
+                    on_edit: None,
+                    on_rewind: None,
                 },
                 open_turns: &thread.open_turns,
                 on_toggle_turn: toggle(true),

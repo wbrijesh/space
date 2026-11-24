@@ -44,8 +44,9 @@ pub(crate) enum PendingAction {
 impl SpaceApp {
     /// Queue a message for a running turn.
     pub(crate) fn queue_message(&mut self, key: u64, when: When, message: Outgoing, cx: &mut Context<Self>) {
-        self.next_pending += 1;
-        let id = format!("queued-{}", self.next_pending);
+        // The message's own id: the agent knows a steered message by it too.
+        let message = message.with_id();
+        let id = message.id.clone();
         let can_steer = self.thread(key).and_then(|t| t.session.as_ref()).is_some_and(|s| s.agent().can_steer());
         let when = if when == When::Step && can_steer { When::Step } else { When::Done };
         let Some(thread) = self.thread_mut(key) else { return };
