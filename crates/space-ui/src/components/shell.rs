@@ -12,14 +12,14 @@ use crate::theme::{color, radius, size, text};
 
 /// A panel on the window's chrome: rounded, with a hairline, what's inside clipped to it. The
 /// chat's is the darkest (where the work is): [`panel`]; the left panel's and the right
-/// pane's take the chrome's lighter tone: [`side_panel`].
+/// pane's are a step lighter: [`side_panel`].
 pub fn panel() -> Div {
     div().rounded(radius::XL).border_1().border_color(color::border()).bg(color::bg()).overflow_hidden()
 }
 
-/// A panel beside the chat's (the left panel, the right pane), in the chrome's tone.
+/// A panel beside the chat's (the left panel, the right pane), a step lighter than it.
 pub fn side_panel() -> Div {
-    panel().bg(color::bg_sidebar())
+    panel().bg(color::bg_side())
 }
 
 /// What the activity bar can show in the sidebar.

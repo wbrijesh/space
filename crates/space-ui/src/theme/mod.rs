@@ -35,10 +35,12 @@ pub mod color {
     colors! {
         /// Window / main column background.
         bg = 0x101010ff;
-        /// The window's chrome (title bar, around the panels) and the side panels (the left
-        /// panel, the right pane): a step lighter than the chat's panel, which is where the work
-        /// is. Also code blocks' headers.
+        /// The window's chrome (title bar, around the panels), the lightest. Also code blocks'
+        /// headers.
         bg_sidebar = 0x1a1a1aff;
+        /// The side panels (the left panel, the right pane): halfway between the chrome and the
+        /// chat's panel, which is the darkest, where the work is.
+        bg_side = 0x151515ff;
         /// Raised surfaces: cards, quiet hover on rows.
         surface = 0x1f1f1fff;
         /// The composer's card: a step brighter than other cards, so the input stands out.
@@ -106,7 +108,7 @@ pub mod color {
         /// Selected row on the Trajectory background.
         trajectory_selected = 0x262626ff;
         /// Terminal colors: GitHub Dark's ANSI palette (Space's accents are its values). The
-        /// terminal's background is `bg_sidebar`, the right pane's; its text is `text`.
+        /// terminal's background is `bg_side`, the right pane's; its text is `text`.
         term_black = 0x484f58ff;
         term_red = 0xff7b72ff;
         term_green = 0x3fb950ff;
@@ -135,7 +137,7 @@ pub fn terminal_palette() -> space_terminal::Palette {
         "term_bright_magenta", "term_bright_cyan", "term_bright_white",
     ]
     .map(hex);
-    space_terminal::Palette { ansi, foreground: hex("text"), background: hex("bg_sidebar"), cursor: hex("text") }
+    space_terminal::Palette { ansi, foreground: hex("text"), background: hex("bg_side"), cursor: hex("text") }
 }
 
 use color::ALL as ALL_COLORS;

@@ -370,7 +370,7 @@ pub(crate) fn side_chat_content(app: &mut SpaceApp, key: u64, window: &mut Windo
         );
         // One column, as wide as the main chat's at most, centred in a wider pane.
         let content = div().w_full().max_w(size::CONTENT_MAX_W).mx_auto().px_4().pt_4().pb(size::SCROLL_FADE_H).flex().flex_col().children(items);
-        FollowScrollArea::new("side-chat-transcript", &side.scroll, content).fade_into(color::bg_sidebar()).button(true).into_any_element()
+        FollowScrollArea::new("side-chat-transcript", &side.scroll, content).fade_into(color::bg_side()).button(true).into_any_element()
     };
     let handlers = ComposerHandlers {
         on_send: {
