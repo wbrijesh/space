@@ -31,8 +31,9 @@ cask clears macOS's download mark so it opens normally.
 - **No checks:** the agent runs every tool call it decides on (shell commands, edits, fetches)
   without asking. Space's guard hooks stay open to a plugin that wants to add checks
   ([writing a plugin](docs/plugins.md)).
-- **Closing** a thread keeps it: a new, empty thread in the same folder offers it under **Resume**.
-  Closed threads are deleted after 30 days (Settings ▸ Threads).
+- **Done** (⌘W, or the archive button on a thread's row) takes a thread off the sidebar and keeps it;
+  **⌘Z** brings it back. A new, empty thread in the same folder offers it under **+ ▸ Done threads**.
+  Done threads are deleted after 30 days (Settings ▸ Threads).
 - **Titles** come from the agent's model after your first message. A name you give (⌘R) stays.
 - **The sidebar** groups threads under Pinned, Today, Yesterday, then one header per earlier day
   (by when each was created; writing in one doesn't move it). Pinned threads keep their pin while

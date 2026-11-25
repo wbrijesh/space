@@ -1,14 +1,15 @@
-//! Sidebar thread row: one line with the thread title and an activity indicator; right-click
-//! for Rename Thread… and Close Thread.
+//! Sidebar thread row: one line with the thread title and an activity indicator; on hover an
+//! archive button marks it done. Right-click for Pin, Rename Thread… and Mark as Done.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use super::loaders::Dots;
 use super::menu::{ContextItem, context_menu};
-use super::widgets::status_dot;
+use super::tip::TipExt as _;
+use super::widgets::{icon_button, status_dot};
 use crate::ClickHandler;
-use crate::actions::{CloseThread, RenameThread, TogglePinThread};
+use crate::actions::{MarkDone, RenameThread, TogglePinThread};
 use crate::theme::{color, radius, size, text};
 
 /// What the right edge of a row shows.
@@ -58,7 +59,7 @@ pub struct ThreadRow {
     /// nothing else shows.
     terminal: bool,
     on_click: Option<ClickHandler>,
-    on_close: Option<ClickHandler>,
+    on_done: Option<ClickHandler>,
     on_rename: Option<ClickHandler>,
     /// Pin or unpin it: whether it's pinned, whether it can be (it's saved), and the handler.
     on_pin: Option<(bool, bool, ClickHandler)>,
@@ -76,7 +77,7 @@ impl ThreadRow {
             force_hover: false,
             terminal: false,
             on_click: None,
-            on_close: None,
+            on_done: None,
             on_rename: None,
             on_pin: None,
             shortcut: None,
@@ -127,9 +128,10 @@ impl ThreadRow {
         self
     }
 
-    /// The row's context menu offers Close Thread.
-    pub fn on_close(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
-        self.on_close = Some(std::rc::Rc::new(f));
+    /// Mark it done: the archive button on hover (in place of the indicator), and Mark as Done
+    /// in the context menu.
+    pub fn on_done(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
+        self.on_done = Some(std::rc::Rc::new(f));
         self
     }
 }
@@ -156,8 +158,29 @@ impl RenderOnce for ThreadRow {
             })
         });
         let hover_bg = color::surface();
+        let group: SharedString = format!("thread-row-{menu_key}").into();
+        // On hover the archive button takes the indicator's place (not while ⌘ shows numbers).
+        let done = self.on_done.clone().filter(|_| self.shortcut.is_none()).map(|f| {
+            icon_button(SharedString::from(format!("{menu_key}-done")), gpui::assets::IconName::Archive, true, false)
+                .size(px(20.))
+                .when(!self.force_hover, |d| d.hidden().group_hover(group.clone(), |s| s.flex()))
+                .tip_action("Mark as Done", &MarkDone)
+                .on_click(move |e, w, cx| {
+                    cx.stop_propagation();
+                    f(e, w, cx)
+                })
+        });
+        let indicator = indicator.map(|i| {
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .child(i)
+                .when(done.is_some(), |d| if self.force_hover { d.hidden() } else { d.group_hover(group.clone(), |s| s.hidden()) })
+        });
         let row = div()
             .id(self.id)
+            .group(group.clone())
             .flex()
             .items_center()
             .gap_2()
@@ -180,9 +203,10 @@ impl RenderOnce for ThreadRow {
             })
             .child(div().flex_1().min_w_0().truncate().child(self.title))
             .children(indicator)
+            .children(done)
             .children(self.shortcut.map(|(n, matches)| shortcut_badge(n, matches)))
             .when_some(self.on_click, |d, f| d.on_click(move |e, w, cx| f(e, w, cx)));
-        let items = row_menu(self.on_pin, self.on_rename, self.on_close);
+        let items = row_menu(self.on_pin, self.on_rename, self.on_done);
         if items.is_empty() {
             return row.into_any_element();
         }
@@ -207,9 +231,9 @@ pub fn section_header(label: impl Into<SharedString>, first: bool) -> Div {
         )
 }
 
-/// A row's right-click menu: Pin (or Unpin) Thread, Rename Thread… and Close Thread, with the
+/// A row's right-click menu: Pin (or Unpin) Thread, Rename Thread… and Mark as Done, with the
 /// shortcuts of their actions.
-fn row_menu(on_pin: Option<(bool, bool, ClickHandler)>, on_rename: Option<ClickHandler>, on_close: Option<ClickHandler>) -> Vec<ContextItem> {
+fn row_menu(on_pin: Option<(bool, bool, ClickHandler)>, on_rename: Option<ClickHandler>, on_done: Option<ClickHandler>) -> Vec<ContextItem> {
     let pick = |f: ClickHandler| move |w: &mut Window, cx: &mut App| f(&ClickEvent::default(), w, cx);
     let mut items = Vec::new();
     if let Some((pinned, enabled, f)) = on_pin {
@@ -219,8 +243,8 @@ fn row_menu(on_pin: Option<(bool, bool, ClickHandler)>, on_rename: Option<ClickH
     if let Some(f) = on_rename {
         items.push(ContextItem::new("Rename Thread…", pick(f)).shortcut(&RenameThread));
     }
-    if let Some(f) = on_close {
-        items.push(ContextItem::new("Close Thread", pick(f)).shortcut(&CloseThread));
+    if let Some(f) = on_done {
+        items.push(ContextItem::new("Mark as Done", pick(f)).shortcut(&MarkDone));
     }
     items
 }
@@ -262,7 +286,8 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             .examples([
                 row("idle", |r| r),
                 row("selected", |r| r.selected(true)),
-                row("hover", |r| r.force_hover(true)),
+                row("hover", |r| r.force_hover(true).on_done(|_, _, _| {})),
+                row("hover, working", |r| r.force_hover(true).indicator(RowIndicator::Working).on_done(|_, _, _| {})),
                 row("working", |r| r.indicator(RowIndicator::Working)),
                 row("working, selected", |r| r.selected(true).indicator(RowIndicator::Working)),
                 row("unread", |r| r.indicator(RowIndicator::Unread)),

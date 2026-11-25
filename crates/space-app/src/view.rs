@@ -11,7 +11,7 @@ use gpui::component::input::InputState;
 use space_core::protocol::service::SettingKind;
 use space_ui::components::model_picker::PickerPane;
 use space_ui::components::composer::{
-    ClosedThread, Composer, ComposerBlocker, ComposerControls, ComposerHandlers, ComposerMenu, FolderPage, Handler, PlusPage, ModeChoice,
+    DoneThread, Composer, ComposerBlocker, ComposerControls, ComposerHandlers, ComposerMenu, FolderPage, Handler, PlusPage, ModeChoice,
 };
 use space_ui::components::settings::{
     Catalog, FieldView, ModelChoice, PluginApproval, PluginRow, PluginSettingsView, SettingsHandlers, SettingsPage,
@@ -36,7 +36,7 @@ use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
 
 use crate::app::{
-    CloseSettings, ClosePaneTab, CloseThread, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizePane, NewPaneTab, NewThread,
+    CloseSettings, ClosePaneTab, MarkDone, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizePane, NewPaneTab, NewThread,
     NextPaneTab, OpenSettings, PreviousPaneTab, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleRightPane, ShowTerminal, ShowFiles, ShowSideChat, ShowChanges, ToggleTrajectory,
     OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread, UndoRewind,
 };
@@ -171,7 +171,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         // Focus sink: a click on anything non-focusable lands here and blurs the composer.
         .track_focus(&app.focus)
         .on_action(cx.listener(|this, _: &NewThread, window, cx| this.new_thread(None, window, cx)))
-        .on_action(cx.listener(|this, _: &CloseThread, window, cx| this.close_current_thread(window, cx)))
+        .on_action(cx.listener(|this, _: &MarkDone, window, cx| this.mark_current_done(window, cx)))
         .on_action(cx.listener(|this, _: &RenameThread, window, cx| this.rename_current_thread(window, cx)))
         .on_action(cx.listener(|this, _: &TogglePinThread, _, cx| this.toggle_pin_current(cx)))
         .on_action(cx.listener(|this, _: &space_ui::actions::OpenInLastApp, _, cx| this.open_thread_folder(None, cx)))
@@ -273,18 +273,18 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
                 cx.stop_propagation();
             }
         }))
-        // ⌘Z undoes the last rewind: from the composer while it holds nothing of yours since,
-        // and anywhere no text field has focus.
+        // ⌘Z undoes the last rewind or Done: from the composer while it holds nothing of yours
+        // since, and anywhere no text field has focus.
         .capture_action(cx.listener(|this, _: &gpui::component::input::Undo, window, cx| {
-            if this.input.read(cx).focus_handle(cx).is_focused(window) && this.undo_key(true, cx) {
+            if this.input.read(cx).focus_handle(cx).is_focused(window) && this.undo_key(true, window, cx) {
                 cx.stop_propagation();
             }
         }))
-        .on_action(cx.listener(|this, _: &UndoRewind, _, cx| {
-            this.undo_key(false, cx);
+        .on_action(cx.listener(|this, _: &UndoRewind, window, cx| {
+            this.undo_key(false, window, cx);
         }))
-        .on_action(cx.listener(|this, _: &gpui::component::input::Undo, _, cx| {
-            this.undo_key(false, cx);
+        .on_action(cx.listener(|this, _: &gpui::component::input::Undo, window, cx| {
+            this.undo_key(false, window, cx);
         }))
         // Dragging the pane's divider: window-level listeners, so the drag follows the pointer
         // wherever it goes (over the pane, the chat's too-narrow overlay, or out of the window).
@@ -375,13 +375,19 @@ fn notice(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
         crate::rewind::NoticeKind::Rewound => Icon::new(Lucide::RotateCcw),
         crate::rewind::NoticeKind::Edited => Icon::new(Lucide::Pencil),
         crate::rewind::NoticeKind::Problem => Icon::new(gpui::component::IconName::TriangleAlert),
+        crate::rewind::NoticeKind::Done => Icon::new(Lucide::Archive),
     };
     let key = n.key;
-    let can_undo = n.kind != crate::rewind::NoticeKind::Problem && app.thread(key).is_some_and(|t| !t.undo.is_empty());
+    let done = n.kind == crate::rewind::NoticeKind::Done;
+    let can_undo = match n.kind {
+        crate::rewind::NoticeKind::Problem => false,
+        crate::rewind::NoticeKind::Done => app.rewind.done.is_some(),
+        _ => app.thread(key).is_some_and(|t| !t.undo.is_empty()),
+    };
     let undo = can_undo.then(|| {
         let this = cx.entity().downgrade();
-        let on_undo: notice::Handler = Rc::new(move |_, cx| {
-            let _ = this.update(cx, |this, cx| this.undo_rewind(key, cx));
+        let on_undo: notice::Handler = Rc::new(move |w, cx| {
+            let _ = this.update(cx, |this, cx| if done { this.undo_done(w, cx) } else { this.undo_rewind(key, cx) });
         });
         (SharedString::from("⌘Z"), on_undo)
     });
@@ -457,7 +463,7 @@ fn sidebar(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> impl IntoElement {
                 .on_click(cx.listener(move |this, _, w, cx| this.select_thread(key, w, cx)))
                 .on_pin(t.pinned_ms.is_some(), !t.is_empty(), cx.listener(move |this, _, _, cx| this.toggle_pin(key, cx)))
                 .on_rename(cx.listener(move |this, _, w, cx| this.rename_thread(key, w, cx)))
-                .on_close(cx.listener(move |this, _, w, cx| this.confirm_close_thread(key, w, cx)));
+                .on_done(cx.listener(move |this, _, w, cx| this.mark_done(key, w, cx)));
             match header {
                 Some(label) => div().child(section_header(label, ix == 0)).child(row).into_any_element(),
                 None => row.into_any_element(),
@@ -958,7 +964,7 @@ fn trajectory_view(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> Option<AnyElem
 fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
     let plugin_sections = plugin_settings(app, window, cx);
     let plugin_rows = plugin_rows(app);
-    let keep_closed = app.saving_threads().then(|| app.keep_closed_input(window, cx));
+    let keep_done = app.saving_threads().then(|| app.keep_done_input(window, cx));
     let app = &*app;
     let catalog = match &app.agent_models {
         Some(models) => Catalog::Ready { models: models.clone(), levels: app.agent_levels.clone().unwrap_or_default() },
@@ -1040,7 +1046,7 @@ fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>)
     };
     let s = &app.settings.settings;
     let page = SettingsPage::new(catalog)
-        .keep_closed(keep_closed)
+        .keep_done(keep_done)
         .swipe(s.trackpad.swipe.index())
         .model(s.new_threads.model.clone().map(|m| (m.provider, m.id)))
         .thinking(s.new_threads.thinking_level.clone())
@@ -1304,10 +1310,10 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
                 let _ = this.update(cx, |this, cx| this.switch_branch(name, true, w, cx));
             })
         },
-        on_resume: {
+        on_reopen: {
             let this = cx.entity().downgrade();
             Rc::new(move |id, w: &mut Window, cx: &mut App| {
-                let _ = this.update(cx, |this, cx| this.resume_thread(&id, w, cx));
+                let _ = this.update(cx, |this, cx| this.reopen_thread(&id, w, cx));
             })
         },
         on_command: {
@@ -1324,7 +1330,7 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
             this.close_command_menu(cx);
         }),
     };
-    // A new thread with nothing typed offers this folder's closed threads.
+    // A new thread with nothing typed offers this folder's done threads.
     let untouched = thread.is_empty()
         && thread.attachments.is_empty()
         && thread.images.is_empty()
@@ -1332,13 +1338,13 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         && thread.quote.is_none()
         && app.input.read(cx).value().trim().is_empty();
     let now = crate::app::now_ms();
-    let resumable = if untouched {
-        app.closed_threads_in(&thread.cwd)
+    let reopenable = if untouched {
+        app.done_threads_in(&thread.cwd)
             .into_iter()
-            .map(|m| ClosedThread {
+            .map(|m| DoneThread {
                 id: m.id.clone(),
                 title: m.title.clone().into(),
-                closed: format::time_ago(m.closed_ms.unwrap_or(now), now).into(),
+                done: format::time_ago(m.done_ms.unwrap_or(now), now).into(),
             })
             .collect()
     } else {
@@ -1397,7 +1403,7 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
             stats: app.host.has_trajectory().then(|| app.trajectories.stats.get(&thread.id).cloned()).flatten(),
             context_open: app.usage_open.as_deref() == Some(CONTEXT_PANEL),
             menu: app.usage_open.as_deref().and_then(composer_menu),
-            resumable,
+            reopenable,
         })
         .handlers(handlers)
         .into_any_element()
@@ -1417,7 +1423,7 @@ fn menu_slot(menu: ComposerMenu) -> String {
         ComposerMenu::Folder(FolderPage::Branches) => crate::branches::BRANCH_PAGE,
         ComposerMenu::Mode => "composer:mode",
         ComposerMenu::Plus(PlusPage::Root) => "composer:plus",
-        ComposerMenu::Plus(PlusPage::Resume) => "composer:plus:resume",
+        ComposerMenu::Plus(PlusPage::Done) => "composer:plus:resume",
         ComposerMenu::Model(PickerPane::Root) => "composer:picker",
         ComposerMenu::Model(PickerPane::Models) => "composer:picker:models",
         ComposerMenu::Model(PickerPane::Efforts) => "composer:picker:efforts",
@@ -1429,7 +1435,7 @@ pub(crate) fn composer_menu(slot: &str) -> Option<ComposerMenu> {
     [PickerPane::Root, PickerPane::Models, PickerPane::Efforts]
         .map(ComposerMenu::Model)
         .into_iter()
-        .chain([ComposerMenu::Folder(FolderPage::Root), ComposerMenu::Folder(FolderPage::Branches), ComposerMenu::Mode, ComposerMenu::Plus(PlusPage::Root), ComposerMenu::Plus(PlusPage::Resume)])
+        .chain([ComposerMenu::Folder(FolderPage::Root), ComposerMenu::Folder(FolderPage::Branches), ComposerMenu::Mode, ComposerMenu::Plus(PlusPage::Root), ComposerMenu::Plus(PlusPage::Done)])
         .find(|m| menu_slot(*m) == slot)
 }
 

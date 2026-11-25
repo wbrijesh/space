@@ -28,7 +28,7 @@ use space_core::{
 use space_ui::components::settings::FieldCheck;
 
 pub use space_ui::actions::{
-    CloseSettings, CloseThread, CyclePermissionMode, FocusComposer, NextThread, PreviousThread, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious, UndoRewind, CompleteCommand,
+    CloseSettings, MarkDone, CyclePermissionMode, FocusComposer, NextThread, PreviousThread, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious, UndoRewind, CompleteCommand,
     ScrollToBottom,
     ToggleSidebar,
     ToggleTrajectory, OpenInLastApp,
@@ -186,7 +186,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             // Maximize the right pane, from anywhere (the terminal would take the key otherwise).
             KeyBinding::new("cmd-shift-enter", MaximizePane, None),
             KeyBinding::new("cmd-shift-enter", MaximizePane, Some("Terminal")),
-            KeyBinding::new("cmd-w", CloseThread, None),
+            KeyBinding::new("cmd-w", MarkDone, None),
             KeyBinding::new("cmd-r", RenameThread, None),
             KeyBinding::new("cmd-alt-down", NextThread, None),
             KeyBinding::new("cmd-alt-up", PreviousThread, None),
@@ -257,7 +257,7 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
                 name: "File".into(),
                 items: vec![MenuItem::action("New Thread", NewThread),
                     MenuItem::action("Rename Thread…", RenameThread),
-                    MenuItem::action("Close Thread", CloseThread),
+                    MenuItem::action("Mark as Done", MarkDone),
                     MenuItem::separator(),
                     MenuItem::action("Pin or Unpin Thread", TogglePinThread),
                     MenuItem::action("Open Thread's Folder", OpenInLastApp),
@@ -461,8 +461,8 @@ pub struct SpaceApp {
     pub(crate) usage_open: Option<String>,
     /// Draft images are told apart by this (they're prepared in the background).
     pub(crate) next_image_id: u64,
-    /// Settings: the days closed threads are kept (made when the page is first shown).
-    pub(crate) keep_closed_input: Option<Entity<gpui::component::input::InputState>>,
+    /// Settings: the days done threads are kept (made when the page is first shown).
+    pub(crate) keep_done_input: Option<Entity<gpui::component::input::InputState>>,
     /// Find in thread (⌘F), made when first opened.
     pub(crate) find: Option<crate::find::Find>,
     /// The shown thread's replies' text views (see [`crate::find`]).
@@ -479,8 +479,8 @@ pub struct SpaceApp {
     pub(crate) cmd_digits: String,
     /// Another ⌘ shortcut was pressed while ⌘ is held: no numbers until it's pressed again.
     pub(crate) cmd_other: bool,
-    /// Closed threads kept to be resumed (their saved summaries).
-    pub(crate) closed_threads: Vec<space_core::protocol::service::ThreadMeta>,
+    /// Done threads kept to be reopened (their saved summaries).
+    pub(crate) done_threads: Vec<space_core::protocol::service::ThreadMeta>,
     pub(crate) settings: SettingsStore,
     /// The Settings page replaces the thread view.
     pub(crate) show_settings: bool,
@@ -747,14 +747,14 @@ impl SpaceApp {
             pane_max: space_ui::theme::motion::Spring::new(0.),
             pane_max_for: None,
             banner,
-            closed_threads: Vec::new(),
+            done_threads: Vec::new(),
             sidebar_scroll: ScrollHandle::new(),
             cmd_alone: false,
             cmd_numbers: false,
             cmd_press: 0,
             cmd_digits: String::new(),
             cmd_other: false,
-            keep_closed_input: None,
+            keep_done_input: None,
             find: None,
             replies: Default::default(),
             settings,

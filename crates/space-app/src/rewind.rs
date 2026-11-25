@@ -86,12 +86,25 @@ pub(crate) enum NoticeKind {
     Rewound,
     Edited,
     Problem,
+    /// A thread was marked done.
+    Done,
+}
+
+/// A thread just marked done, which ⌘Z (or the notice's Undo) reopens where it was.
+pub(crate) struct DoneUndo {
+    pub(crate) id: String,
+    /// Its place in the sidebar's list.
+    pub(crate) at: Option<usize>,
+    /// The thread shown after it went: ⌘Z reopens it only while that one is still shown.
+    pub(crate) after: Option<u64>,
 }
 
 #[derive(Default)]
 pub(crate) struct RewindUi {
     pub(crate) notice: Option<Notice>,
     next_notice: u64,
+    /// The thread last marked done, until something else can be undone or you move on.
+    pub(crate) done: Option<DoneUndo>,
     /// Rewind mode: the thread and the message picked.
     pub(crate) mode: Option<(u64, String)>,
     esc_at: Option<Instant>,
@@ -505,7 +518,16 @@ impl SpaceApp {
 
     /// ⌘Z: undo the selected thread's last rewind, if the composer holds nothing of yours since
     /// (else it's the text field's own undo). `true`: taken.
-    pub(crate) fn undo_key(&mut self, composer_focused: bool, cx: &mut Context<Self>) -> bool {
+    /// First a thread just marked done, while the thread shown after it still is (from the
+    /// composer only while it's empty).
+    pub(crate) fn undo_key(&mut self, composer_focused: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.rewind.done.as_ref().is_some_and(|d| d.after == self.selected) {
+            if composer_focused && !self.input.read(cx).value().trim().is_empty() {
+                return false;
+            }
+            self.undo_done(window, cx);
+            return true;
+        }
         let Some(key) = self.selected else { return false };
         let Some(thread) = self.thread(key) else { return false };
         let Some(entry) = thread.undo.last() else { return false };
@@ -523,11 +545,29 @@ impl SpaceApp {
         true
     }
 
-    /// You sent another message: the thread's rewinds can't be undone any more.
+    /// Reopen the thread just marked done, where it was.
+    pub(crate) fn undo_done(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(done) = self.rewind.done.take() else { return };
+        if self.rewind.notice.as_ref().is_some_and(|n| n.kind == NoticeKind::Done) {
+            self.rewind.notice = None;
+        }
+        self.reopen_at(&done.id, done.at, window, cx);
+    }
+
+    /// The notice for a thread just marked done (`stopped`: what of it was stopped), with Undo.
+    pub(crate) fn done_notice(&mut self, id: String, at: Option<usize>, title: String, stopped: Option<&str>, cx: &mut Context<Self>) {
+        let after = self.selected;
+        self.show_notice(after.unwrap_or(0), NoticeKind::Done, format!("Done: {title}"), stopped.map(Into::into), Vec::new(), cx);
+        self.rewind.done = Some(DoneUndo { id, at, after });
+    }
+
+    /// You sent another message: the thread's rewinds can't be undone any more, nor the thread
+    /// marked done before it.
     pub(crate) fn forget_undo(&mut self, key: u64) {
         if let Some(thread) = self.thread_mut(key) {
             thread.undo.clear();
         }
+        self.rewind.done = None;
         if self.rewind.notice.as_ref().is_some_and(|n| n.key == key && n.kind != NoticeKind::Problem) {
             self.rewind.notice = None;
         }
@@ -585,6 +625,8 @@ impl SpaceApp {
     fn show_notice(&mut self, key: u64, kind: NoticeKind, title: String, body: Option<String>, kept: Vec<(String, &'static str)>, cx: &mut Context<Self>) {
         self.rewind.next_notice += 1;
         let id = self.rewind.next_notice;
+        // Only the newest thing can be undone: a rewind after a thread was marked done wins.
+        self.rewind.done = None;
         let sticky = !kept.is_empty() || kind == NoticeKind::Problem;
         self.rewind.notice = Some(Notice { id, key, kind, title, body, kept });
         if !sticky {

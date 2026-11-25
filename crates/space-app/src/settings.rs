@@ -48,19 +48,20 @@ pub struct NewThreads {
     pub permission_mode: Option<String>,
 }
 
-/// Closed threads are kept this many days (to be resumed), then deleted.
-pub const DEFAULT_KEEP_CLOSED_DAYS: u32 = 30;
+/// Done threads are kept this many days (to be reopened), then deleted.
+pub const DEFAULT_KEEP_DONE_DAYS: u32 = 30;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Threads {
-    /// Days a closed thread is kept before it's deleted.
-    pub keep_closed_days: u32,
+    /// Days a done thread is kept before it's deleted.
+    #[serde(alias = "keepClosedDays")]
+    pub keep_done_days: u32,
 }
 
 impl Default for Threads {
     fn default() -> Self {
-        Self { keep_closed_days: DEFAULT_KEEP_CLOSED_DAYS }
+        Self { keep_done_days: DEFAULT_KEEP_DONE_DAYS }
     }
 }
 
@@ -272,37 +273,37 @@ impl SpaceApp {
     }
 
 
-    /// The Settings field for how many days closed threads are kept: saved on ⏎ or when it
+    /// The Settings field for how many days done threads are kept: saved on ⏎ or when it
     /// loses focus; anything but a whole number of days (1 or more) goes back to the setting.
-    pub(crate) fn keep_closed_input(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Entity<InputState> {
-        if let Some(input) = &self.keep_closed_input {
+    pub(crate) fn keep_done_input(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Entity<InputState> {
+        if let Some(input) = &self.keep_done_input {
             return input.clone();
         }
-        let days = self.settings.settings.threads.keep_closed_days.to_string();
+        let days = self.settings.settings.threads.keep_done_days.to_string();
         let input = cx.new(|cx| InputState::new(window, cx).default_value(days));
         let sub = cx.subscribe_in(&input, window, |this, input, e: &InputEvent, window, cx| {
             if matches!(e, InputEvent::PressEnter { .. } | InputEvent::Blur) {
                 let typed = input.read(cx).value().trim().parse::<u32>().ok().filter(|d| *d >= 1);
                 if let Some(days) = typed {
-                    this.set_keep_closed_days(days, cx);
+                    this.set_keep_done_days(days, cx);
                 }
-                let shown = this.settings.settings.threads.keep_closed_days.to_string();
+                let shown = this.settings.settings.threads.keep_done_days.to_string();
                 if input.read(cx).value().trim() != shown {
                     input.update(cx, |s, cx| s.set_value(shown, window, cx));
                 }
             }
         });
         self._subscriptions.push(sub);
-        self.keep_closed_input = Some(input.clone());
+        self.keep_done_input = Some(input.clone());
         input
     }
 
-    /// How many days closed threads are kept; the ones older than that are deleted now.
-    pub(crate) fn set_keep_closed_days(&mut self, days: u32, cx: &mut Context<Self>) {
+    /// How many days done threads are kept; the ones older than that are deleted now.
+    pub(crate) fn set_keep_done_days(&mut self, days: u32, cx: &mut Context<Self>) {
         let days = days.max(1);
-        if self.settings.settings.threads.keep_closed_days != days {
-            self.settings.update(|s| s.threads.keep_closed_days = days);
-            self.purge_closed_threads(cx);
+        if self.settings.settings.threads.keep_done_days != days {
+            self.settings.update(|s| s.threads.keep_done_days = days);
+            self.purge_done_threads(cx);
         }
         cx.notify();
     }
@@ -485,9 +486,12 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{ "newThreads": { "thinkingLevel": "high" } }"#).unwrap();
         assert_eq!(s.new_threads.thinking_level.as_deref(), Some("high"));
         assert_eq!(s.plugins, Plugins::default());
-        assert_eq!(s.threads.keep_closed_days, 30);
+        assert_eq!(s.threads.keep_done_days, 30);
+        let s: Settings = serde_json::from_str(r#"{ "threads": { "keepDoneDays": 7 } }"#).unwrap();
+        assert_eq!(s.threads.keep_done_days, 7);
+        // Saved before threads were marked done rather than closed.
         let s: Settings = serde_json::from_str(r#"{ "threads": { "keepClosedDays": 7 } }"#).unwrap();
-        assert_eq!(s.threads.keep_closed_days, 7);
+        assert_eq!(s.threads.keep_done_days, 7);
     }
 
     #[test]

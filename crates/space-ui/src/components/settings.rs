@@ -203,9 +203,9 @@ pub struct SettingsPage {
     plugin_settings: Vec<PluginSettingsView>,
     plugins: Vec<PluginRow>,
     handlers: SettingsHandlers,
-    /// The days closed threads are kept (saved on ⏎ or when it loses focus); `None`: threads
+    /// The days done threads are kept (saved on ⏎ or when it loses focus); `None`: threads
     /// aren't saved, so no row.
-    keep_closed: Option<Entity<InputState>>,
+    keep_done: Option<Entity<InputState>>,
     /// What a two-finger swipe shows and hides (an index of [`SWIPE_CHOICES`]).
     swipe: usize,
     /// About: "0.1.6", or a local build's "0.1.6 +2 · a95ab81 · edited".
@@ -276,7 +276,7 @@ impl SettingsPage {
             plugin_settings: Vec::new(),
             plugins: Vec::new(),
             handlers: SettingsHandlers::default(),
-            keep_closed: None,
+            keep_done: None,
             swipe: 0,
             version: SharedString::default(),
             built: None,
@@ -301,8 +301,8 @@ impl SettingsPage {
         self
     }
 
-    pub fn keep_closed(mut self, input: Option<Entity<InputState>>) -> Self {
-        self.keep_closed = input;
+    pub fn keep_done(mut self, input: Option<Entity<InputState>>) -> Self {
+        self.keep_done = input;
         self
     }
 
@@ -355,7 +355,7 @@ fn model_name(m: &ModelInfo) -> String {
 
 impl RenderOnce for SettingsPage {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        let Self { catalog, model, thinking, permission, modes, mode, plugin_settings, plugins, handlers: h, keep_closed, swipe, version, built, tab } = self;
+        let Self { catalog, model, thinking, permission, modes, mode, plugin_settings, plugins, handlers: h, keep_done, swipe, version, built, tab } = self;
 
         // Model: "Agent default" + the agent's models.
         let (model_row, thinking_row) = match &catalog {
@@ -418,7 +418,7 @@ impl RenderOnce for SettingsPage {
                 }
                 (Some("Applies to threads you start from now on."), rows)
             }
-            SettingsTab::Threads => (None, keep_closed.iter().map(|input| keep_closed_row(input).into_any_element()).collect()),
+            SettingsTab::Threads => (None, keep_done.iter().map(|input| keep_done_row(input).into_any_element()).collect()),
             SettingsTab::Trackpad => (None, vec![swipe_row(swipe, h.on_swipe.clone(), window).into_any_element()]),
             SettingsTab::Plugin(name) => (
                 None,
@@ -658,8 +658,8 @@ pub fn permission_row(permission: NotificationPermission, h: &SettingsHandlers) 
     row("macOS permission", desc, control)
 }
 
-/// How many days closed threads are kept: a short number field and "days".
-pub fn keep_closed_row(input: &Entity<InputState>) -> Div {
+/// How many days done threads are kept: a short number field and "days".
+pub fn keep_done_row(input: &Entity<InputState>) -> Div {
     let control = div()
         .flex()
         .items_center()
@@ -667,7 +667,7 @@ pub fn keep_closed_row(input: &Entity<InputState>) -> Div {
         .child(div().w(px(64.)).child(Input::new(input).small()))
         .child(div().text_size(text::MD).text_color(color::text_2()).child("days"));
     row(
-        "Keep closed threads",
+        "Keep done threads",
         "Then deleted",
         Some(control.into_any_element()),
     )

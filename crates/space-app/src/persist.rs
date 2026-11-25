@@ -67,7 +67,7 @@ impl SpaceApp {
             updated_ms: now_ms(),
             titled: thread.name.is_some(),
             renamed: thread.renamed,
-            closed_ms: None,
+            done_ms: None,
             pinned_ms: thread.pinned_ms,
             side_of: thread.side_of.and_then(|main| self.thread(main)).map(|t| t.id.clone()),
         }
@@ -97,7 +97,7 @@ impl SpaceApp {
         cx.spawn(async move |this, cx| {
             let result = host.save_thread(&id, Some(meta.clone()), first, &events).await;
             let _ = this.update(cx, |this, cx| {
-                // Closed while this save was in flight (the close wrote it).
+                // Marked done while this save was in flight (marking it wrote it).
                 let Some(thread) = this.thread_mut(key) else { return };
                 thread.saving = false;
                 let sent = std::mem::take(&mut thread.inflight);
@@ -168,9 +168,9 @@ impl SpaceApp {
                         this.saved_sides.entry(main).or_default().push(m);
                     }
                 }
-                let (closed, open): (Vec<_>, Vec<_>) = saved.into_iter().partition(|m| m.closed_ms.is_some());
-                this.closed_threads = closed;
-                this.purge_closed_threads(cx);
+                let (done, open): (Vec<_>, Vec<_>) = saved.into_iter().partition(|m| m.done_ms.is_some());
+                this.done_threads = done;
+                this.purge_done_threads(cx);
                 // Oldest first, like `threads`; before the ones opened at launch.
                 for (ix, meta) in open.into_iter().rev().enumerate() {
                     let thread = this.saved_thread(meta);
@@ -236,46 +236,54 @@ impl SpaceApp {
         .detach();
     }
 
-    /// ⌘W or the row's menu: close a thread, after asking (a thread with nothing in it just
-    /// goes).
-    pub(crate) fn confirm_close_thread(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
+    /// ⌘W, the row's archive button or its menu: mark a thread done. It leaves the sidebar at
+    /// once, and the notice offers Undo. Only when threads aren't saved (it couldn't be reopened)
+    /// does it ask first. A thread with nothing in it just goes.
+    pub(crate) fn mark_done(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(thread) = self.thread(key) else { return };
         if thread.is_empty() {
-            // ⌘W on a new thread: nothing to close (the empty thread would only come back).
+            // ⌘W on a new thread: nothing to keep (the empty thread would only come back).
             if self.threads.iter().any(|t| t.key != key) {
-                self.close_thread(key, window, cx);
+                self.finish_thread(key, window, cx);
             }
             return;
         }
         let title = thread.title();
-        let mut detail = if self.saving_threads() {
-            let days = self.settings.settings.threads.keep_closed_days;
-            format!("Resumable for {days} {}", if days == 1 { "day" } else { "days" })
-        } else {
-            "Can't be resumed".to_string()
+        let running = thread.state.running;
+        if !self.saving_threads() {
+            let detail = if running { "Its turn stops · Can't be reopened" } else { "Can't be reopened" };
+            let answer = window.prompt(PromptLevel::Warning, &format!("Mark \u{201c}{title}\u{201d} as done?"), Some(detail), &["Mark as Done", "Cancel"], cx);
+            cx.spawn_in(window, async move |this, cx| {
+                if answer.await == Ok(0) {
+                    let _ = this.update_in(cx, |this, window, cx| this.finish_thread(key, window, cx));
+                }
+            })
+            .detach();
+            return;
+        }
+        let id = thread.id.clone();
+        let at = self.threads.iter().position(|t| t.key == key);
+        let terminals = self.has_terminals(key);
+        self.finish_thread(key, window, cx);
+        let stopped = match (running, terminals) {
+            (true, true) => Some("Its turn and terminals were stopped."),
+            (true, false) => Some("Its turn was stopped."),
+            (false, true) => Some("Its terminals were closed."),
+            (false, false) => None,
         };
-        if thread.state.running {
-            detail = format!("Its turn stops · {detail}");
-        }
-        let answer = window.prompt(PromptLevel::Warning, &format!("Close \u{201c}{title}\u{201d}?"), Some(&detail), &["Close Thread", "Cancel"], cx);
-        cx.spawn_in(window, async move |this, cx| {
-            if answer.await == Ok(0) {
-                let _ = this.update_in(cx, |this, window, cx| this.close_thread(key, window, cx));
-            }
-        })
-        .detach();
+        self.done_notice(id, at, title, stopped, cx);
     }
 
-    /// ⌘W: close the selected thread.
-    pub(crate) fn close_current_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// ⌘W: mark the selected thread done.
+    pub(crate) fn mark_current_done(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(key) = self.selected.filter(|_| !self.show_settings) {
-            self.confirm_close_thread(key, window, cx);
+            self.mark_done(key, window, cx);
         }
     }
 
-    /// Close a thread: stop its turn and terminals and take it off the sidebar. A saved thread
-    /// is kept, marked closed, to be resumed (until it's older than the setting says).
-    pub(crate) fn close_thread(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
+    /// Done with a thread: stop its turn and terminals and take it off the sidebar. A saved
+    /// thread is kept, marked done, to be reopened (until it's older than the setting says).
+    pub(crate) fn finish_thread(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
         let keep = self.saving_threads() && self.thread(key).is_some_and(|t| !t.is_empty());
         let Some(thread) = self.drop_thread(key, cx) else { return };
         if keep {
@@ -287,16 +295,16 @@ impl SpaceApp {
             };
             if let Some(mut meta) = meta {
                 let now = now_ms();
-                meta.closed_ms = Some(now);
+                meta.done_ms = Some(now);
                 // Newer than a save still in flight, so that one doesn't reopen it.
                 meta.updated_ms = meta.updated_ms.max(now);
-                self.closed_threads.push(meta.clone());
-                self.purge_closed_threads(cx);
+                self.done_threads.push(meta.clone());
+                self.purge_done_threads(cx);
                 let (host, first) = (self.host.clone(), thread.saved);
                 cx.spawn(async move |this, cx| {
                     if let Err(e) = host.save_thread(&meta.id, Some(meta.clone()), first, &events).await {
                         let _ = this.update(cx, |this, cx| {
-                            this.banner = Some(format!("Couldn't save that the thread was closed: {e:#}"));
+                            this.banner = Some(format!("Couldn't save that the thread is done: {e:#}"));
                             cx.notify();
                         });
                     }
@@ -336,22 +344,29 @@ impl SpaceApp {
         Some(thread)
     }
 
-    /// The closed threads of `dir` that can be resumed, last closed first.
-    pub(crate) fn closed_threads_in(&self, dir: &std::path::Path) -> Vec<&ThreadMeta> {
+    /// The done threads of `dir` that can be reopened, last done first.
+    pub(crate) fn done_threads_in(&self, dir: &std::path::Path) -> Vec<&ThreadMeta> {
         let dir = dir.display().to_string();
-        let cutoff = self.closed_cutoff();
-        let mut closed: Vec<_> = self.closed_threads.iter().filter(|m| m.project == dir && !expired(m, cutoff)).collect();
-        closed.sort_by_key(|m| std::cmp::Reverse(m.closed_ms));
-        closed
+        let cutoff = self.done_cutoff();
+        let mut done: Vec<_> = self.done_threads.iter().filter(|m| m.project == dir && !expired(m, cutoff)).collect();
+        done.sort_by_key(|m| std::cmp::Reverse(m.done_ms));
+        done
     }
 
-    /// Reopen a closed thread, in place of the new thread it was resumed from (unless that one
+    /// Reopen a done thread, in place of the new thread it was reopened from (unless that one
     /// has terminals open).
-    pub(crate) fn resume_thread(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(ix) = self.closed_threads.iter().position(|m| m.id == id) else { return };
-        let mut meta = self.closed_threads.remove(ix);
-        meta.closed_ms = None;
-        meta.updated_ms = now_ms();
+    pub(crate) fn reopen_thread(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.reopen_at(id, None, window, cx);
+    }
+
+    /// Reopen a done thread at `at` in the sidebar's list (`None`: where the new thread it's
+    /// reopened from was, else last), and show it.
+    pub(crate) fn reopen_at(&mut self, id: &str, at: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ix) = self.done_threads.iter().position(|m| m.id == id) else { return };
+        let mut meta = self.done_threads.remove(ix);
+        meta.done_ms = None;
+        // Newer than the save that marked it done, even one still in flight.
+        meta.updated_ms = now_ms().max(meta.updated_ms + 1);
         let host = self.host.clone();
         let saved = meta.clone();
         cx.spawn(async move |this, cx| {
@@ -364,7 +379,10 @@ impl SpaceApp {
         })
         .detach();
         let replace = self.selected.filter(|k| self.thread(*k).is_some_and(Thread::is_empty) && !self.has_terminals(*k));
-        let at = replace.and_then(|k| self.threads.iter().position(|t| t.key == k)).unwrap_or(self.threads.len());
+        let at = at
+            .or_else(|| replace.and_then(|k| self.threads.iter().position(|t| t.key == k)))
+            .unwrap_or(self.threads.len())
+            .min(self.threads.len());
         let thread = self.saved_thread(meta);
         let key = thread.key;
         self.threads.insert(at, thread);
@@ -391,28 +409,28 @@ impl SpaceApp {
         thread
     }
 
-    /// Delete the closed threads kept longer than the setting says.
-    pub(crate) fn purge_closed_threads(&mut self, cx: &mut Context<Self>) {
-        let cutoff = self.closed_cutoff();
-        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.closed_threads).into_iter().partition(|m| expired(m, cutoff));
-        self.closed_threads = kept;
+    /// Delete the done threads kept longer than the setting says.
+    pub(crate) fn purge_done_threads(&mut self, cx: &mut Context<Self>) {
+        let cutoff = self.done_cutoff();
+        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.done_threads).into_iter().partition(|m| expired(m, cutoff));
+        self.done_threads = kept;
         for meta in gone {
             self.remove_saved(meta.id, cx);
         }
     }
 
-    /// Threads closed before this (Unix ms) are past keeping.
-    fn closed_cutoff(&self) -> u64 {
-        let days = u64::from(self.settings.settings.threads.keep_closed_days.max(1));
+    /// Threads marked done before this (Unix ms) are past keeping.
+    fn done_cutoff(&self) -> u64 {
+        let days = u64::from(self.settings.settings.threads.keep_done_days.max(1));
         now_ms().saturating_sub(days * DAY_MS)
     }
 }
 
 const DAY_MS: u64 = 24 * 3600 * 1000;
 
-/// A closed thread kept past `cutoff`.
+/// A done thread kept past `cutoff`.
 fn expired(meta: &ThreadMeta, cutoff: u64) -> bool {
-    meta.closed_ms.is_some_and(|closed| closed < cutoff)
+    meta.done_ms.is_some_and(|done| done < cutoff)
 }
 
 impl SpaceApp {
@@ -442,6 +460,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn threads_closed_before_done_existed_read_as_done() {
+        let old = serde_json::from_value::<ThreadMeta>(serde_json::json!({"id": "a", "title": "t", "project": "/p", "createdMs": 1, "updatedMs": 2, "closedMs": 3})).unwrap();
+        assert_eq!(old.done_ms, Some(3));
+        assert_eq!(serde_json::to_value(&old).unwrap()["doneMs"], 3);
+    }
+
+    #[test]
     fn a_rename_is_saved_as_yours() {
         let meta = ThreadMeta { title: "Mine".into(), titled: true, renamed: true, ..Default::default() };
         let json = serde_json::to_value(&meta).unwrap();
@@ -462,8 +487,8 @@ mod tests {
     }
 
     #[test]
-    fn closed_threads_expire_after_the_cutoff() {
-        let closed = |at: Option<u64>| ThreadMeta { closed_ms: at, ..Default::default() };
+    fn done_threads_expire_after_the_cutoff() {
+        let closed = |at: Option<u64>| ThreadMeta { done_ms: at, ..Default::default() };
         let cutoff = 100 * DAY_MS;
         assert!(expired(&closed(Some(cutoff - 1)), cutoff));
         assert!(!expired(&closed(Some(cutoff)), cutoff));

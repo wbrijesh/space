@@ -124,8 +124,8 @@ pub struct ComposerHandlers {
     pub on_send_after_step: Handler,
     /// A queued message's row: edit, remove, or send what's queued now.
     pub on_queued: QueuedHandler,
-    /// A closed thread was picked to resume (its id).
-    pub on_resume: StringHandler,
+    /// A done thread was picked to reopen (its id).
+    pub on_reopen: StringHandler,
     /// A branch was picked on the folder menu's branch page (switch to it).
     pub on_branch: StringHandler,
     /// "Create branch" on the branch page (the typed name).
@@ -182,7 +182,7 @@ impl Default for ComposerHandlers {
             on_recall: Rc::new(|_, _, _| false),
             on_send_after_step: Rc::new(|_, _| {}),
             on_queued: Rc::new(|_, _, _, _| {}),
-            on_resume: Rc::new(|_, _, _| {}),
+            on_reopen: Rc::new(|_, _, _| {}),
             on_branch: Rc::new(|_, _, _| {}),
             on_new_branch: Rc::new(|_, _, _| {}),
             on_command: Rc::new(|_, _, _| {}),
@@ -215,18 +215,18 @@ pub struct ComposerControls {
     pub context_open: bool,
     /// The control-row menu that's open.
     pub menu: Option<ComposerMenu>,
-    /// Closed threads in this folder that can be resumed, last closed first. Offered under "+"
+    /// Done threads in this folder that can be reopened, last done first. Offered under "+"
     /// on a new thread (empty: "+" attaches straight away).
-    pub resumable: Vec<ClosedThread>,
+    pub reopenable: Vec<DoneThread>,
 }
 
-/// A closed thread in the Resume menu.
+/// A done thread in the "+" menu's Done threads page.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ClosedThread {
+pub struct DoneThread {
     pub id: String,
     pub title: SharedString,
-    /// When it was closed: "2 days ago".
-    pub closed: SharedString,
+    /// When it was marked done: "2 days ago".
+    pub done: SharedString,
 }
 
 /// The control row's menus.
@@ -234,7 +234,7 @@ pub struct ClosedThread {
 pub enum ComposerMenu {
     Folder(FolderPage),
     Mode,
-    /// "+": attach files, or resume a closed thread.
+    /// "+": attach files, or reopen a done thread.
     Plus(PlusPage),
     /// The model picker, at this pane.
     Model(PickerPane),
@@ -246,7 +246,7 @@ impl ComposerMenu {
         match self {
             ComposerMenu::Model(p) => p.back().map(ComposerMenu::Model),
             ComposerMenu::Folder(FolderPage::Branches) => Some(ComposerMenu::Folder(FolderPage::Root)),
-            ComposerMenu::Plus(PlusPage::Resume) => Some(ComposerMenu::Plus(PlusPage::Root)),
+            ComposerMenu::Plus(PlusPage::Done) => Some(ComposerMenu::Plus(PlusPage::Root)),
             _ => None,
         }
     }
@@ -254,11 +254,11 @@ impl ComposerMenu {
 
 pub type MenuHandler = Rc<dyn Fn(Option<ComposerMenu>, &mut Window, &mut App)>;
 
-/// The "+" menu's pages: its choices, or the closed threads to resume.
+/// The "+" menu's pages: its choices, or the done threads to reopen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlusPage {
     Root,
-    Resume,
+    Done,
 }
 
 /// The folder menu's pages: the folders (with the branch row), or the folder's branches.
@@ -535,13 +535,13 @@ impl RenderOnce for Composer {
         };
 
         let (attach_fn, focus_fn) = (h.on_attach.clone(), h.on_focus.clone());
-        // With closed threads to resume (a new thread), "+" opens a menu: attach, or resume.
-        let plus_menu = controls.as_ref().filter(|c| c.thread_empty && !c.resumable.is_empty()).map(|c| {
+        // With done threads to reopen (a new thread), "+" opens a menu: attach, or reopen one.
+        let plus_menu = controls.as_ref().filter(|c| c.thread_empty && !c.reopenable.is_empty()).map(|c| {
             let page = match c.menu {
                 Some(ComposerMenu::Plus(page)) => Some(page),
                 _ => None,
             };
-            (page, c.resumable.clone())
+            (page, c.reopenable.clone())
         });
         let attach = if can_attach {
             let button = icon_button("attach", IconName::Plus, true, false).size(px(BUTTON)).rounded(radius::MD);
@@ -553,7 +553,7 @@ impl RenderOnce for Composer {
                         attach_fn(w, cx);
                     })
                     .into_any_element(),
-                Some((page, resumable)) => {
+                Some((page, reopenable)) => {
                     let on_menu = h.on_menu.clone();
                     div()
                         .relative()
@@ -568,7 +568,7 @@ impl RenderOnce for Composer {
                             };
                             let menu = match page {
                                 PlusPage::Root => plus_menu_root(&h, close.clone()),
-                                PlusPage::Resume => resume_page(&resumable, &h, close.clone()),
+                                PlusPage::Done => done_page(&reopenable, &h, close.clone()),
                             };
                             d.child(popover(false, menu, move |w, cx| close(w, cx)))
                         })
@@ -1026,7 +1026,7 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
         .child(right)
 }
 
-/// "+"'s menu: attach files, or go to the closed threads to resume.
+/// "+"'s menu: attach files, or go to the done threads to reopen.
 pub fn plus_menu_root(h: &ComposerHandlers, close: Handler) -> Div {
     let (attach, on_menu) = (h.on_attach.clone(), h.on_menu.clone());
     surface()
@@ -1041,36 +1041,36 @@ pub fn plus_menu_root(h: &ComposerHandlers, close: Handler) -> Div {
                 }),
         )
         .child(
-            row("plus-resume")
-                .child(Icon::new(Lucide::RotateCcw).size(size::ICON).text_color(color::text_2()))
-                .child(div().flex_1().child("Resume a session"))
+            row("plus-done")
+                .child(Icon::new(Lucide::Archive).size(size::ICON).text_color(color::text_2()))
+                .child(div().flex_1().child("Done threads"))
                 .child(Icon::new(IconName::ChevronRight).size(size::ICON).text_color(color::text_3()))
-                .on_click(move |_, w, cx| on_menu(Some(ComposerMenu::Plus(PlusPage::Resume)), w, cx)),
+                .on_click(move |_, w, cx| on_menu(Some(ComposerMenu::Plus(PlusPage::Done)), w, cx)),
         )
 }
 
-/// "+"'s Resume page: back, then this folder's closed threads, last closed first, with when
-/// each was closed.
-pub fn resume_page(threads: &[ClosedThread], h: &ComposerHandlers, close: Handler) -> Div {
+/// "+"'s Done threads page: back, then this folder's done threads, last done first, with when
+/// each was marked done.
+pub fn done_page(threads: &[DoneThread], h: &ComposerHandlers, close: Handler) -> Div {
     let on_menu = h.on_menu.clone();
     surface()
         .w(px(320.))
         .child(
-            row("resume-back")
+            row("done-back")
                 .h(px(28.))
                 .gap_1()
                 .px_1p5()
                 .text_size(text::SM)
                 .text_color(color::text_3())
                 .child(Icon::new(IconName::ChevronLeft).size(size::ICON))
-                .child("Resume a session")
+                .child("Done threads")
                 .on_click(move |_, w, cx| on_menu(Some(ComposerMenu::Plus(PlusPage::Root)), w, cx)),
         )
-        .child(div().id("resume-list").flex().flex_col().max_h(px(320.)).overflow_y_scroll().children(threads.iter().enumerate().map(|(ix, t)| {
-            let (id, f, close) = (t.id.clone(), h.on_resume.clone(), close.clone());
-            row(("resume", ix))
+        .child(div().id("done-list").flex().flex_col().max_h(px(320.)).overflow_y_scroll().children(threads.iter().enumerate().map(|(ix, t)| {
+            let (id, f, close) = (t.id.clone(), h.on_reopen.clone(), close.clone());
+            row(("done", ix))
                 .child(div().flex_1().min_w_0().truncate().child(t.title.clone()))
-                .child(div().flex_none().text_size(text::SM).text_color(color::text_3()).child(t.closed.clone()))
+                .child(div().flex_none().text_size(text::SM).text_color(color::text_3()).child(t.done.clone()))
                 .on_click(move |_, w, cx| {
                     close(w, cx);
                     f(id.clone(), w, cx)
@@ -1355,7 +1355,7 @@ pub mod fixtures {
             stats: None,
             context_open: false,
             menu: None,
-            resumable: Vec::new(),
+            reopenable: Vec::new(),
             branch: Some(branch()),
         }
     }
@@ -1547,14 +1547,14 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 branch_page(&c.cwd, &b, &ComposerHandlers::default())
             }),
             menu("slash commands", || command_menu(&CommandMenu { items: fixtures::commands(), selected: 0 }, Rc::new(|_, _, _| {}))),
-            menu("resume", || {
-                let t = |id: &str, title: &str, closed: &str| ClosedThread { id: id.into(), title: title.to_string().into(), closed: closed.to_string().into() };
+            menu("done threads", || {
+                let t = |id: &str, title: &str, done: &str| DoneThread { id: id.into(), title: title.to_string().into(), done: done.to_string().into() };
                 let threads = [
                     t("a", "Fix the failing smoke test in space-core", "2 hours ago"),
                     t("b", "Terminal plugin with alacritty", "yesterday"),
                     t("c", "Greeting exchange", "3 weeks ago"),
                 ];
-                resume_page(&threads, &ComposerHandlers::default(), Rc::new(|_, _| {}))
+                done_page(&threads, &ComposerHandlers::default(), Rc::new(|_, _| {}))
             }),
             menu("plus", || plus_menu_root(&ComposerHandlers::default(), Rc::new(|_, _| {}))),
         ]),

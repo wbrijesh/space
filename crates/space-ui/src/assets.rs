@@ -7,7 +7,7 @@ use gpui::{AssetSource, Result, SharedString};
 
 icon_assets!(
     ExtraIcons,
-    [GitBranch, CircleStop, Brain, Wrench, Pencil, ListChecks, Terminal, SquarePen, Shield, ShieldCheck, ShieldHalf, ShieldAlert, KeyRound, CirclePause, Database, Copy, Check, Clock, SquarePlus, SquareMinus, Search, Gauge, SquareTerminal, Maximize2, Minimize2, X, Plus, RotateCw, Play, TextQuote, File, FileCode, FileBraces, FileImage, FileLock, FileTerminal, FileCog, FileArchive, Folder, FolderOpen, TextWrap, ListTree, ExternalLink, MessagesSquare, GitCommitHorizontal, GitPullRequest, GitPullRequestArrow, GitCompare, ArrowUp, ArrowDown, ArrowUpRight, Trash, LayoutGrid, TextSearch, Paperclip, RotateCcw, Zap, Blocks, Settings]
+    [GitBranch, CircleStop, Brain, Wrench, Pencil, ListChecks, Terminal, SquarePen, Shield, ShieldCheck, ShieldHalf, ShieldAlert, KeyRound, CirclePause, Database, Copy, Check, Clock, SquarePlus, SquareMinus, Search, Gauge, SquareTerminal, Maximize2, Minimize2, X, Plus, RotateCw, Play, TextQuote, File, FileCode, FileBraces, FileImage, FileLock, FileTerminal, FileCog, FileArchive, Folder, FolderOpen, TextWrap, ListTree, ExternalLink, MessagesSquare, GitCommitHorizontal, GitPullRequest, GitPullRequestArrow, GitCompare, ArrowUp, ArrowDown, ArrowUpRight, Trash, LayoutGrid, TextSearch, Paperclip, RotateCcw, Archive, Zap, Blocks, Settings]
 );
 
 pub struct SpaceAssets;

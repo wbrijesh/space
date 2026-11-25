@@ -134,14 +134,14 @@ async fn a_saved_thread_comes_back_after_a_restart_and_continues() {
     // resuming clears the mark; the pin stays through both.
     let mut closed = host.load_thread("t1").await.unwrap().0;
     let stale = closed.clone();
-    closed.closed_ms = Some(closed.updated_ms + 10);
+    closed.done_ms = Some(closed.updated_ms + 10);
     closed.updated_ms += 10;
     host.save_thread("t1", Some(closed.clone()), count, &[]).await.unwrap();
     host.save_thread("t1", Some(stale), count, &[]).await.unwrap();
-    assert_eq!(host.list_threads().await.unwrap()[0].closed_ms, closed.closed_ms);
-    let reopened = ThreadMeta { closed_ms: None, updated_ms: closed.updated_ms + 10, ..closed };
+    assert_eq!(host.list_threads().await.unwrap()[0].done_ms, closed.done_ms);
+    let reopened = ThreadMeta { done_ms: None, updated_ms: closed.updated_ms + 10, ..closed };
     host.save_thread("t1", Some(reopened), count, &[]).await.unwrap();
-    assert_eq!(host.list_threads().await.unwrap()[0].closed_ms, None);
+    assert_eq!(host.list_threads().await.unwrap()[0].done_ms, None);
     assert_eq!(host.list_threads().await.unwrap()[0].pinned_ms, pinned.pinned_ms);
 
     // Deleting removes the folder, attachments and all.

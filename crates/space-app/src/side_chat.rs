@@ -2,7 +2,7 @@
 //! kept with the saved threads but off the sidebar, whose session is a side chat of the
 //! thread's (`space/sideOf`): a copy of the conversation that can only read, told before each
 //! message what the thread added since. A thread can have any number; each is named after its
-//! first message, like a thread, and kept (and resumable after a restart) until it's deleted
+//! first message, like a thread, and kept (and reopenable after a restart) until it's deleted
 //! from the launcher, or its thread is. Closing its tab only closes the tab.
 //!
 //! `/btw` and a space in the composer open a new one with its input focused at once, and whatever
@@ -263,7 +263,7 @@ impl SpaceApp {
         cx.notify();
     }
 
-    /// Thread `main` is going (closed): its side chats stop, and are kept to open again with it.
+    /// Thread `main` is going (done): its side chats stop, and are kept to open again with it.
     pub(crate) fn put_away_side_chats(&mut self, main: u64, main_id: &str, cx: &mut Context<Self>) {
         if self.deleted_side.as_ref().is_some_and(|d| d.side.thread.side_of == Some(main)) {
             self.finish_deleting_side_chat(cx);

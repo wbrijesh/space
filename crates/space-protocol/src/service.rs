@@ -574,12 +574,13 @@ pub struct ThreadMeta {
     /// You renamed it: `title` is yours, and a generated title doesn't replace it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub renamed: bool,
-    /// When the thread was closed (Unix milliseconds): it's kept, off the sidebar, to be resumed
+    /// When the thread was marked done (Unix milliseconds): it's kept, off the sidebar, to be reopened
     /// until Space deletes it. `None`: open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub closed_ms: Option<u64>,
+    #[serde(alias = "closedMs")]
+    pub done_ms: Option<u64>,
     /// When you pinned the thread (Unix milliseconds): it's listed at the top of the sidebar.
-    /// Kept while it's closed. `None`: not pinned.
+    /// Kept while it's done. `None`: not pinned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_ms: Option<u64>,
     /// A side chat: the id of the thread it's beside. It isn't listed on its own; it opens in
