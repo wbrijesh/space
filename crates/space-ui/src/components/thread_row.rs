@@ -170,29 +170,32 @@ impl RenderOnce for ThreadRow {
             })
         });
         let hover_bg = color::surface();
-        let group: SharedString = format!("thread-row-{menu_key}").into();
+        // Whether the pointer is on the row, kept by `on_hover` below, so the archive button is
+        // chosen here, not shown by a hover style (a hover `display` can panic GPUI; see
+        // `hover_styles_never_change_display`).
+        let hovered = window.use_keyed_state(SharedString::from(format!("thread-row-hover-{menu_key}")), cx, |_, _| false);
+        let show_done = self.force_hover || *hovered.read(cx);
         // On hover the archive button takes the indicator's place (not while ⌘ shows numbers).
-        let done = self.on_done.clone().filter(|_| self.shortcut.is_none()).map(|f| {
+        let done = self.on_done.clone().filter(|_| show_done && self.shortcut.is_none()).map(|f| {
             icon_button(SharedString::from(format!("{menu_key}-done")), gpui::assets::IconName::Archive, true, false)
                 .size(px(20.))
-                .when(!self.force_hover, |d| d.hidden().group_hover(group.clone(), |s| s.flex()))
                 .tip_action("Mark as Done", &MarkDone)
                 .on_click(move |e, w, cx| {
                     cx.stop_propagation();
                     f(e, w, cx)
                 })
         });
-        let indicator = indicator.map(|i| {
-            div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .child(i)
-                .when(done.is_some(), |d| if self.force_hover { d.hidden() } else { d.group_hover(group.clone(), |s| s.hidden()) })
-        });
+        let indicator = indicator.filter(|_| done.is_none()).map(|i| div().flex_none().flex().items_center().child(i));
         let row = div()
             .id(self.id)
-            .group(group.clone())
+            .on_hover(move |on, _, cx| {
+                hovered.update(cx, |h, cx| {
+                    if *h != *on {
+                        *h = *on;
+                        cx.notify();
+                    }
+                })
+            })
             .flex()
             .items_center()
             .gap_2()

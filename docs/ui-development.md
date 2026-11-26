@@ -168,6 +168,12 @@ draws no frames, so its focus and pixels go stale; `shot` resizes it by a pixel 
 
 What cost time to learn here:
 
+* **Hover styles never change `display`.** GPUI decides hover twice a frame: prepaint goes by the
+  last mouse move, paint by this frame's hit test. When content moves under a still pointer they
+  differ, and an element hidden at prepaint but shown at paint has its children painted
+  unprepainted: a panic ("must call prepaint before paint"). Hide on hover with
+  `invisible()`/`visible()`, or keep `on_hover` in keyed state and choose in render
+  (`thread_row.rs`). A unit test checks for it.
 * **Mouse handlers run in paint order.** The capture phase goes from what's painted first (back) to
   last (front); the bubble phase the other way. gpui-base's `TextSelectionLayer` is painted first
   (by `Root`), so its capture handler sees every press before the app's: a left press clears the
