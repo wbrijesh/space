@@ -390,7 +390,7 @@ impl SpaceApp {
 
     /// Delete the done threads kept longer than the setting says.
     pub(crate) fn purge_done_threads(&mut self, cx: &mut Context<Self>) {
-        let cutoff = self.done_cutoff();
+        let Some(cutoff) = self.done_cutoff() else { return };
         let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.done_threads).into_iter().partition(|m| expired(m, cutoff));
         self.done_threads = kept;
         for meta in gone {
@@ -398,10 +398,10 @@ impl SpaceApp {
         }
     }
 
-    /// Threads marked done before this (Unix ms) are past keeping.
-    pub(crate) fn done_cutoff(&self) -> u64 {
-        let days = u64::from(self.settings.settings.threads.keep_done_days.max(1));
-        now_ms().saturating_sub(days * DAY_MS)
+    /// Threads marked done before this (Unix ms) are past keeping; `None`: they're kept.
+    pub(crate) fn done_cutoff(&self) -> Option<u64> {
+        let days = u64::from(self.settings.settings.threads.keep_done()?);
+        Some(now_ms().saturating_sub(days * DAY_MS))
     }
 }
 

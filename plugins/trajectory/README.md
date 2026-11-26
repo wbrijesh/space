@@ -21,8 +21,9 @@ Trajectory tab. Bundled and on by default; Settings ▸ Plugins turns it off.
   every word of `query` in any part of their content), `trajectory/detail` (a row's id or
   `request:<n>`), `trajectory/stats`. It sends `trajectory/changed` at most every 200 ms per
   thread while batches arrive.
-- **Settings**: "Keep traces for (days)" (empty: forever; swept at start and daily) and "Record
-  streamed chunk timing" (on; off drops chunk times before they're kept).
+- **Settings** (Settings ▸ Developer): "Delete traces after" (7, 30 or 90 days, or never, the default;
+  swept at start and daily) and "Record streamed chunk timing" (on; off drops chunk times before
+  they're kept).
 - `thread/deleted` removes the thread's folder.
 
 Tests: `cargo test -p space-trajectory`.

@@ -39,6 +39,12 @@ pub struct Scenario {
     pub store: bool,
     /// Threads already in the store when it starts (with `store`; replacing what it kept).
     pub saved: Vec<SavedThread>,
+    /// More plugins to run from the repo's `plugins/` (`alerts`, `titles`, …).
+    pub plugins: &'static [&'static str],
+    /// Plugins of the scenario's own, as (folder, manifest): `bundled` ones run; `home` ones
+    /// are from your home folder, so they wait for your approval.
+    pub bundled: &'static [(&'static str, &'static str)],
+    pub home: &'static [(&'static str, &'static str)],
 }
 
 /// A thread saved before the scenario starts: made `created` days ago, marked done `done` days
@@ -402,10 +408,10 @@ pub fn all() -> Vec<Scenario> {
         Scenario {
             name: "done-threads",
             description: "Saved threads, two pinned, and done ones under the sidebar's Done header, from today \
-                          back to last year (kept 800 days). Click a done thread to reopen it. Threads are saved \
+                          back to last year (never deleted). Click a done thread to reopen it. Threads are saved \
                           in a temp folder, set back to this at each launch.",
             store: true,
-            settings: Some(r#"{ "threads": { "keepDoneDays": 800 } }"#),
+            settings: Some(r#"{ "threads": { "keepDoneDays": null } }"#),
             saved: vec![
                 SavedThread { pinned: true, ..saved("Release checklist", 20., None) },
                 SavedThread { pinned: true, ..saved("Guardrail notes", 3., None) },
@@ -424,16 +430,51 @@ pub fn all() -> Vec<Scenario> {
         },
         Scenario {
             name: "settings",
-            description: "The Settings page (⌘,) with the stub's models and a saved default.",
+            description: "Settings (⌘,) with the stub's models and a saved default, the bundled plugins' settings, \
+                          a guard with a key (no page of its own: under its row on Plugins), a plugin waiting for \
+                          approval, and days typed before there were choices (45: shown as 90 days).",
             threads: vec![explain_thread()],
             settings_page: true,
             settings: Some(
-                r#"{ "newThreads": { "model": { "provider": "stub", "id": "stub-fast" }, "thinkingLevel": "medium" } }"#,
+                r#"{ "newThreads": { "model": { "provider": "stub", "id": "stub-fast" }, "thinkingLevel": "medium" },
+                     "threads": { "keepDoneDays": 45 },
+                     "plugins": { "settings": { "trajectory": { "keep_days": "45" } } } }"#,
             ),
+            store: true,
+            plugins: &["alerts", "titles", "trajectory"],
+            bundled: &[("guard", GUARD_MANIFEST)],
+            home: &[("notes", NOTES_MANIFEST)],
             ..Default::default()
         },
     ]
 }
+
+/// The `settings` scenario's guard: the stub guard with an API key setting.
+const GUARD_MANIFEST: &str = r#"id = "guard"
+name = "Guard"
+version = "0.1.0"
+description = "Checks each operation in Guarded mode."
+provides = ["settings"]
+
+[run]
+command = "${target}/space-stub-guard"
+
+[run.env]
+SPACE_STUB_GUARD = '{ "secret": "api_key" }'
+"#;
+
+/// The `settings` scenario's plugin from your home folder, waiting for approval (never started).
+const NOTES_MANIFEST: &str = r#"id = "notes"
+name = "Notes"
+version = "0.1.0"
+description = "Keeps a note of what each thread decided."
+provides = ["settings"]
+observes = ["turn/ended"]
+uses = ["read:transcript", "host/notify"]
+
+[run]
+command = "${target}/space-stub-guard"
+"#;
 
 /// The explain reply three times over, so the transcript always overflows the window.
 fn long_thread() -> ScenarioThread {
@@ -560,6 +601,17 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         std::fs::create_dir_all(&store)?;
         std::fs::copy(repo.join("plugins/session-store/space-plugin.toml"), store.join("space-plugin.toml"))?;
     }
+    for id in scenario.plugins {
+        let repo = space_core::discovery::find_repo_root(&Path::new(env!("CARGO_MANIFEST_DIR")).join("x"))
+            .context("the bundled plugins live in the repo; run scenarios from a checkout")?;
+        std::fs::create_dir_all(root.join(id))?;
+        std::fs::copy(repo.join("plugins").join(id).join("space-plugin.toml"), root.join(id).join("space-plugin.toml"))?;
+    }
+    let home = std::env::temp_dir().join(format!("space-scenario-home-{}", std::process::id()));
+    for (dir, (folder, manifest)) in scenario.bundled.iter().map(|p| (&root, p)).chain(scenario.home.iter().map(|p| (&home, p))) {
+        std::fs::create_dir_all(dir.join(folder))?;
+        std::fs::write(dir.join(folder).join("space-plugin.toml"), manifest)?;
+    }
     // Scenario-only Keychain items.
     let secrets = space_core::Secrets::new("dev.brijesh.space.scenario");
     let settings_path = root.join("settings.json");
@@ -572,7 +624,11 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
 
     let host = HostOptions {
         project_dir: project_dir.to_path_buf(),
-        discovery: DiscoveryOptions { bundled_roots: vec![root], user_root: None, project_root: None },
+        discovery: DiscoveryOptions {
+            bundled_roots: vec![root],
+            user_root: (!scenario.home.is_empty()).then_some(home),
+            project_root: None,
+        },
         secrets,
         held_recheck: space_core::HELD_RECHECK,
         // The store's threads: never `~/.space`.

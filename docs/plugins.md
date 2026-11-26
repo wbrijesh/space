@@ -109,12 +109,22 @@ changes. "Retry now" on your blocker (`retry:<your id>`) arrives as `plugin/retr
 
 ## 4. Settings
 
-Declare fields in `settings/schema` (`kind: "secret"` for keys, `"switch"` for on/off with a `default` of
-`"true"` or `"false"`, `"model"` for one of the agent's models as `provider/model`, unset meaning "Same as
-agent"; `plugins/alerts` and `plugins/titles` are small examples). Before storing a new value the host
-calls `settings/validate`: answer `ok`, `invalid` (with why; nothing is stored) or `unverifiable` (you
-couldn't check; the user can save anyway). New values arrive as `settings/changed`; secrets the Keychain
-wouldn't hand over are listed in `unreadable`.
+Declare fields in `settings/schema` (`plugins/alerts` and `plugins/titles` are small examples). A field's
+`kind` is `"text"` (the default), `"secret"` for keys, `"switch"` for on/off with a `default` of `"true"`
+or `"false"`, `"model"` for one of the agent's models as `provider/model` (unset: the thread's model), or
+`"days"` for how long to keep something, picked from 7, 30 or 90 days or Never (you're told `"7"`,
+`"30"`, `"90"` or `"never"`; unset is your `default`, or never).
+
+Settings has a page per subject, not one per plugin. Say where a field goes with `page`: `"general"`,
+`"threads"`, `"notifications"` or `"developer"` (things for working on Space or your plugin). Without
+one, or with a page this Space doesn't know, the field is under your plugin's row on Plugins. Fields
+show in the order you declare them, after Space's own and in a card of their own.
+
+Switches, models and days apply when picked. A text or secret field has a Save button: before storing
+the value the host calls `settings/validate`: answer `ok`, `invalid` (with why; nothing is stored) or
+`unverifiable` (you couldn't check; the user can save anyway). New values arrive as `settings/changed`;
+secrets the Keychain wouldn't hand over are listed in `unreadable`. A blocker's
+`open-settings:<your id>` opens the page your settings are on.
 
 ## 5. Testing
 

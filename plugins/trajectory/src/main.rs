@@ -24,7 +24,7 @@ use space_plugin::protocol::service::*;
 use space_plugin::protocol::trace::*;
 use space_plugin::{Host, Plugin, RpcError};
 
-/// Days to keep a thread's trace after it last changed (unset: forever).
+/// Days to keep a thread's trace after it last changed: "7", "30", "90" or "never" (unset: never).
 const KEEP_DAYS: &str = "keep_days";
 /// Whether streamed chunk times are kept.
 const CHUNK_TIMING: &str = "chunk_timing";
@@ -215,30 +215,22 @@ impl Plugin for Plugged {
             fields: vec![
                 SettingField {
                     key: KEEP_DAYS.into(),
-                    label: "Keep traces for (days)".into(),
-                    // The placeholder ("Forever") says what empty means.
-                    description: String::new(),
-                    kind: SettingKind::Text,
-                    placeholder: Some("Forever".into()),
-                    default: None,
+                    label: "Delete traces after".into(),
+                    kind: SettingKind::Days,
+                    page: SettingPage::Developer,
+                    ..Default::default()
                 },
                 SettingField {
                     key: CHUNK_TIMING.into(),
                     label: "Record streamed chunk timing".into(),
-                    description: "For the request's timing graph".into(),
+                    description: "For each request's timing graph".into(),
                     kind: SettingKind::Switch,
-                    placeholder: None,
                     default: Some("true".into()),
+                    page: SettingPage::Developer,
+                    ..Default::default()
                 },
             ],
         }
-    }
-
-    async fn validate_setting(&self, check: SettingCheck) -> Result<SettingVerdict, RpcError> {
-        if check.key == KEEP_DAYS && !check.value.trim().parse::<u64>().is_ok_and(|d| d > 0) {
-            return Ok(SettingVerdict::invalid("Enter a number of days, or leave it empty to keep traces."));
-        }
-        Ok(SettingVerdict::ok())
     }
 
     fn settings_changed(&self, changed: SettingsChanged) {
@@ -407,7 +399,6 @@ mod tests {
         apply_settings(&p.0, &SettingValues::from([(KEEP_DAYS.to_string(), "1".to_string())]));
         p.0.sweep();
         assert!(!tmp.path().join("t2").exists());
-        assert!(matches!(p.validate_setting(SettingCheck { key: KEEP_DAYS.into(), value: "soon".into() }).await.unwrap().status, SettingStatus::Invalid));
     }
 
     #[test]

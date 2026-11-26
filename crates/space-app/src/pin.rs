@@ -23,7 +23,7 @@ impl SpaceApp {
     /// starts ("Today", "Previous 7 Days", "October", "2025").
     pub(crate) fn done_sections(&self) -> Vec<(&ThreadMeta, Option<String>)> {
         let cutoff = self.done_cutoff();
-        let mut done: Vec<_> = self.done_threads.iter().filter(|m| !crate::persist::expired(m, cutoff)).collect();
+        let mut done: Vec<_> = self.done_threads.iter().filter(|m| !cutoff.is_some_and(|c| crate::persist::expired(m, c))).collect();
         done.sort_by_key(|m| std::cmp::Reverse(m.done_ms));
         let now = now_ms();
         date_headers(done, |m| m.done_ms.unwrap_or(now))

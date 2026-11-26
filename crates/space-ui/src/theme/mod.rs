@@ -51,7 +51,8 @@ pub mod color {
         hover = 0x262626ff;
         /// Pressed / selected fill.
         pressed = 0x2e2e2eff;
-        /// The item under the pointer in a context menu: clearly lighter than the menu's card.
+        /// The item under the pointer in a menu (every menu: the composer's, right-click,
+        /// Settings' dropdowns): clearly lighter than the menu's card.
         menu_highlight = 0x3a3a3aff;
         /// Code blocks in replies: a little darker than the thread, so they stand apart from
         /// your messages' bubbles; with a lighter border (and the rule under their top bar).
@@ -235,8 +236,9 @@ pub mod size {
     /// Gap between the scroll-to-bottom button and the bottom of its scroll area (the top of
     /// the composer card).
     pub const SCROLL_BUTTON_INSET: Pixels = px(12.);
-    /// Settings rows (label + description on the left, a control on the right).
-    pub const SETTINGS_ROW_H: Pixels = px(60.);
+    /// Settings rows (label + description on the left, a control on the right): a one-line
+    /// row's height; a description makes it taller.
+    pub const SETTINGS_ROW_H: Pixels = px(40.);
     /// Settings dropdowns, so a section's controls line up.
     pub const SETTINGS_SELECT_W: Pixels = px(200.);
 }
@@ -284,10 +286,13 @@ pub fn install(cx: &mut App) {
         t.ring = accent();
         t.caret = text();
         t.selection = selection();
-        t.accent = hover();
+        // Popup menus' hovered item (Settings' dropdowns), as in Space's own menus.
+        t.accent = menu_highlight();
         t.accent_foreground = text();
         t.popover = surface();
         t.popover_foreground = text();
+        // gpui-component's `primary`: of its widgets Space uses only the switch, as the track of
+        // one that's on (and the gallery's slider).
         t.primary = accent();
         t.primary_hover = accent_hover();
         t.primary_active = accent();

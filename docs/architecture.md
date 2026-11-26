@@ -188,8 +188,8 @@ another version is not started.
 | Method | Direction | When |
 |---|---|---|
 | `plugin/initialize` | host → plugin | first, with every setting's value (and any unreadable secrets); the plugin answers with the `protocolVersion` it was built for (the SDK fills it in) and is refused on a mismatch |
-| `settings/schema` | host → plugin | `provides settings`: the fields |
-| `settings/validate` | host → plugin | before a new value is stored: `ok`, `invalid` (not stored) or `unverifiable` (stored only if the user saves anyway) |
+| `settings/schema` | host → plugin | `provides settings`: the fields, and the Settings page each goes on |
+| `settings/validate` | host → plugin | before a typed value is stored: `ok`, `invalid` (not stored) or `unverifiable` (stored only if the user saves anyway) |
 | `settings/changed` | host → plugin | the user changed a setting |
 | `catalog/get`, `catalog/changed` | both | a catalog's entries; the plugin says when they changed |
 | `context/get` | host → plugin | hidden sections for the next prompt |
@@ -246,7 +246,8 @@ judgements have the same context as later ones.
 
 **Thread titles.** A thread shows the first line of its first message at once. When that message is sent,
 the host asks the `session-title` provider (bundled: `plugins/titles`) for a title; it answers through
-`agent/complete`, with the thread's own model unless its "Title model" setting picks one, and the reply
+`agent/complete`, with the thread's own model unless its "Model for titles" setting (Settings ▸ Threads)
+picks one, and the reply
 is tidied to a few words. A title replaces the first line, is saved (`ThreadMeta.titled`) and told to
 observers (`thread/titled`); a failure, or no title within 15 s, keeps the first line. A name the user
 gives (⌘R) is saved with `ThreadMeta.renamed`, told to observers the same way, and never replaced by a
@@ -330,8 +331,11 @@ host's own records; never tool output).
   scroll container's prepaint, so it decides with this frame's sizes: scrolling up stops following,
   coming back near the bottom resumes it, and growing content never stops it.
 - **Settings.** `~/.space/settings.json` (`SPACE_SETTINGS` overrides), serde defaults so older files
-  load, saved atomically on every change. Secrets are in the Keychain (service `dev.brijesh.space`;
-  tests use their own). A plugin setting goes through `settings/validate` before it's stored.
+  load, saved atomically on every change (a retention typed before there were choices goes up to the
+  next one). Secrets are in the Keychain (service `dev.brijesh.space`; tests use their own). A typed
+  plugin value goes through `settings/validate` before it's stored. Pages are by subject (General,
+  Threads, Notifications, Plugins, Developer, About; one with nothing on it isn't listed): a plugin
+  field names its page (`page`), else it's under the plugin's row on Plugins.
 - **Testing.** `space-core` ships `space-stub-agent` (a scripted ACP agent) and `space-stub-guard` (a
   scripted service plugin); `crates/space-core/tests/` run the host against them. Plugins have
   end-to-end tests with the real plugin: session-store, titles, trajectory, and terminal with real

@@ -56,11 +56,11 @@ impl Plugin for Titles {
         SettingsSchema {
             fields: vec![SettingField {
                 key: MODEL.into(),
-                label: "Title model".into(),
+                label: "Model for titles".into(),
                 description: String::new(),
                 kind: SettingKind::Model,
-                placeholder: None,
-                default: None,
+                page: SettingPage::Threads,
+                ..Default::default()
             }],
         }
     }

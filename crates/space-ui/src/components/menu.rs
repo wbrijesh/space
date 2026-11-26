@@ -93,7 +93,7 @@ pub fn surface() -> Div {
 
 /// A clickable row (hover fill).
 pub fn row(id: impl Into<ElementId>) -> Stateful<Div> {
-    row_with(id, |s| s.bg(color::hover()))
+    row_with(id, |s| s.bg(color::menu_highlight()))
 }
 
 /// A clickable row with its own hover style.

@@ -96,7 +96,7 @@ fn list(title: &'static str, on_pane: PaneHandler, items: Vec<Stateful<Div>>) ->
         .flex()
         .flex_col()
         .child(
-            row_with("picker-back", |s| s.bg(color::hover()).text_color(color::text_2()))
+            row_with("picker-back", |s| s.bg(color::menu_highlight()).text_color(color::text_2()))
                 .h(px(28.))
                 .gap_1()
                 .px_1p5()

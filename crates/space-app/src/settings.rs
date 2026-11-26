@@ -10,10 +10,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use gpui::component::input::{InputEvent, InputState};
-use gpui::{AppContext as _, Context, Window};
+use gpui::{Context, Window};
 use serde::{Deserialize, Serialize};
 use space_core::protocol::ModelInfo;
+use space_core::protocol::service::round_days;
 use space_core::{PluginStatus, SettingError};
 use space_ui::components::settings::FieldCheck;
 
@@ -54,14 +54,23 @@ pub const DEFAULT_KEEP_DONE_DAYS: u32 = 30;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Threads {
-    /// Days a done thread is kept before it's deleted.
+    /// Days a done thread is kept before it's deleted; `null`: never deleted. Read it with
+    /// [`Threads::keep_done`].
     #[serde(alias = "keepClosedDays")]
-    pub keep_done_days: u32,
+    pub keep_done_days: Option<u32>,
 }
 
 impl Default for Threads {
     fn default() -> Self {
-        Self { keep_done_days: DEFAULT_KEEP_DONE_DAYS }
+        Self { keep_done_days: Some(DEFAULT_KEEP_DONE_DAYS) }
+    }
+}
+
+impl Threads {
+    /// Days a done thread is kept, as one of Settings' choices (`None`: never). A number saved
+    /// when it was typed goes up to the next choice, so nothing is deleted sooner than asked.
+    pub fn keep_done(&self) -> Option<u32> {
+        self.keep_done_days.and_then(|d| round_days(d.into()))
     }
 }
 
@@ -182,20 +191,32 @@ impl SpaceApp {
         cx.spawn(async move |_, _| host.start_services().await).detach();
     }
 
-    /// The Settings sections there are now (see `SettingsTab::all`).
+    /// The Settings pages there are now (see `SettingsTab::all`).
     pub(crate) fn settings_tabs(&self) -> Vec<SettingsTab> {
-        let plugins = self
-            .plugin_settings
-            .iter()
-            .filter(|(id, states)| !states.is_empty() && !self.host.is_disabled(id))
-            .map(|(id, _)| self.host.plugin(id).map_or_else(|| id.clone(), |p| p.manifest.name).into());
-        SettingsTab::all(self.saving_threads(), plugins, !self.host.plugins().is_empty())
+        let placed = self.shown_plugin_settings().flat_map(|(_, states)| states.iter().map(|s| SettingsTab::from(s.field.page)));
+        SettingsTab::all(self.saving_threads(), !self.host.plugins().is_empty(), placed)
     }
 
-    /// The section shown: the one picked last while it's still there, else the first.
+    /// The settings of each running plugin that's on, by plugin id.
+    pub(crate) fn shown_plugin_settings(&self) -> impl Iterator<Item = (&String, &Vec<space_core::SettingState>)> {
+        self.plugin_settings.iter().filter(|(id, _)| !self.host.is_disabled(id))
+    }
+
+    /// The page shown: the one picked last while it's still there, else the first.
     pub(crate) fn current_settings_tab(&self) -> SettingsTab {
         let tabs = self.settings_tabs();
-        if tabs.contains(&self.settings_tab) { self.settings_tab.clone() } else { tabs.into_iter().next().unwrap_or_default() }
+        if tabs.contains(&self.settings_tab) { self.settings_tab } else { tabs.into_iter().next().unwrap_or_default() }
+    }
+
+    /// The page with `plugin_id`'s settings (a blocker's "Open Settings"): the page its first
+    /// field is on; Plugins while it waits for approval or has none.
+    pub(crate) fn settings_tab_for(&self, plugin_id: &str) -> SettingsTab {
+        let waiting = self.awaiting_approval().iter().any(|p| p.id() == plugin_id);
+        let first = self.plugin_settings.get(plugin_id).and_then(|states| states.first());
+        match first {
+            Some(state) if !waiting => state.field.page.into(),
+            _ => SettingsTab::Plugins,
+        }
     }
 
     pub(crate) fn pick_settings_tab(&mut self, tab: SettingsTab, cx: &mut Context<Self>) {
@@ -213,7 +234,7 @@ impl SpaceApp {
 
     pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_settings = true;
-        // Its sections are listed in the sidebar: show it.
+        // Its pages are listed in the sidebar: show it.
         if !self.sidebar_open {
             self.toggle_sidebar(cx);
         }
@@ -272,39 +293,11 @@ impl SpaceApp {
         cx.notify();
     }
 
-
-    /// The Settings field for how many days done threads are kept: saved on ⏎ or when it
-    /// loses focus; anything but a whole number of days (1 or more) goes back to the setting.
-    pub(crate) fn keep_done_input(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Entity<InputState> {
-        if let Some(input) = &self.keep_done_input {
-            return input.clone();
-        }
-        let days = self.settings.settings.threads.keep_done_days.to_string();
-        let input = cx.new(|cx| InputState::new(window, cx).default_value(days));
-        let sub = cx.subscribe_in(&input, window, |this, input, e: &InputEvent, window, cx| {
-            if matches!(e, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                let typed = input.read(cx).value().trim().parse::<u32>().ok().filter(|d| *d >= 1);
-                if let Some(days) = typed {
-                    this.set_keep_done_days(days, cx);
-                }
-                let shown = this.settings.settings.threads.keep_done_days.to_string();
-                if input.read(cx).value().trim() != shown {
-                    input.update(cx, |s, cx| s.set_value(shown, window, cx));
-                }
-            }
-        });
-        self._subscriptions.push(sub);
-        self.keep_done_input = Some(input.clone());
-        input
-    }
-
-    /// How many days done threads are kept; the ones older than that are deleted now.
-    pub(crate) fn set_keep_done_days(&mut self, days: u32, cx: &mut Context<Self>) {
-        let days = days.max(1);
-        if self.settings.settings.threads.keep_done_days != days {
-            self.settings.update(|s| s.threads.keep_done_days = days);
-            self.purge_done_threads(cx);
-        }
+    /// How many days done threads are kept (`None`: never deleted); the ones older than that
+    /// are deleted now.
+    pub(crate) fn set_keep_done_days(&mut self, days: Option<u32>, cx: &mut Context<Self>) {
+        self.settings.update(|s| s.threads.keep_done_days = days);
+        self.purge_done_threads(cx);
         cx.notify();
     }
 
@@ -486,12 +479,28 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{ "newThreads": { "thinkingLevel": "high" } }"#).unwrap();
         assert_eq!(s.new_threads.thinking_level.as_deref(), Some("high"));
         assert_eq!(s.plugins, Plugins::default());
-        assert_eq!(s.threads.keep_done_days, 30);
+        assert_eq!(s.threads.keep_done(), Some(30));
         let s: Settings = serde_json::from_str(r#"{ "threads": { "keepDoneDays": 7 } }"#).unwrap();
-        assert_eq!(s.threads.keep_done_days, 7);
+        assert_eq!(s.threads.keep_done(), Some(7));
         // Saved before threads were marked done rather than closed.
         let s: Settings = serde_json::from_str(r#"{ "threads": { "keepClosedDays": 7 } }"#).unwrap();
-        assert_eq!(s.threads.keep_done_days, 7);
+        assert_eq!(s.threads.keep_done(), Some(7));
+    }
+
+    #[test]
+    fn typed_days_round_up_to_a_choice_and_never_is_kept() {
+        let keep = |json: &str| serde_json::from_str::<Settings>(json).unwrap().threads.keep_done();
+        // Typed before there were choices: a 45 is kept (and shown) as 90, past 90 as never, so
+        // nothing goes sooner than asked.
+        assert_eq!(keep(r#"{ "threads": { "keepDoneDays": 45 } }"#), Some(90));
+        assert_eq!(keep(r#"{ "threads": { "keepDoneDays": 1 } }"#), Some(7));
+        assert_eq!(keep(r#"{ "threads": { "keepDoneDays": 365 } }"#), None);
+        assert_eq!(keep(r#"{ "threads": { "keepDoneDays": null } }"#), None);
+        let path = temp("never");
+        let mut store = SettingsStore::load(Some(path.clone()));
+        store.update(|s| s.threads.keep_done_days = None);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"keepDoneDays\": null"));
+        assert_eq!(SettingsStore::load(Some(path)).settings.threads.keep_done(), None);
     }
 
     #[test]

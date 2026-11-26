@@ -1,13 +1,14 @@
-//! Settings page (⌘,): a heading and sections of rows. Each row is a label with a one-line
-//! description on the left and its control on the right (dropdown, switch, status, a field).
+//! Settings (⌘,): a few pages, listed in the sidebar while Settings is open. A page has no
+//! heading (the title bar names it); it is cards of rows: Space's own first, then each plugin's
+//! in a card of their own. Every row is built one way ([`row`]): a label, a description only
+//! when it adds something, and the control on the right, all controls one width. A change takes
+//! effect at once; only a typed plugin value (a key, text the plugin checks) has a Save button.
 //!
-//! Plugin settings are generic: each service plugin with settings gets a section built from
-//! the fields it declares (secrets are masked and never shown once saved), and the Plugins
-//! section turns service plugins on and off.
+//! Plugin settings are generic: each field a plugin declares goes on the page it names (what
+//! it's about), or under the plugin's row on Plugins; no plugin is known here by its id.
 //!
-//! Primitives ([`section`], [`row`], [`select`], [`toggle`]) plus [`SettingsPage`], which
-//! lays out Space's settings from plain props. The page has no scroll container of its own;
-//! the app wraps it in one.
+//! [`SettingsPage`] lays out one page from plain props; it has no scroll container of its own
+//! (the app wraps it in one).
 
 use std::rc::Rc;
 
@@ -19,7 +20,7 @@ use gpui::component::{Disableable as _, FocusableExt as _, Icon, IconName, Sizab
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::protocol::ModelInfo;
-use space_core::protocol::service::CatalogEntry;
+use space_core::protocol::service::{CatalogEntry, DAYS, DAYS_NEVER, SettingPage};
 
 use super::composer::{Handler, IndexHandler};
 use super::widgets::pill_button;
@@ -29,6 +30,8 @@ use crate::theme::{color, radius, size, text};
 pub type ToggleHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
 pub type ModelHandler = Rc<dyn Fn(Option<ModelInfo>, &mut Window, &mut App)>;
 pub type LevelHandler = Rc<dyn Fn(Option<String>, &mut Window, &mut App)>;
+/// A number of days; `None`: never.
+pub type DaysHandler = Rc<dyn Fn(Option<u32>, &mut Window, &mut App)>;
 /// `(plugin id, key)`.
 pub type FieldHandler = Rc<dyn Fn(String, String, &mut Window, &mut App)>;
 pub type PluginToggleHandler = Rc<dyn Fn(String, bool, &mut Window, &mut App)>;
@@ -44,12 +47,29 @@ pub struct FieldView {
     pub key: String,
     pub label: SharedString,
     pub description: SharedString,
+    /// The page it's on.
+    pub page: SettingsTab,
+    pub control: FieldControl,
+}
+
+/// A plugin setting's control, by its kind.
+#[derive(Clone)]
+pub enum FieldControl {
+    /// A switch, and whether it's on.
+    Switch(bool),
+    /// A model picker.
+    Model(ModelChoice),
+    /// How long to keep something: one of the day choices, `None` for never.
+    Days(Option<u32>),
+    /// Typed, then saved once the plugin has checked it.
+    Text(TextField),
+}
+
+/// A typed plugin setting.
+#[derive(Clone)]
+pub struct TextField {
     /// Masked, kept in the Keychain, never shown again once saved.
     pub secret: bool,
-    /// A switch, and whether it's on (then `input`, `check` and `status` aren't shown).
-    pub switch: Option<bool>,
-    /// A model picker (then `input`, `check` and `status` aren't shown either).
-    pub model: Option<ModelChoice>,
     pub set: bool,
     pub input: Entity<InputState>,
     /// The last save: being checked, or what the plugin said.
@@ -58,7 +78,7 @@ pub struct FieldView {
     pub status: Option<(SharedString, bool)>,
 }
 
-/// A model setting: "Same as agent" or one of the agent's models.
+/// A model setting: the thread's own model or one of the agent's models.
 #[derive(Clone, Default)]
 pub struct ModelChoice {
     /// `<provider>/<model id>`; `None`: the thread's own model.
@@ -81,14 +101,7 @@ pub enum FieldCheck {
     Unverifiable(SharedString),
 }
 
-/// A plugin's settings section.
-#[derive(Clone)]
-pub struct PluginSettingsView {
-    pub title: SharedString,
-    pub fields: Vec<FieldView>,
-}
-
-/// A row of the Plugins section.
+/// A row of the Plugins page.
 #[derive(Clone)]
 pub struct PluginRow {
     pub id: String,
@@ -149,6 +162,8 @@ pub struct SettingsHandlers {
     pub on_open_system_settings: Handler,
     /// Default permission mode for new threads (a catalog id).
     pub on_mode: LevelHandler,
+    /// How long done threads are kept.
+    pub on_keep_done: DaysHandler,
     /// Save the field's input as the setting's value.
     pub on_save_field: FieldHandler,
     /// Store the field's value although it couldn't be checked.
@@ -156,7 +171,7 @@ pub struct SettingsHandlers {
     pub on_clear_field: FieldHandler,
     /// A switch setting was flipped.
     pub on_toggle_field: FieldToggleHandler,
-    /// A model setting was picked.
+    /// A model or days setting was picked.
     pub on_choose_field: FieldChoiceHandler,
     pub on_plugin_enabled: PluginToggleHandler,
     /// `(plugin id, approved)`.
@@ -165,8 +180,8 @@ pub struct SettingsHandlers {
     pub on_swipe: IndexHandler,
 }
 
-/// The choices of Trackpad ▸ "Two-finger swipe", in order.
-pub const SWIPE_CHOICES: [&str; 3] = ["Right pane", "Sidebar", "Off"];
+/// The choices of "Swipe with two fingers to show or hide", in order.
+pub const SWIPE_CHOICES: [&str; 3] = ["Right pane", "Sidebar", "Nothing"];
 
 impl Default for SettingsHandlers {
     fn default() -> Self {
@@ -176,6 +191,7 @@ impl Default for SettingsHandlers {
             on_allow: Rc::new(|_, _| {}),
             on_open_system_settings: Rc::new(|_, _| {}),
             on_mode: Rc::new(|_, _, _| {}),
+            on_keep_done: Rc::new(|_, _, _| {}),
             on_save_field: Rc::new(|_, _, _, _| {}),
             on_save_anyway: Rc::new(|_, _, _, _| {}),
             on_clear_field: Rc::new(|_, _, _, _| {}),
@@ -188,7 +204,7 @@ impl Default for SettingsHandlers {
     }
 }
 
-/// Space's settings.
+/// One page of Settings.
 #[derive(IntoElement)]
 pub struct SettingsPage {
     catalog: Catalog,
@@ -200,67 +216,86 @@ pub struct SettingsPage {
     modes: Vec<CatalogEntry>,
     /// Default mode for new threads; `None`: the catalog's default.
     mode: Option<String>,
-    plugin_settings: Vec<PluginSettingsView>,
+    /// Every plugin's fields, grouped by plugin.
+    fields: Vec<FieldView>,
     plugins: Vec<PluginRow>,
     handlers: SettingsHandlers,
-    /// The days done threads are kept (saved on ⏎ or when it loses focus); `None`: threads
+    /// How many days done threads are kept (`Some(None)`: never deleted); `None`: threads
     /// aren't saved, so no row.
-    keep_done: Option<Entity<InputState>>,
+    keep_done: Option<Option<u32>>,
     /// What a two-finger swipe shows and hides (an index of [`SWIPE_CHOICES`]).
     swipe: usize,
     /// About: "0.1.6", or a local build's "0.1.6 +2 · a95ab81 · edited".
     version: SharedString,
     /// About: when a local build was made.
     built: Option<SharedString>,
-    /// The section shown (the sidebar lists them).
+    /// The page shown (the sidebar lists them).
     tab: SettingsTab,
 }
 
-/// One section of Settings: the sidebar lists them while Settings is open, and the page shows
-/// the chosen one.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// A page of Settings: the sidebar lists them while Settings is open, and shows the chosen one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsTab {
+    /// Defaults for new threads, the trackpad.
     #[default]
-    NewThreads,
-    /// Shown while threads are saved (they can be kept after closing).
+    General,
+    /// Deleting done threads (while threads are saved), and plugins' thread settings (titles).
     Threads,
-    Trackpad,
-    /// A service plugin's own settings, by its name.
-    Plugin(SharedString),
+    /// Whether macOS lets Space notify, and plugins' notification settings (alerts).
     Notifications,
+    /// The plugins, and the settings of each that don't belong anywhere else.
     Plugins,
+    /// Plugins' settings for working on Space (traces), when there are any.
+    Developer,
     /// Which build this is.
     About,
 }
 
+impl From<SettingPage> for SettingsTab {
+    fn from(page: SettingPage) -> Self {
+        match page {
+            SettingPage::General => SettingsTab::General,
+            SettingPage::Threads => SettingsTab::Threads,
+            SettingPage::Notifications => SettingsTab::Notifications,
+            SettingPage::Plugins => SettingsTab::Plugins,
+            SettingPage::Developer => SettingsTab::Developer,
+        }
+    }
+}
+
 impl SettingsTab {
-    pub fn label(&self) -> SharedString {
+    pub fn label(self) -> &'static str {
         match self {
-            SettingsTab::NewThreads => "New threads".into(),
-            SettingsTab::Threads => "Threads".into(),
-            SettingsTab::Trackpad => "Trackpad".into(),
-            SettingsTab::Plugin(name) => name.clone(),
-            SettingsTab::Notifications => "Notifications".into(),
-            SettingsTab::Plugins => "Plugins".into(),
-            SettingsTab::About => "About".into(),
+            SettingsTab::General => "General",
+            SettingsTab::Threads => "Threads",
+            SettingsTab::Notifications => "Notifications",
+            SettingsTab::Plugins => "Plugins",
+            SettingsTab::Developer => "Developer",
+            SettingsTab::About => "About",
         }
     }
 
-    /// The sections there are, in order: Threads while threads are saved, a section per
-    /// service plugin with settings (by name), Plugins when any are installed, About.
-    pub fn all(threads: bool, plugins: impl IntoIterator<Item = SharedString>, any_plugins: bool) -> Vec<SettingsTab> {
-        let mut tabs = vec![SettingsTab::NewThreads];
-        if threads {
-            tabs.push(SettingsTab::Threads);
-        }
-        tabs.push(SettingsTab::Trackpad);
-        tabs.extend(plugins.into_iter().map(SettingsTab::Plugin));
-        tabs.push(SettingsTab::Notifications);
-        if any_plugins {
-            tabs.push(SettingsTab::Plugins);
-        }
-        tabs.push(SettingsTab::About);
-        tabs
+    /// The pages there are, in order; one with nothing on it isn't listed. `threads`: threads
+    /// are saved (so done ones are kept a while); `plugins`: any are installed; `placed`: the
+    /// pages plugin fields are on.
+    pub fn all(threads: bool, plugins: bool, placed: impl IntoIterator<Item = SettingsTab>) -> Vec<SettingsTab> {
+        let placed: Vec<SettingsTab> = placed.into_iter().collect();
+        [
+            SettingsTab::General,
+            SettingsTab::Threads,
+            SettingsTab::Notifications,
+            SettingsTab::Plugins,
+            SettingsTab::Developer,
+            SettingsTab::About,
+        ]
+        .into_iter()
+        .filter(|tab| match tab {
+            SettingsTab::Threads => threads || placed.contains(tab),
+            SettingsTab::Plugins => plugins || placed.contains(tab),
+            SettingsTab::Developer => placed.contains(tab),
+            SettingsTab::General | SettingsTab::Notifications | SettingsTab::About => true,
+        })
+        .collect()
     }
 }
 
@@ -273,7 +308,7 @@ impl SettingsPage {
             permission: NotificationPermission::Checking,
             modes: Vec::new(),
             mode: None,
-            plugin_settings: Vec::new(),
+            fields: Vec::new(),
             plugins: Vec::new(),
             handlers: SettingsHandlers::default(),
             keep_done: None,
@@ -301,8 +336,10 @@ impl SettingsPage {
         self
     }
 
-    pub fn keep_done(mut self, input: Option<Entity<InputState>>) -> Self {
-        self.keep_done = input;
+    /// Done threads are deleted after this many days (`None`: never). Not called: threads
+    /// aren't saved, so there's no row.
+    pub fn keep_done(mut self, days: Option<u32>) -> Self {
+        self.keep_done = Some(days);
         self
     }
 
@@ -312,8 +349,9 @@ impl SettingsPage {
         self
     }
 
-    pub fn plugin_settings(mut self, sections: Vec<PluginSettingsView>) -> Self {
-        self.plugin_settings = sections;
+    /// Plugins' fields, each plugin's together.
+    pub fn fields(mut self, fields: Vec<FieldView>) -> Self {
+        self.fields = fields;
         self
     }
 
@@ -344,6 +382,12 @@ impl SettingsPage {
 }
 
 const AGENT_DEFAULT: &str = "Agent default";
+/// gpui-component's popup menu items' height; a dropdown's trigger matches it.
+const MENU_ITEM_H: Pixels = px(26.);
+/// A trigger's padding, so its text lines up with the items' in the menu under it: their text
+/// sits 12px in from the menu's edge (4px around the items, 8px inside them), less the
+/// trigger's border and the menu's, which sits a pixel outside the trigger.
+const MENU_TEXT_INSET: Pixels = px(10.);
 
 /// "Claude Opus 5.5": the provider's display name without a "(latest)" suffix.
 fn model_name(m: &ModelInfo) -> String {
@@ -355,98 +399,106 @@ fn model_name(m: &ModelInfo) -> String {
 
 impl RenderOnce for SettingsPage {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        let Self { catalog, model, thinking, permission, modes, mode, plugin_settings, plugins, handlers: h, keep_done, swipe, version, built, tab } = self;
-
-        // Model: "Agent default" + the agent's models.
-        let (model_row, thinking_row) = match &catalog {
-            Catalog::Ready { models, levels } => {
-                let chosen = model.as_ref().map(|(p, id)| models.iter().position(|m| &m.provider == p && &m.id == id));
-                // A saved model the agent no longer offers: marked, and new threads use the
-                // agent's default (`session_defaults`).
-                let model_label = match (&model, chosen) {
-                    (Some(_), Some(Some(ix))) => model_name(&models[ix]).into(),
-                    (Some((_, id)), _) => format!("{} · unavailable", format::model_label(id, None)).into(),
-                    (None, _) => SharedString::from(AGENT_DEFAULT),
-                };
-                let names = models.iter().map(|m| model_name(m).into());
-                let options = std::iter::once(AGENT_DEFAULT.into()).chain(names).collect();
-                let selected = match chosen {
-                    None => Some(0),
-                    Some(ix) => ix.map(|i| i + 1),
-                };
-                let (list, f) = (models.clone(), h.on_model.clone());
-                // Index 0 is "Agent default".
-                let on_model: IndexHandler =
-                    Rc::new(move |ix, w, cx| f(ix.checked_sub(1).map(|i| list[i].clone()), w, cx));
-                let control = select("settings-model", model_label, options, selected, Some(on_model), window);
-                let model_row = row("Model", "", Some(control));
-
-                let level_label = thinking.as_deref().map_or(AGENT_DEFAULT.into(), format::effort_label);
-                let names = levels.iter().map(|l| format::effort_label(l).into());
-                let options = std::iter::once(AGENT_DEFAULT.into()).chain(names).collect();
-                let selected = match &thinking {
-                    None => Some(0),
-                    Some(t) => levels.iter().position(|l| l == t).map(|i| i + 1),
-                };
-                let (list, f) = (levels.clone(), h.on_thinking.clone());
-                let on_level: IndexHandler =
-                    Rc::new(move |ix, w, cx| f(ix.checked_sub(1).map(|i| list[i].clone()), w, cx));
-                let control = select("settings-thinking", level_label, options, selected, Some(on_level), window);
-                (model_row, row("Thinking", "", Some(control)))
-            }
-            Catalog::Loading | Catalog::Unavailable => {
-                let desc = if catalog == Catalog::Loading { "Loading models…" } else { "Agent unavailable" };
-                let model_label = model
-                    .as_ref()
-                    .map_or(SharedString::from(AGENT_DEFAULT), |(_, id)| format::model_label(id, None).into());
-                let level_label = thinking.as_deref().map_or(AGENT_DEFAULT.into(), format::effort_label);
-                (
-                    row("Model", desc, Some(select("settings-model", model_label, vec![], None, None, window))),
-                    row("Thinking", desc, Some(select("settings-thinking", level_label, vec![], None, None, window))),
-                )
-            }
-        };
-
-        // What to be told about is the alerts plugin's (its own section); whether macOS lets
-        // Space post notifications at all is Space's.
-        // Only the chosen section: its name is in the sidebar and the title bar.
-        let (hint, rows): (Option<&'static str>, Vec<AnyElement>) = match &tab {
-            SettingsTab::NewThreads => {
-                let mut rows = vec![model_row.into_any_element(), thinking_row.into_any_element()];
-                if !modes.is_empty() {
-                    rows.push(mode_row(&modes, mode.as_deref(), h.on_mode.clone(), window).into_any_element());
+        let tab = self.tab;
+        let h = &self.handlers;
+        let any = |r: Div| r.into_any_element();
+        // Space's own rows: one card, or several.
+        let own: Vec<Vec<AnyElement>> = match tab {
+            SettingsTab::General => {
+                let mut defaults = defaults_rows(&self.catalog, self.model.as_ref(), self.thinking.as_deref(), h, window);
+                if !self.modes.is_empty() {
+                    defaults.push(any(mode_row(&self.modes, self.mode.as_deref(), h.on_mode.clone(), window)));
                 }
-                (Some("Applies to threads you start from now on."), rows)
+                vec![defaults, vec![any(swipe_row(self.swipe, h.on_swipe.clone(), window))]]
             }
-            SettingsTab::Threads => (None, keep_done.iter().map(|input| keep_done_row(input).into_any_element()).collect()),
-            SettingsTab::Trackpad => (None, vec![swipe_row(swipe, h.on_swipe.clone(), window).into_any_element()]),
-            SettingsTab::Plugin(name) => (
-                None,
-                plugin_settings
+            SettingsTab::Threads => vec![self.keep_done.iter().map(|days| any(keep_done_row(*days, h.on_keep_done.clone(), window))).collect()],
+            SettingsTab::Notifications => vec![vec![any(permission_row(self.permission, h))]],
+            // Each plugin's own settings under its row.
+            SettingsTab::Plugins => vec![
+                self.plugins
                     .iter()
-                    .filter(|p| &p.title == name)
-                    .flat_map(|p| p.fields.iter().map(|f| field_row(f, &h, window).into_any_element()))
+                    .flat_map(|p| {
+                        let fields = self.fields.iter().filter(|f| f.page == tab && f.plugin_id == p.id);
+                        std::iter::once(any(plugin_row(p, h, window))).chain(fields.map(|f| any(field_row(f, h, window))))
+                    })
                     .collect(),
-            ),
-            SettingsTab::Notifications => (None, vec![permission_row(permission, &h).into_any_element()]),
+            ],
+            SettingsTab::Developer => Vec::new(),
             SettingsTab::About => {
                 let value = |s: SharedString| div().text_size(text::MD).text_color(color::text_2()).child(s).into_any_element();
-                let mut rows = vec![row("Version", "", Some(value(version.clone()))).into_any_element()];
-                if let Some(built) = built.clone() {
-                    rows.push(row("Built", "", Some(value(built))).into_any_element());
+                let mut rows = vec![any(row("Version", "", Some(value(self.version.clone()))))];
+                if let Some(built) = self.built.clone() {
+                    rows.push(any(row("Built", "", Some(value(built)))));
                 }
-                (None, rows)
+                vec![rows]
             }
-            SettingsTab::Plugins => (
-                None,
-                plugins.iter().map(|p| plugin_row(p, &h, window).into_any_element()).collect(),
-            ),
         };
-        section(hint, rows)
+        // Then each plugin's fields on this page, a card per plugin (on Plugins, only those of
+        // a plugin not in the list).
+        let listed = |f: &FieldView| tab == SettingsTab::Plugins && self.plugins.iter().any(|p| p.id == f.plugin_id);
+        let mut cards = own;
+        let mut last: Option<&str> = None;
+        for f in self.fields.iter().filter(|f| f.page == tab && !listed(f)) {
+            if last != Some(f.plugin_id.as_str()) {
+                cards.push(Vec::new());
+                last = Some(&f.plugin_id);
+            }
+            cards.last_mut().expect("pushed").push(any(field_row(f, h, window)));
+        }
+        div().flex().flex_col().gap_4().children(cards.into_iter().filter(|rows| !rows.is_empty()).map(card))
     }
 }
 
-/// "Permission mode" for new threads: the catalog's entries; the default one is marked.
+/// "Default model" and "Default thinking": the agent's choices once it has said, after "Agent
+/// default".
+fn defaults_rows(
+    catalog: &Catalog,
+    model: Option<&(String, String)>,
+    thinking: Option<&str>,
+    h: &SettingsHandlers,
+    window: &Window,
+) -> Vec<AnyElement> {
+    let level_label = thinking.map_or(AGENT_DEFAULT.into(), format::effort_label);
+    let Catalog::Ready { models, levels } = catalog else {
+        let desc = if *catalog == Catalog::Loading { "Loading models…" } else { "Agent unavailable" };
+        let model_label = model.map_or(SharedString::from(AGENT_DEFAULT), |(_, id)| format::model_label(id, None).into());
+        return vec![
+            row("Default model", desc, Some(select("settings-model", model_label, vec![], None, None, window))).into_any_element(),
+            row("Default thinking", desc, Some(select("settings-thinking", level_label, vec![], None, None, window))).into_any_element(),
+        ];
+    };
+    let chosen = model.map(|(p, id)| models.iter().position(|m| &m.provider == p && &m.id == id));
+    // A saved model the agent no longer offers: marked, and new threads use the agent's default
+    // (`session_defaults`).
+    let model_label = match (model, chosen) {
+        (Some(_), Some(Some(ix))) => model_name(&models[ix]).into(),
+        (Some((_, id)), _) => format!("{} · unavailable", format::model_label(id, None)).into(),
+        (None, _) => SharedString::from(AGENT_DEFAULT),
+    };
+    let names = models.iter().map(|m| model_name(m).into());
+    let options = std::iter::once(AGENT_DEFAULT.into()).chain(names).collect();
+    let selected = match chosen {
+        None => Some(0),
+        Some(ix) => ix.map(|i| i + 1),
+    };
+    let (list, f) = (models.clone(), h.on_model.clone());
+    // Index 0 is "Agent default".
+    let on_model: IndexHandler = Rc::new(move |ix, w, cx| f(ix.checked_sub(1).map(|i| list[i].clone()), w, cx));
+    let model_row = row("Default model", "", Some(select("settings-model", model_label, options, selected, Some(on_model), window)));
+
+    let names = levels.iter().map(|l| format::effort_label(l).into());
+    let options = std::iter::once(AGENT_DEFAULT.into()).chain(names).collect();
+    let selected = match thinking {
+        None => Some(0),
+        Some(t) => levels.iter().position(|l| l == t).map(|i| i + 1),
+    };
+    let (list, f) = (levels.clone(), h.on_thinking.clone());
+    let on_level: IndexHandler = Rc::new(move |ix, w, cx| f(ix.checked_sub(1).map(|i| list[i].clone()), w, cx));
+    let thinking_row = row("Default thinking", "", Some(select("settings-thinking", level_label, options, selected, Some(on_level), window)));
+    vec![model_row.into_any_element(), thinking_row.into_any_element()]
+}
+
+/// "Default permission mode": the catalog's entries; the default one is marked.
 fn mode_row(modes: &[CatalogEntry], chosen: Option<&str>, on_mode: LevelHandler, window: &Window) -> Div {
     let default_ix = modes.iter().position(|e| e.default).unwrap_or(0);
     let selected = chosen.and_then(|c| modes.iter().position(|e| e.id == c)).unwrap_or(default_ix);
@@ -455,33 +507,43 @@ fn mode_row(modes: &[CatalogEntry], chosen: Option<&str>, on_mode: LevelHandler,
     let ids: Vec<String> = modes.iter().map(|e| e.id.clone()).collect();
     let on_select: IndexHandler = Rc::new(move |ix, w, cx| on_mode(ids.get(ix).cloned(), w, cx));
     let control = select_plain("settings-mode", label, options, Some(selected), Some(on_select), window);
-    row("Permission mode", "", Some(control))
+    row("Default permission mode", "", Some(control))
 }
 
-/// One plugin setting: its label, whether it's set, a field, Save and (when set) Remove; under
-/// it, how the last save went (checking, rejected, "Save anyway") or how the value is doing.
-/// A switch is just its label and the switch.
+/// One plugin setting, by its kind.
 pub fn field_row(f: &FieldView, h: &SettingsHandlers, window: &Window) -> Div {
-    if let Some(on) = f.switch {
-        let (toggle_field, pid, key) = (h.on_toggle_field.clone(), f.plugin_id.clone(), f.key.clone());
-        let on_change: ToggleHandler = Rc::new(move |on, w, cx| toggle_field(pid.clone(), key.clone(), on, w, cx));
-        let id = SharedString::from(format!("switch-{}-{}", f.plugin_id, f.key));
-        return row(f.label.clone(), f.description.clone(), Some(toggle(id, on, on_change, window).into_any_element()));
+    let (pid, key) = (f.plugin_id.clone(), f.key.clone());
+    let id = |what: &str| SharedString::from(format!("{what}-{}-{}", f.plugin_id, f.key));
+    match &f.control {
+        FieldControl::Switch(on) => {
+            let toggle_field = h.on_toggle_field.clone();
+            let on_change: ToggleHandler = Rc::new(move |on, w, cx| toggle_field(pid.clone(), key.clone(), on, w, cx));
+            row(f.label.clone(), f.description.clone(), Some(toggle(id("switch"), *on, on_change, window).into_any_element()))
+        }
+        FieldControl::Model(choice) => model_field_row(f, choice, h, window),
+        FieldControl::Days(days) => {
+            let choose = h.on_choose_field.clone();
+            let on_pick: DaysHandler = Rc::new(move |days, w, cx| {
+                let value = days.map_or(DAYS_NEVER.to_string(), |d| d.to_string());
+                choose(pid.clone(), key.clone(), Some(value), w, cx)
+            });
+            row(f.label.clone(), f.description.clone(), Some(days_select(id("days"), *days, on_pick, window)))
+        }
+        FieldControl::Text(t) => text_field_row(f, t, h),
     }
-    if let Some(choice) = &f.model {
-        return model_field_row(f, choice, h, window);
-    }
-    let stored = match (f.secret, f.set) {
+}
+
+/// A typed plugin setting: whether it's set, a field, Save and (when set) Remove; under it, how
+/// the last save went (checking, rejected, "Save anyway") or how the value is doing.
+fn text_field_row(f: &FieldView, t: &TextField, h: &SettingsHandlers) -> Div {
+    let stored = match (t.secret, t.set) {
         (true, true) => "Saved in your Keychain",
-        (true, false) | (false, false) => "Not set",
+        (_, false) => "Not set",
         (false, true) => "Saved",
     };
-    let description: SharedString = if f.description.is_empty() {
-        stored.into()
-    } else {
-        format!("{} · {stored}", f.description).into()
-    };
-    let checking = f.check == FieldCheck::Checking;
+    let description: SharedString =
+        if f.description.is_empty() { stored.into() } else { format!("{} · {stored}", f.description).into() };
+    let checking = t.check == FieldCheck::Checking;
     let (save, clear, anyway) = (h.on_save_field.clone(), h.on_clear_field.clone(), h.on_save_anyway.clone());
     let id = |what: &str| SharedString::from(format!("{what}-{}-{}", f.plugin_id, f.key));
     let (pid, key) = (f.plugin_id.clone(), f.key.clone());
@@ -490,12 +552,13 @@ pub fn field_row(f: &FieldView, h: &SettingsHandlers, window: &Window) -> Div {
         .flex()
         .items_center()
         .gap_2()
-        .child(div().w(size::SETTINGS_SELECT_W).child(Input::new(&f.input).small()))
+        .child(div().w(size::SETTINGS_SELECT_W).child(Input::new(&t.input).small()))
         .child(
-            pill_button(id("save"), if checking { "Checking…" } else { "Save" }, !checking)
+            pill_button(id("save"), if checking { "Checking…" } else { "Save" }, false)
+                .when(checking, |b| b.opacity(0.6))
                 .when(!checking, |b| b.on_click(move |_, w, cx| save(pid.clone(), key.clone(), w, cx))),
         )
-        .when(f.set && !checking, |d| {
+        .when(t.set && !checking, |d| {
             d.child(pill_button(id("clear"), "Remove", false).on_click(move |_, w, cx| clear(pid2.clone(), key2.clone(), w, cx)))
         });
     let line = |icon: IconName, tone: Hsla, text: SharedString| {
@@ -508,7 +571,7 @@ pub fn field_row(f: &FieldView, h: &SettingsHandlers, window: &Window) -> Div {
             .child(Icon::new(icon).size(size::ICON_SM))
             .child(div().text_color(color::text_2()).child(text))
     };
-    let note: Option<AnyElement> = match &f.check {
+    let note: Option<AnyElement> = match &t.check {
         FieldCheck::Checking => Some(line(IconName::Loader, color::text_3(), "Checking it with the service…".into()).into_any_element()),
         FieldCheck::Invalid(m) => Some(line(IconName::CircleX, color::red(), format!("{m} It wasn't saved.").into()).into_any_element()),
         FieldCheck::Unverifiable(m) => Some(
@@ -516,7 +579,7 @@ pub fn field_row(f: &FieldView, h: &SettingsHandlers, window: &Window) -> Div {
                 .child(pill_button(id("anyway"), "Save anyway", false).on_click(move |_, w, cx| anyway(pid3.clone(), key3.clone(), w, cx)))
                 .into_any_element(),
         ),
-        FieldCheck::Saved | FieldCheck::Idle => f.status.as_ref().map(|(text, ok)| {
+        FieldCheck::Saved | FieldCheck::Idle => t.status.as_ref().map(|(text, ok)| {
             if *ok {
                 line(IconName::CircleCheck, color::green(), text.clone()).into_any_element()
             } else {
@@ -528,34 +591,33 @@ pub fn field_row(f: &FieldView, h: &SettingsHandlers, window: &Window) -> Div {
         .flex()
         .flex_col()
         .child(row(f.label.clone(), description, Some(control.into_any_element())))
-        .children(note.map(|n| div().pl_4().pb_3().child(n)))
+        .children(note.map(|n| div().pl_3().pb_2().child(n)))
 }
 
-const SAME_AS_AGENT: &str = "Same as agent";
+const THREAD_MODEL: &str = "Thread's model";
 
-/// A model setting: "Same as agent", then the agent's models.
+/// A model setting: the thread's own model, then the agent's models.
 fn model_field_row(f: &FieldView, choice: &ModelChoice, h: &SettingsHandlers, window: &Window) -> Div {
     let key = |m: &ModelInfo| format!("{}/{}", m.provider, m.id);
     let chosen = choice.chosen.as_ref().map(|c| choice.models.iter().position(|m| &key(m) == c));
     let label: SharedString = match (&choice.chosen, chosen) {
         (Some(_), Some(Some(ix))) => model_name(&choice.models[ix]).into(),
         (Some(c), _) => format::model_label(c.split_once('/').map_or(c.as_str(), |(_, id)| id), None).into(),
-        (None, _) => SAME_AS_AGENT.into(),
+        (None, _) => THREAD_MODEL.into(),
     };
     let selected = match chosen {
         None => Some(0),
         Some(ix) => ix.map(|i| i + 1),
     };
-    let options = std::iter::once(SAME_AS_AGENT.into()).chain(choice.models.iter().map(|m| model_name(m).into())).collect();
+    let options = std::iter::once(THREAD_MODEL.into()).chain(choice.models.iter().map(|m| model_name(m).into())).collect();
     let on_select: Option<IndexHandler> = (!choice.models.is_empty()).then(|| {
         let (values, f2, pid, k) = (choice.models.iter().map(key).collect::<Vec<_>>(), h.on_choose_field.clone(), f.plugin_id.clone(), f.key.clone());
-        // Index 0 is "Same as agent".
+        // Index 0 is the thread's model.
         Rc::new(move |ix: usize, w: &mut Window, cx: &mut App| f2(pid.clone(), k.clone(), ix.checked_sub(1).map(|i| values[i].clone()), w, cx))
             as IndexHandler
     });
-    // Ids are static strings; one model setting per page is all Space has.
-    let control = select("settings-plugin-model", label, options, selected, on_select, window);
-    row(f.label.clone(), f.description.clone(), Some(control))
+    let id = SharedString::from(format!("model-{}-{}", f.plugin_id, f.key));
+    row(f.label.clone(), f.description.clone(), Some(select(id, label, options, selected, on_select, window)))
 }
 
 /// A plugin: name, status and what it does; a switch for service plugins. One that waits for
@@ -607,8 +669,8 @@ fn approval_row(p: &PluginRow, approval: &PluginApproval, description: SharedStr
         .flex()
         .flex_col()
         .gap_1()
-        .px_4()
-        .pb_3()
+        .px_3()
+        .pb_2()
         .text_size(text::SM)
         .text_color(color::text_2())
         .children(approval.permissions.iter().cloned().map(permission))
@@ -625,71 +687,47 @@ fn approval_row(p: &PluginRow, approval: &PluginApproval, description: SharedStr
 pub fn permission_row(permission: NotificationPermission, h: &SettingsHandlers) -> Div {
     let status = |label: &'static str, c: Hsla| div().text_size(text::MD).text_color(c).child(label);
     let (desc, control): (&str, Option<AnyElement>) = match permission {
-        NotificationPermission::Checking => {
-            ("", Some(status("Checking…", color::text_3()).into_any_element()))
-        }
-        NotificationPermission::Allowed => {
-            ("", Some(status("Allowed", color::text_2()).into_any_element()))
-        }
+        NotificationPermission::Checking => ("", Some(status("Checking…", color::text_3()).into_any_element())),
+        NotificationPermission::Allowed => ("", Some(status("Allowed", color::text_2()).into_any_element())),
         NotificationPermission::Denied => {
             let f = h.on_open_system_settings.clone();
-            (
-                "Off in System Settings",
-                Some(
-                    pill_button("settings-open-system", "Open System Settings", false)
-                        .on_click(move |_, w, cx| f(w, cx))
-                        .into_any_element(),
-                ),
-            )
+            let button = pill_button("settings-open-system", "Open System Settings", false).on_click(move |_, w, cx| f(w, cx));
+            ("Off in System Settings", Some(button.into_any_element()))
         }
         NotificationPermission::NotAsked => {
             let f = h.on_allow.clone();
-            (
-                "",
-                Some(
-                    pill_button("settings-allow", "Allow…", false)
-                        .on_click(move |_, w, cx| f(w, cx))
-                        .into_any_element(),
-                ),
-            )
+            ("", Some(pill_button("settings-allow", "Allow…", false).on_click(move |_, w, cx| f(w, cx)).into_any_element()))
         }
         NotificationPermission::Unbundled => ("Unavailable in this build (launch it with just run)", None),
     };
     row("macOS permission", desc, control)
 }
 
-/// How many days done threads are kept: a short number field and "days".
-pub fn keep_done_row(input: &Entity<InputState>) -> Div {
-    let control = div()
-        .flex()
-        .items_center()
-        .gap_2()
-        .child(div().w(px(64.)).child(Input::new(input).small()))
-        .child(div().text_size(text::MD).text_color(color::text_2()).child("days"));
-    row(
-        "Keep done threads",
-        "Then deleted",
-        Some(control.into_any_element()),
-    )
+/// "Delete done threads after [30 days]".
+pub fn keep_done_row(days: Option<u32>, on_pick: DaysHandler, window: &Window) -> Div {
+    row("Delete done threads after", "", Some(days_select("settings-keep-done", days, on_pick, window)))
 }
 
-/// Which pane a two-finger swipe shows and hides.
+/// "7 days", "30 days", "90 days", "Never": how long something is kept (`None`: never).
+pub fn days_select(id: impl Into<ElementId>, days: Option<u32>, on_pick: DaysHandler, window: &Window) -> AnyElement {
+    let choices: Vec<Option<u32>> = DAYS.into_iter().map(Some).chain([None]).collect();
+    let name = |d: &Option<u32>| SharedString::from(d.map_or("Never".to_string(), |d| format!("{d} days")));
+    let options = choices.iter().map(name).collect();
+    let selected = choices.iter().position(|c| *c == days);
+    let on_select: IndexHandler = Rc::new(move |ix, w, cx| on_pick(choices[ix], w, cx));
+    select_plain(id, name(&days), options, selected, Some(on_select), window)
+}
+
+/// "Swipe with two fingers to show or hide [Right pane]".
 pub fn swipe_row(choice: usize, on_swipe: IndexHandler, window: &Window) -> Div {
     let label = SWIPE_CHOICES.get(choice).copied().unwrap_or(SWIPE_CHOICES[0]);
     let options = SWIPE_CHOICES.iter().map(|c| SharedString::from(*c)).collect();
-    let control = select("settings-swipe", label, options, Some(choice), Some(on_swipe), window);
-    row(
-        "Two-finger swipe",
-        "Left shows, right hides; reversed for the sidebar",
-        Some(control),
-    )
+    let control = select_plain("settings-swipe", label, options, Some(choice), Some(on_swipe), window);
+    row("Swipe with two fingers to show or hide", "", Some(control))
 }
 
-/// A titled card of rows, with an optional hint under the title.
-/// A section's rows in one card, under its hint when it has one (its name is the sidebar's and
-/// the title bar's).
-pub fn section(hint: Option<&'static str>, rows: Vec<AnyElement>) -> Div {
-    // Hairlines between rows.
+/// Rows in one card, with hairlines between them.
+pub fn card(rows: Vec<AnyElement>) -> Div {
     let rows = rows
         .into_iter()
         .enumerate()
@@ -697,21 +735,14 @@ pub fn section(hint: Option<&'static str>, rows: Vec<AnyElement>) -> Div {
     div()
         .flex()
         .flex_col()
-        .gap_3()
-        .when_some(hint, |d, hint| d.child(div().px_1().text_size(text::SM).text_color(color::text_3()).child(hint)))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .rounded(radius::CARD)
-                .bg(color::surface())
-                .border_1()
-                .border_color(color::border())
-                .children(rows),
-        )
+        .rounded(radius::XL)
+        .bg(color::surface())
+        .border_1()
+        .border_color(color::border())
+        .children(rows)
 }
 
-/// One setting: label and one-line description on the left, `control` on the right.
+/// One setting: label and an optional one-line description on the left, `control` on the right.
 pub fn row(label: impl Into<SharedString>, description: impl Into<SharedString>, control: Option<AnyElement>) -> Div {
     let description: SharedString = description.into();
     div()
@@ -719,40 +750,66 @@ pub fn row(label: impl Into<SharedString>, description: impl Into<SharedString>,
         .flex()
         .items_center()
         .gap_6()
-        .px_4()
-        .py_2p5()
+        .px_3()
+        .py_1p5()
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap_0p5()
                 .child(div().text_size(text::MD).child(label.into()))
                 .when(!description.is_empty(), |d| d.child(div().text_size(text::SM).text_color(color::text_2()).child(description))),
         )
         .children(control.map(|c| div().flex_none().flex().items_center().child(c)))
 }
 
-/// A dropdown showing `label`. `options[selected]` is checked in the menu; a separator follows
-/// the first option (the "default" entry). `on_select: None` disables it.
+/// A dropdown showing `label`, with a separator after the first option (the "default" entry).
+/// `options[selected]` is checked in the menu; `on_select: None` disables it.
 pub fn select(
-    id: &'static str,
+    id: impl Into<ElementId>,
     label: impl Into<SharedString>,
     options: Vec<SharedString>,
     selected: Option<usize>,
     on_select: Option<IndexHandler>,
     window: &Window,
 ) -> AnyElement {
+    dropdown(id, label.into(), options, selected, on_select, true, window)
+}
+
+/// A dropdown like [`select`], without the separator.
+pub fn select_plain(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    options: Vec<SharedString>,
+    selected: Option<usize>,
+    on_select: Option<IndexHandler>,
+    window: &Window,
+) -> AnyElement {
+    dropdown(id, label.into(), options, selected, on_select, false, window)
+}
+
+fn dropdown(
+    id: impl Into<ElementId>,
+    label: SharedString,
+    options: Vec<SharedString>,
+    selected: Option<usize>,
+    on_select: Option<IndexHandler>,
+    separator: bool,
+    window: &Window,
+) -> AnyElement {
     let enabled = on_select.is_some();
+    // As tall as the menu's items, its text their size and lined up with theirs, so trigger and
+    // menu read as one.
     let trigger = Button::new(id)
         .outline()
         .small()
+        .h(MENU_ITEM_H)
+        .px(MENU_TEXT_INSET)
         // Menus hand focus back to their trigger on close; only show a ring for keyboard users.
         .focus_ring(window.last_input_was_keyboard())
         .w(size::SETTINGS_SELECT_W)
         .rounded(radius::MD)
-        .text_size(text::MD)
         .disabled(!enabled)
         .child(
             div()
@@ -761,13 +818,7 @@ pub fn select(
                 .items_center()
                 .justify_between()
                 .gap_2()
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(if enabled { color::text() } else { color::text_2() })
-                        .child(label.into()),
-                )
+                .child(div().min_w_0().truncate().text_color(if enabled { color::text() } else { color::text_2() }).child(label))
                 .child(Icon::new(IconName::ChevronDown).size(size::ICON_SM).text_color(color::text_3())),
         );
     let Some(on_select) = on_select else {
@@ -780,7 +831,7 @@ pub fn select(
                 let f = on_select.clone();
                 let item = PopupMenuItem::new(label.clone()).checked(selected == Some(ix));
                 menu = menu.item(item.on_click(move |_, w, cx| f(ix, w, cx)));
-                if ix == 0 && options.len() > 1 {
+                if separator && ix == 0 && options.len() > 1 {
                     menu = menu.separator();
                 }
             }
@@ -789,52 +840,11 @@ pub fn select(
         .into_any_element()
 }
 
-/// A dropdown like [`select`], without the separator after the first option.
-pub fn select_plain(
-    id: &'static str,
-    label: impl Into<SharedString>,
-    options: Vec<SharedString>,
-    selected: Option<usize>,
-    on_select: Option<IndexHandler>,
-    window: &Window,
-) -> AnyElement {
-    let Some(on_select) = on_select else {
-        return select(id, label, options, selected, None, window);
-    };
-    Button::new(id)
-        .outline()
-        .small()
-        .focus_ring(window.last_input_was_keyboard())
-        .w(size::SETTINGS_SELECT_W)
-        .rounded(radius::MD)
-        .text_size(text::MD)
-        .child(select_label(label.into(), true))
-        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-            let mut menu = menu.min_w(size::SETTINGS_SELECT_W).max_h(px(420.)).scrollable(true).check_side(gpui::component::Side::Right);
-            for (ix, label) in options.iter().enumerate() {
-                let f = on_select.clone();
-                menu = menu.item(PopupMenuItem::new(label.clone()).checked(selected == Some(ix)).on_click(move |_, w, cx| f(ix, w, cx)));
-            }
-            menu
-        })
-        .into_any_element()
-}
-
-fn select_label(label: SharedString, enabled: bool) -> Div {
-    div()
-        .w_full()
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap_2()
-        .child(div().min_w_0().truncate().text_color(if enabled { color::text() } else { color::text_2() }).child(label))
-        .child(Icon::new(IconName::ChevronDown).size(size::ICON_SM).text_color(color::text_3()))
-}
-
-/// An on/off switch.
+/// An on/off switch, gpui-component's small one.
 pub fn toggle(id: impl Into<ElementId>, checked: bool, on_change: ToggleHandler, window: &Window) -> Switch {
     Switch::new(id)
         .checked(checked)
+        .small()
         .focus_ring(window.last_input_was_keyboard())
         .on_click(move |on, w, cx| on_change(*on, w, cx))
 }
@@ -847,15 +857,16 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
         let status = super::composer::fixtures::status(0);
         Catalog::Ready { models: status.available_models.unwrap(), levels: status.thinking_levels.unwrap() }
     }
-    fn page(name: &'static str, f: fn() -> SettingsPage) -> Example {
-        Example::new(name, move |_, _| f().into_any_element()).width(size::CONTENT_MAX_W)
+    fn models() -> Vec<ModelInfo> {
+        let Catalog::Ready { models, .. } = ready() else { unreachable!() };
+        models
+    }
+    fn page(name: &'static str, f: impl Fn(&mut Window, &mut App) -> SettingsPage + 'static) -> Example {
+        Example::new(name, move |w, cx| f(w, cx).into_any_element()).width(size::CONTENT_MAX_W)
     }
     fn permission(name: &'static str, p: NotificationPermission) -> Example {
-        Example::new(name, move |_, _| {
-            section(None, vec![permission_row(p, &SettingsHandlers::default()).into_any_element()])
-                .into_any_element()
-        })
-        .width(size::CONTENT_MAX_W)
+        Example::new(name, move |_, _| card(vec![permission_row(p, &SettingsHandlers::default()).into_any_element()]).into_any_element())
+            .width(size::CONTENT_MAX_W)
     }
     fn sonnet() -> Option<(String, String)> {
         Some(("claude-cli".into(), "claude-sonnet-5-5".into()))
@@ -863,179 +874,119 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     fn modes() -> Vec<CatalogEntry> {
         super::composer::fixtures::modes("guarded", true).entries
     }
-    /// A guard plugin's section, its key field over a persistent input.
-    fn key_section(name: &'static str, set: bool, check: fn() -> FieldCheck, status: Option<(&'static str, bool)>) -> Example {
+    fn field(plugin: &str, key: &str, label: &str, description: &str, page: SettingsTab, control: FieldControl) -> FieldView {
+        FieldView {
+            plugin_id: plugin.into(),
+            key: key.into(),
+            label: label.to_string().into(),
+            description: description.to_string().into(),
+            page,
+            control,
+        }
+    }
+    /// The bundled plugins' fields, as they declare them.
+    fn bundled() -> Vec<FieldView> {
+        let notifications = SettingsTab::Notifications;
+        vec![
+            field("alerts", "notify", "Notify when an agent finishes or needs you", "When you're not looking at the thread", notifications, FieldControl::Switch(true)),
+            field("alerts", "sound", "Play a sound", "", notifications, FieldControl::Switch(false)),
+            field("titles", "model", "Model for titles", "", SettingsTab::Threads, FieldControl::Model(ModelChoice { chosen: None, models: models() })),
+            field("trajectory", "keep_days", "Delete traces after", "", SettingsTab::Developer, FieldControl::Days(None)),
+            field("trajectory", "chunk_timing", "Record streamed chunk timing", "For each request's timing graph", SettingsTab::Developer, FieldControl::Switch(true)),
+        ]
+    }
+    /// A guard's API key (no page of its own, so under its row on Plugins), over a persistent input.
+    fn key_field(name: &str, set: bool, check: FieldCheck, status: Option<(&'static str, bool)>, window: &mut Window, cx: &mut App) -> FieldView {
+        let input = window.use_keyed_state(SharedString::from(format!("p-key-{name}")), cx, |window, cx| {
+            InputState::new(window, cx).masked(true).placeholder(if set { "Enter a new key to replace it" } else { "sk-…" })
+        });
+        let text = TextField { secret: true, set, input, check, status: status.map(|(t, ok)| (t.into(), ok)) };
+        field("guard", "api_key", "API key", "For the service that checks each operation in Guarded mode.", SettingsTab::Plugins, FieldControl::Text(text))
+    }
+    fn key_example(name: &'static str, set: bool, check: fn() -> FieldCheck, status: Option<(&'static str, bool)>) -> Example {
         Example::new(name, move |window, cx| {
-            let input = window.use_keyed_state(SharedString::from(format!("p-key-{name}")), cx, |window, cx| {
-                InputState::new(window, cx).masked(true).placeholder(if set { "Enter a new key to replace it" } else { "sk-…" })
-            });
-            let field = FieldView {
-                plugin_id: "guard".into(),
-                key: "api_key".into(),
-                label: "API key".into(),
-                description: "For the service that checks each operation in Guarded mode.".into(),
-                secret: true,
-                switch: None,
-                model: None,
-                set,
-                input,
-                check: check(),
-                status: status.map(|(t, ok)| (t.into(), ok)),
-            };
-            section(None, vec![field_row(&field, &SettingsHandlers::default(), window).into_any_element()])
-                .into_any_element()
+            let f = key_field(name, set, check(), status, window, cx);
+            card(vec![field_row(&f, &SettingsHandlers::default(), window).into_any_element()]).into_any_element()
         })
         .width(size::CONTENT_MAX_W)
     }
+    fn plugin(id: &str, name: &str, description: &str, agent: bool, enabled: bool, status: &str) -> PluginRow {
+        PluginRow {
+            id: id.into(),
+            name: name.to_string().into(),
+            description: description.to_string().into(),
+            agent,
+            required: false,
+            enabled,
+            status: status.to_string().into(),
+            approval: None,
+        }
+    }
     fn plugins() -> Vec<PluginRow> {
+        let asks = |id: &str, name: &str, status: &str, denied: bool| PluginRow {
+            description: "From ~/.space/plugins.".into(),
+            approval: Some(PluginApproval {
+                permissions: vec!["Is told when the agent finishes".into(), "Shows notifications".into(), "Reads what you and the agent write".into()],
+                denied,
+            }),
+            ..plugin(id, name, "", false, true, status)
+        };
         vec![
-            PluginRow {
-                id: "claude-agent".into(),
-                name: "Claude Agent".into(),
-                description: "Coding agent on Claude Code (the Claude Agent SDK), using your Claude subscription.".into(),
-                agent: true,
-                required: false,
-                enabled: true,
-                status: "Running".into(),
-                approval: None,
-            },
+            plugin("claude-agent", "Claude Agent", "Coding agent on Claude Code (the Claude Agent SDK), using your Claude subscription.", true, true, "Running"),
+            plugin("guard", "Guard", "Checks each operation in Guarded mode.", false, true, "Running"),
+            plugin("audit", "Audit log", "Writes every tool call to a file.", false, false, "Off"),
+            asks("notes", "Notes", "Needs your approval", false),
+            asks("digest", "Digest", "Not approved", true),
         ]
     }
 
     vec![
-        ComponentPreview::new(Area::Settings, "Settings page", "⌘, — defaults for new threads, plugin settings, notifications.")
+        ComponentPreview::new(Area::Settings, "Settings page", "⌘, — one page per subject; plugin settings on the page for what they do.")
             .stacked()
             .examples([
-                page("models loaded, choice set", || {
-                    SettingsPage::new(ready())
-                        .model(sonnet())
-                        .thinking(Some("high".into()))
-                        .permission(NotificationPermission::Allowed)
-                        .modes(modes(), Some("trusted".into()))
-                        .plugins(plugins())
+                page("general", |_, _| {
+                    SettingsPage::new(ready()).model(sonnet()).thinking(Some("high".into())).modes(modes(), Some("trusted".into())).swipe(0)
                 }),
-                page("agent defaults", || SettingsPage::new(ready()).permission(NotificationPermission::Allowed)),
-                page("loading models", || {
-                    SettingsPage::new(Catalog::Loading).model(sonnet()).permission(NotificationPermission::Checking)
+                page("general, agent defaults", |_, _| SettingsPage::new(ready())),
+                page("general, loading models", |_, _| SettingsPage::new(Catalog::Loading).model(sonnet())),
+                page("general, agent unavailable", |_, _| SettingsPage::new(Catalog::Unavailable)),
+                page("general, saved model no longer offered", |_, _| {
+                    SettingsPage::new(ready()).model(Some(("claude-cli".into(), "claude-opus-4-1".into())))
                 }),
-                page("agent unavailable, notifications denied", || {
-                    SettingsPage::new(Catalog::Unavailable).permission(NotificationPermission::Denied)
+                page("threads", |_, _| SettingsPage::new(ready()).tab(SettingsTab::Threads).keep_done(Some(30)).fields(bundled())),
+                page("notifications", |_, _| {
+                    SettingsPage::new(ready()).tab(SettingsTab::Notifications).permission(NotificationPermission::Allowed).fields(bundled())
                 }),
-                page("saved model no longer offered", || {
-                    SettingsPage::new(ready())
-                        .model(Some(("claude-cli".into(), "claude-opus-4-1".into())))
-                        .permission(NotificationPermission::NotAsked)
+                page("plugins", |window, cx| {
+                    let mut fields = bundled();
+                    fields.push(key_field("page", true, FieldCheck::Saved, Some(("Working.", true)), window, cx));
+                    SettingsPage::new(ready()).tab(SettingsTab::Plugins).plugins(plugins()).fields(fields)
+                }),
+                page("developer", |_, _| SettingsPage::new(ready()).tab(SettingsTab::Developer).fields(bundled())),
+                page("about", |_, _| {
+                    SettingsPage::new(ready()).tab(SettingsTab::About).build("0.1.6 +2 · a95ab81 · edited", Some("Today at 14:02".into()))
                 }),
             ]),
-        ComponentPreview::new(Area::Settings, "Plugin settings", "Fields a plugin declares; secrets are masked.")
+        ComponentPreview::new(Area::Settings, "Typed plugin setting", "A value the plugin checks before it's saved; secrets are masked.")
             .stacked()
             .examples([
-                Example::new("switches (alerts)", |window, cx| {
-                    let input = window.use_keyed_state("alerts-unused", cx, InputState::new);
-                    let switch = |key: &str, label: &'static str, description: &'static str, on: bool| FieldView {
-                        plugin_id: "alerts".into(),
-                        key: key.into(),
-                        label: label.into(),
-                        description: description.into(),
-                        secret: false,
-                        switch: Some(on),
-                        model: None,
-                        set: !on,
-                        input: input.clone(),
-                        check: FieldCheck::Idle,
-                        status: None,
-                    };
-                    let fields = [
-                        switch("notify", "Notify when an agent finishes", "Shows a notification when you're not looking at the thread.", true),
-                        switch("sound", "Play a sound", "When an agent finishes.", false),
-                    ];
-                    let h = SettingsHandlers::default();
-                    section(None, fields.iter().map(|f| field_row(f, &h, window).into_any_element()).collect())
-                        .into_any_element()
-                })
-                .width(size::CONTENT_MAX_W),
-                Example::new("model picker (titles)", |window, cx| {
-                    let input = window.use_keyed_state("titles-unused", cx, InputState::new);
-                    let Catalog::Ready { models, .. } = ready() else { unreachable!() };
-                    let field = |chosen: Option<&str>| FieldView {
-                        plugin_id: "titles".into(),
-                        key: "model".into(),
-                        label: "Title model".into(),
-                        description: "Names new threads after their first message.".into(),
-                        secret: false,
-                        switch: None,
-                        model: Some(ModelChoice { chosen: chosen.map(Into::into), models: models.clone() }),
-                        set: chosen.is_some(),
-                        input: input.clone(),
-                        check: FieldCheck::Idle,
-                        status: None,
-                    };
-                    let h = SettingsHandlers::default();
-                    let haiku = models.iter().find(|m| m.id.contains("haiku")).map(|m| format!("{}/{}", m.provider, m.id));
-                    let rows = [field(None), field(haiku.as_deref())].iter().map(|f| field_row(f, &h, window).into_any_element()).collect();
-                    section(None, rows).into_any_element()
-                })
-                .width(size::CONTENT_MAX_W),
-                key_section("key not set", false, || FieldCheck::Idle, None),
-                key_section("checking a new key", false, || FieldCheck::Checking, None),
-                key_section("rejected", false, || FieldCheck::Invalid("The service rejected this key.".into()), None),
-                key_section(
+                key_example("key not set", false, || FieldCheck::Idle, None),
+                key_example("checking a new key", false, || FieldCheck::Checking, None),
+                key_example("rejected", false, || FieldCheck::Invalid("The service rejected this key.".into()), None),
+                key_example(
                     "couldn't check (save anyway)",
                     false,
                     || FieldCheck::Unverifiable("Couldn't reach the service to check it (can't connect; offline?).".into()),
                     None,
                 ),
-                key_section("saved and working", true, || FieldCheck::Saved, Some(("Working.", true))),
-                key_section(
+                key_example("saved and working", true, || FieldCheck::Saved, Some(("Working.", true))),
+                key_example(
                     "saved, stopped working",
                     true,
                     || FieldCheck::Idle,
                     Some(("The service rejected your key, so actions are paused. Last tried 2m 14s ago · next try in 2m 46s", false)),
                 ),
             ]),
-        ComponentPreview::new(
-            Area::Settings,
-            "Plugins",
-            "Service plugins can be turned off; agents and required guards can't. Plugins from your home or project \
-             folder wait for your approval.",
-        )
-            .stacked()
-            .examples([Example::new("plugins", |window, _| {
-                let mut rows = plugins();
-                rows.push(PluginRow {
-                    id: "audit".into(),
-                    name: "Audit log".into(),
-                    description: "Writes every tool call to a file.".into(),
-                    agent: false,
-                    required: false,
-                    enabled: false,
-                    status: "Off".into(),
-                    approval: None,
-                });
-                let asks = |id: &str, name: &str, status: &str, denied: bool| PluginRow {
-                    id: id.into(),
-                    name: name.to_string().into(),
-                    description: "From ~/.space/plugins.".into(),
-                    agent: false,
-                    required: false,
-                    enabled: true,
-                    status: status.to_string().into(),
-                    approval: Some(PluginApproval {
-                        permissions: vec![
-                            "Is told when the agent finishes".into(),
-                            "Shows notifications".into(),
-                            "Reads what you and the agent write".into(),
-                        ],
-                        denied,
-                    }),
-                };
-                rows.push(asks("alerts", "Alerts", "Needs your approval", false));
-                rows.push(asks("titles", "Titles", "Not approved", true));
-                let h = SettingsHandlers::default();
-                let rows = rows.iter().map(|p| plugin_row(p, &h, window).into_any_element()).collect();
-                section(None, rows).into_any_element()
-            })
-            .width(size::CONTENT_MAX_W)]),
         ComponentPreview::new(Area::Settings, "Permission row", "macOS notification permission, per state.")
             .stacked()
             .examples([
@@ -1046,4 +997,24 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 permission("checking", NotificationPermission::Checking),
             ]),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SettingPage, SettingsTab};
+
+    #[test]
+    fn pages_with_nothing_on_them_arent_listed() {
+        use SettingsTab::*;
+        assert_eq!(SettingsTab::all(false, false, []), [General, Notifications, About]);
+        assert_eq!(SettingsTab::all(true, true, []), [General, Threads, Notifications, Plugins, About]);
+        // Plugin fields bring their page, in the pages' order.
+        assert_eq!(SettingsTab::all(false, true, [Developer, Threads, Notifications]), [General, Threads, Notifications, Plugins, Developer, About]);
+    }
+
+    #[test]
+    fn plugin_pages_map_onto_tabs() {
+        assert_eq!(SettingsTab::from(SettingPage::Developer), SettingsTab::Developer);
+        assert_eq!(SettingsTab::from(SettingPage::default()), SettingsTab::Plugins);
+    }
 }

@@ -8,13 +8,13 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use space_core::{Approval, PluginSource, PluginStatus, grants};
 use gpui::component::input::InputState;
-use space_core::protocol::service::SettingKind;
+use space_core::protocol::service::{SettingKind, round_days};
 use space_ui::components::model_picker::PickerPane;
 use space_ui::components::composer::{
     Composer, ComposerBlocker, ComposerControls, ComposerHandlers, ComposerMenu, FolderPage, Handler, ModeChoice,
 };
 use space_ui::components::settings::{
-    Catalog, FieldView, ModelChoice, PluginApproval, PluginRow, PluginSettingsView, SettingsHandlers, SettingsPage,
+    Catalog, FieldControl, FieldView, ModelChoice, PluginApproval, PluginRow, SettingsHandlers, SettingsPage, TextField,
 };
 use space_ui::components::follow_scroll::FollowScrollArea;
 use space_ui::components::right_pane::PaneView;
@@ -409,7 +409,7 @@ fn queued_pic(p: &crate::images::Prepared) -> Pic {
     Pic { src: Arc::new(Image::from_bytes(p.gpui_format(), p.bytes.to_vec())).into(), width: p.width, height: p.height }
 }
 
-/// The sidebar's box: Settings' sections while its page is open, else what the activity bar
+/// The sidebar's box: Settings' pages while it's open, else what the activity bar
 /// picked: the threads (with a new one), or for views still to come, just their header.
 fn sidebar(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> impl IntoElement {
     if app.show_settings {
@@ -422,7 +422,7 @@ fn sidebar(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> impl IntoElement {
                 let selected = tab == current;
                 ThreadRow::new(("settings-tab", ix), tab.label())
                     .selected(selected)
-                    .on_click(cx.listener(move |this, _, _, cx| this.pick_settings_tab(tab.clone(), cx)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.pick_settings_tab(tab, cx)))
                     .into_any_element()
             })
             .collect();
@@ -994,9 +994,8 @@ fn trajectory_view(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> Option<AnyElem
 
 /// The Settings page, centered in a scrolling column like the transcript.
 fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> AnyElement {
-    let plugin_sections = plugin_settings(app, window, cx);
+    let fields = plugin_fields(app, window, cx);
     let plugin_rows = plugin_rows(app);
-    let keep_done = app.saving_threads().then(|| app.keep_done_input(window, cx));
     let app = &*app;
     let catalog = match &app.agent_models {
         Some(models) => Catalog::Ready { models: models.clone(), levels: app.agent_levels.clone().unwrap_or_default() },
@@ -1075,16 +1074,22 @@ fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>)
                 let _ = this.update(cx, |this, cx| this.set_swipe_pane(pane, cx));
             })
         },
+        on_keep_done: {
+            let this = cx.entity().downgrade();
+            Rc::new(move |days, _, cx| {
+                let _ = this.update(cx, |this, cx| this.set_keep_done_days(days, cx));
+            })
+        },
     };
     let s = &app.settings.settings;
     let page = SettingsPage::new(catalog)
-        .keep_done(keep_done)
+        .when(app.saving_threads(), |p| p.keep_done(s.threads.keep_done()))
         .swipe(s.trackpad.swipe.index())
         .model(s.new_threads.model.clone().map(|m| (m.provider, m.id)))
         .thinking(s.new_threads.thinking_level.clone())
         .permission(app.permission)
         .modes(app.permission_modes.clone(), s.new_threads.permission_mode.clone())
-        .plugin_settings(plugin_sections)
+        .fields(fields)
         .plugins(plugin_rows)
         .build(crate::build_info::get().version.clone(), crate::build_info::get().built.clone())
         .tab(app.current_settings_tab())
@@ -1105,53 +1110,55 @@ fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>)
         .into_any_element()
 }
 
-/// Settings sections for service plugins that declare settings, with their fields' inputs.
-fn plugin_settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> Vec<PluginSettingsView> {
-    let mut sections = Vec::new();
-    for (plugin_id, states) in app.plugin_settings.clone() {
-        if states.is_empty() || app.host.is_disabled(&plugin_id) {
-            continue;
+/// The fields of every plugin with settings that's on, each plugin's together, with the inputs
+/// of typed ones.
+fn plugin_fields(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>) -> Vec<FieldView> {
+    let shown: Vec<(String, Vec<space_core::SettingState>)> =
+        app.shown_plugin_settings().map(|(id, states)| (id.clone(), states.clone())).collect();
+    let mut fields = Vec::new();
+    for (plugin_id, states) in shown {
+        for st in states {
+            let value = st.value.as_deref().or(st.field.default.as_deref());
+            let control = match st.field.kind {
+                SettingKind::Switch => FieldControl::Switch(value == Some("true")),
+                SettingKind::Model => {
+                    FieldControl::Model(ModelChoice { chosen: st.value.clone(), models: app.agent_models.clone().unwrap_or_default() })
+                }
+                SettingKind::Days => FieldControl::Days(value.and_then(|v| v.trim().parse().ok()).and_then(round_days)),
+                SettingKind::Text | SettingKind::Secret => {
+                    let secret = st.field.kind == SettingKind::Secret;
+                    let placeholder = match (secret, st.set) {
+                        (true, true) => "Enter a new key to replace it".to_string(),
+                        _ => st.field.placeholder.clone().unwrap_or_default(),
+                    };
+                    let (input, shown) = app
+                        .setting_inputs
+                        .entry((plugin_id.clone(), st.field.key.clone()))
+                        .or_insert_with(|| (cx.new(|cx| InputState::new(window, cx).masked(secret)), None));
+                    if shown.as_deref() != Some(placeholder.as_str()) {
+                        input.update(cx, |s, cx| s.set_placeholder(placeholder.clone(), window, cx));
+                        *shown = Some(placeholder);
+                    }
+                    FieldControl::Text(TextField {
+                        secret,
+                        set: st.set,
+                        input: input.clone(),
+                        check: app.field_checks.get(&(plugin_id.clone(), st.field.key.clone())).cloned().unwrap_or_default(),
+                        status: st.set.then(|| app.plugin_health(&plugin_id)).flatten(),
+                    })
+                }
+            };
+            fields.push(FieldView {
+                plugin_id: plugin_id.clone(),
+                key: st.field.key.clone(),
+                label: st.field.label.clone().into(),
+                description: st.field.description.clone().into(),
+                page: st.field.page.into(),
+                control,
+            });
         }
-        let title = app.host.plugin(&plugin_id).map_or_else(|| plugin_id.clone(), |p| p.manifest.name);
-        let fields = states
-            .into_iter()
-            .map(|st| {
-                let secret = st.field.kind == SettingKind::Secret;
-                let switch = (st.field.kind == SettingKind::Switch)
-                    .then(|| st.value.as_deref().or(st.field.default.as_deref()) == Some("true"));
-                let model = (st.field.kind == SettingKind::Model)
-                    .then(|| ModelChoice { chosen: st.value.clone(), models: app.agent_models.clone().unwrap_or_default() });
-                let placeholder = st.field.placeholder.clone().unwrap_or_default();
-                let placeholder =
-                    if st.set && secret { "Enter a new key to replace it".to_string() } else { placeholder };
-                let (input, shown) = app
-                    .setting_inputs
-                    .entry((plugin_id.clone(), st.field.key.clone()))
-                    .or_insert_with(|| (cx.new(|cx| InputState::new(window, cx).masked(secret)), None));
-                if shown.as_deref() != Some(placeholder.as_str()) {
-                    input.update(cx, |s, cx| s.set_placeholder(placeholder.clone(), window, cx));
-                    *shown = Some(placeholder);
-                }
-                let input = input.clone();
-                let check = app.field_checks.get(&(plugin_id.clone(), st.field.key.clone())).cloned().unwrap_or_default();
-                FieldView {
-                    plugin_id: plugin_id.clone(),
-                    key: st.field.key.clone(),
-                    label: st.field.label.clone().into(),
-                    description: st.field.description.clone().into(),
-                    secret,
-                    switch,
-                    model,
-                    set: st.set,
-                    input,
-                    check,
-                    status: st.set.then(|| app.plugin_health(&plugin_id)).flatten(),
-                }
-            })
-            .collect();
-        sections.push(PluginSettingsView { title: title.into(), fields });
     }
-    sections
+    fields
 }
 
 /// Every plugin, with what it's doing; service plugins can be turned off.

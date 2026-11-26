@@ -162,7 +162,7 @@ impl Host {
                             .map_err(|e| failed(anyhow!(e)))?
                             .map_err(failed)?;
                     }
-                    SettingKind::Text | SettingKind::Switch | SettingKind::Model => {
+                    SettingKind::Text | SettingKind::Switch | SettingKind::Model | SettingKind::Days => {
                         let mut text = inner.text_settings.lock().unwrap();
                         let map = text.entry(plugin_id.clone()).or_default();
                         match value {
@@ -491,6 +491,7 @@ impl HostInner {
         for field in &service.fields {
             let value = match field.kind {
                 SettingKind::Text | SettingKind::Switch | SettingKind::Model => text.get(&field.key).cloned(),
+                SettingKind::Days => text.get(&field.key).map(|v| svc::days_value(v)),
                 SettingKind::Secret => {
                     let (secrets, id, key) = (self.options.secrets.clone(), service.plugin.id().to_string(), field.key.clone());
                     match tokio::task::spawn_blocking(move || secrets.get(&id, &key)).await {
@@ -518,7 +519,9 @@ impl HostInner {
             .iter()
             .map(|field| {
                 let (set, value) = match field.kind {
-                    SettingKind::Text | SettingKind::Switch | SettingKind::Model => (text.contains_key(&field.key), text.get(&field.key).cloned()),
+                    SettingKind::Text | SettingKind::Switch | SettingKind::Model | SettingKind::Days => {
+                        (text.contains_key(&field.key), text.get(&field.key).cloned())
+                    }
                     SettingKind::Secret => {
                         let set = self.options.secrets.get(service.plugin.id(), &field.key).ok().flatten().is_some();
                         (set, None)

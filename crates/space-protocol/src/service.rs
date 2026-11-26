@@ -126,6 +126,55 @@ pub struct SettingField {
     /// The value while the setting isn't set (a switch: `true` or `false`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+    /// The Settings page the field goes on: the one for what it's about, not one per plugin.
+    /// Absent, or a page this Space doesn't know: Plugins, under the plugin's row.
+    #[serde(default, skip_serializing_if = "SettingPage::is_plugins")]
+    pub page: SettingPage,
+}
+
+/// Where a setting goes in Settings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SettingPage {
+    /// Defaults for new threads, input.
+    General,
+    /// Keeping, naming and deleting threads.
+    Threads,
+    /// Being told when something happens.
+    Notifications,
+    /// For working on Space or a plugin (traces and the like).
+    Developer,
+    /// Under the plugin's row in the list of plugins: settings about the plugin itself.
+    #[default]
+    #[serde(other)]
+    Plugins,
+}
+
+impl SettingPage {
+    pub fn is_plugins(&self) -> bool {
+        *self == SettingPage::Plugins
+    }
+}
+
+/// The choices of a [`SettingKind::Days`] setting, in days; then Never.
+pub const DAYS: [u32; 3] = [7, 30, 90];
+
+/// A [`SettingKind::Days`] setting's value for "Never".
+pub const DAYS_NEVER: &str = "never";
+
+/// `days` as one of [`DAYS`], `None` for never: a number between them goes up to the next (so
+/// nothing is deleted sooner than asked); past the last, or 0, is never.
+pub fn round_days(days: u64) -> Option<u32> {
+    DAYS.into_iter().find(|d| days > 0 && days <= u64::from(*d))
+}
+
+/// A [`SettingKind::Days`] value as stored ("45", "never", anything) as one of the choices:
+/// "7", "30", "90" or "never". What isn't a number of days is never.
+pub fn days_value(value: &str) -> String {
+    match value.trim().parse().ok().and_then(round_days) {
+        Some(d) => d.to_string(),
+        None => DAYS_NEVER.to_string(),
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -138,9 +187,13 @@ pub enum SettingKind {
     Secret,
     /// On or off (`true` / `false`), stored in the settings file.
     Switch,
-    /// One of the agent's models (`<provider>/<model id>`), or unset ("Same as agent"); stored
-    /// in the settings file.
+    /// One of the agent's models (`<provider>/<model id>`), or unset (the thread's model);
+    /// stored in the settings file.
     Model,
+    /// How long to keep something, picked from a menu: `"7"`, `"30"` or `"90"` days, or
+    /// [`DAYS_NEVER`]; stored in the settings file. The plugin is told one of those (a number
+    /// saved some other way goes up to the next, [`days_value`]); unset is `default`, or never.
+    Days,
 }
 
 /// `settings/schema` result.
@@ -504,7 +557,10 @@ mod tests {
         let e: CatalogEntry = serde_json::from_value(serde_json::json!({"id": "a", "name": "A"})).unwrap();
         assert!(e.ready && !e.default && e.blocker.is_none());
         let f: SettingField = serde_json::from_value(serde_json::json!({"key": "k", "label": "K", "kind": "secret"})).unwrap();
-        assert_eq!(f.kind, SettingKind::Secret);
+        assert_eq!((f.kind, f.page), (SettingKind::Secret, SettingPage::Plugins));
+        assert!(!serde_json::to_value(&f).unwrap().as_object().unwrap().contains_key("page"));
+        let page = |p: &str| serde_json::from_value::<SettingField>(serde_json::json!({"key": "k", "label": "K", "page": p})).unwrap().page;
+        assert_eq!((page("developer"), page("someday")), (SettingPage::Developer, SettingPage::Plugins));
         assert_eq!(
             serde_json::to_value(HookDecision::unavailable("down")).unwrap(),
             serde_json::json!({"decision": "unavailable", "reason": "down"})
@@ -523,6 +579,13 @@ mod tests {
             serde_json::to_value(SettingVerdict::unverifiable("offline")).unwrap(),
             serde_json::json!({"status": "unverifiable", "message": "offline"})
         );
+    }
+
+    #[test]
+    fn days_round_up_to_a_choice() {
+        assert_eq!([1, 7, 8, 45, 90, 91, 0].map(round_days), [Some(7), Some(7), Some(30), Some(90), Some(90), None, None]);
+        let values = ["30", " 45 ", "never", "soon", "", "0", "400"].map(days_value);
+        assert_eq!(values, ["30", "90", "never", "never", "never", "never", "never"]);
     }
 
     #[test]

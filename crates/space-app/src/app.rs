@@ -461,8 +461,6 @@ pub struct SpaceApp {
     pub(crate) usage_open: Option<String>,
     /// Draft images are told apart by this (they're prepared in the background).
     pub(crate) next_image_id: u64,
-    /// Settings: the days done threads are kept (made when the page is first shown).
-    pub(crate) keep_done_input: Option<Entity<gpui::component::input::InputState>>,
     /// Find in thread (⌘F), made when first opened.
     pub(crate) find: Option<crate::find::Find>,
     /// The shown thread's replies' text views (see [`crate::find`]).
@@ -757,7 +755,6 @@ impl SpaceApp {
             cmd_press: 0,
             cmd_digits: String::new(),
             cmd_other: false,
-            keep_done_input: None,
             find: None,
             replies: Default::default(),
             settings,
@@ -1298,7 +1295,10 @@ impl SpaceApp {
     pub(crate) fn blocker_action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) {
         let (verb, arg) = action.split_once(':').unwrap_or((action, ""));
         match verb {
-            "open-settings" => self.open_settings(window, cx),
+            "open-settings" => {
+                self.settings_tab = self.settings_tab_for(arg);
+                self.open_settings(window, cx);
+            }
             "open-url" if arg.starts_with("https://") => open_url(arg.to_string()),
             "retry" => {
                 let (host, id) = (self.host.clone(), arg.to_string());

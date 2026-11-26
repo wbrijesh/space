@@ -88,8 +88,9 @@ impl Plugin for Alerts {
             label: label.into(),
             description: description.into(),
             kind: SettingKind::Switch,
-            placeholder: None,
             default: Some("true".into()),
+            page: SettingPage::Notifications,
+            ..Default::default()
         };
         SettingsSchema {
             fields: vec![

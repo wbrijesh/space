@@ -25,7 +25,7 @@ cask clears macOS's download mark so it opens normally.
 | **While the agent works** | ⏎ queues a message for when it's done · ⌘⏎ sends it into the running turn, after the current step |
 | **Transcript** | ⌘F find · ⌘G / ⇧⌘G next / previous · ⌘↓ scroll to the bottom · ⇧⌘T the trajectory (Esc back to the chat) · select text in a message, then **Quote** to answer it (the agent gets it as a blockquote) |
 | **Right pane** | ⌘⌥B (or the title bar's pane button) show / hide, on the tab used last · ⌘J (or ⌃\`) Terminal, from it hide · ⌘P Files with its tree, from the tree hide · ⇧⌘L Side chat, from it hide · ⌃⇧G Changes, from it hide · ⌘W closes the shown file or terminal tab (in Changes, the open diff); with no file open, one terminal, or in the side chat, it hides the pane · ⇧⌘⏎ (or the pane's expand button) maximize / restore it · in a terminal, ⌘T new tab · ⌃Tab next tab · ⌘K clear |
-| **Trackpad** | two-finger swipe left shows the right pane, again maximizes it; swipe right restores it, again hides it; wherever the pointer is (Settings ▸ Trackpad: the sidebar instead, the other way round, or off) |
+| **Trackpad** | two-finger swipe left shows the right pane, again maximizes it; swipe right restores it, again hides it; wherever the pointer is (Settings ▸ General: the sidebar instead, the other way round, or nothing) |
 | **App** | ⌘, Settings · ⌘Q quit (always asks, and says if threads are working or terminals run something) |
 
 - **No checks:** the agent runs every tool call it decides on (shell commands, edits, fetches)
@@ -34,7 +34,7 @@ cask clears macOS's download mark so it opens normally.
 - **Done** (⌘W, or the archive button on a thread's row) moves a thread to the sidebar's **Done**
   list at the bottom, collapsed until you open it; **⌘Z** brings it back, and so does clicking it
   there. Done threads are grouped by when they were done (Today, Yesterday, Previous 7 Days,
-  Previous 30 Days, then by month and year), and deleted after 30 days (Settings ▸ Threads).
+  Previous 30 Days, then by month and year), and deleted after 30 days (Settings ▸ Threads: 7, 30 or 90 days, or never).
 - **Titles** come from the agent's model after your first message. A name you give (⌘R) stays.
 - **The sidebar** lists pinned threads first, then the rest, each newest first (by when it was
   made: writing in one doesn't move it, so ⌘1–9 keep their rows), the rest under the same date

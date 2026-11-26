@@ -115,8 +115,7 @@ impl Plugin for Guard {
             label: "API key".into(),
             description: "Test secret".into(),
             kind: SettingKind::Secret,
-            placeholder: None,
-            default: None,
+            ..Default::default()
         });
         SettingsSchema { fields: fields.collect() }
     }
