@@ -841,7 +841,12 @@ impl SpaceApp {
                     let diff = match state.diff.as_ref().filter(|d| Some(&d.path) == state.expanded.as_ref()) {
                         None => loading().into_any_element(),
                         Some(FileDiff { view: Ok((d, editor)), .. }) if d.added + d.removed > 0 => {
-                            div().size_full().child(gpui::component::input::Editor::new(editor).appearance(false).size_full()).into_any_element()
+                            div()
+                                .relative()
+                                .size_full()
+                                .child(gpui::component::input::Editor::new(editor).appearance(false).size_full())
+                                .child(space_ui::side_scroll::mark(space_ui::side_scroll::editor_room(editor)))
+                                .into_any_element()
                         }
                         Some(FileDiff { view: Ok(_), .. }) => changes_empty("Mode or name change only").into_any_element(),
                         Some(FileDiff { view: Err(why), .. }) => changes_empty(why.clone()).into_any_element(),

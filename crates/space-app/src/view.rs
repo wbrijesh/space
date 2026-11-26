@@ -230,11 +230,12 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
             }
         }))
         // Two-finger swipes show and hide a pane (Settings ▸ Trackpad): seen before anything
-        // scrolls (capture phase, wherever the pointer is), so a swipe's scrolling is taken.
+        // scrolls (capture phase, wherever the pointer is), so a swipe's scrolling is taken. Content
+        // that scrolls sideways marks itself as it paints (`side_scroll::mark`), after this.
         .child({
             let this = cx.entity().downgrade();
             canvas(
-                |_, _, _| {},
+                |_, window, cx| space_ui::side_scroll::new_frame(window, cx),
                 move |_, _, window, _| {
                     window.on_mouse_event(move |e: &ScrollEvent, phase, window, cx| {
                         if phase == DispatchPhase::Capture {
@@ -612,7 +613,7 @@ fn terminal_pane(app: &mut SpaceApp, key: u64, window: &mut Window, cx: &mut Con
         Some(PaneTab::Changes) => app.changes_content(key, window, cx),
     };
     let tabs = app.strip_tabs(key);
-    div().size_full().flex().flex_col().child(header(&tabs, active, maximized, &handlers)).child(content).into_any_element()
+    div().size_full().flex().flex_col().child(header(&tabs, active, maximized, &handlers, window, cx)).child(content).into_any_element()
 }
 
 /// A terminal tab: its terminal, or why there's none.

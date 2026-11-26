@@ -14,6 +14,7 @@ use notify::Watcher as _;
 use space_ui::components::file_tree::{FileRow, GitMark, RowAction, TreeHandlers, TreeKey, file_tree, filter_field, notice};
 use space_ui::components::file_viewer::{FileHeader, ViewChoice, file_header, image_preview, loading, unpreviewable};
 use space_ui::components::transcript::agent_message;
+use space_ui::side_scroll;
 use space_ui::theme::color;
 
 use crate::app::SpaceApp;
@@ -359,7 +360,14 @@ impl SpaceApp {
             on_open: on_open.clone(),
         });
         let code = |editor: &Entity<EditorState>| {
-            div().flex_1().min_w_0().min_h_0().child(Editor::new(editor).readonly(true).appearance(false).bordered(false).h_full()).into_any_element()
+            div()
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .child(Editor::new(editor).readonly(true).appearance(false).bordered(false).h_full())
+                .child(side_scroll::mark(side_scroll::editor_room(editor)))
+                .into_any_element()
         };
         let preview = match content {
             TabContent::Loading => loading().into_any_element(),

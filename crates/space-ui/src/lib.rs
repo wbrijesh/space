@@ -9,6 +9,7 @@ pub mod assets;
 pub mod clock;
 pub mod components;
 pub mod format;
+pub mod side_scroll;
 pub mod theme;
 
 #[cfg(feature = "dev")]

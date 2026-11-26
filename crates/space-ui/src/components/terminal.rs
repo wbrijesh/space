@@ -261,14 +261,14 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
     use super::right_pane::{PaneView, StripHandlers, StripTab, header};
     use crate::preview::{Area, ComponentPreview, Example};
     /// The pane's header, as the app shows it over a terminal.
-    fn strip(tabs: &[StripTab], selected: usize, maximized: bool) -> Div {
-        div().flex().flex_col().child(header(tabs, selected, maximized, &StripHandlers::default()))
+    fn strip(tabs: &[StripTab], selected: usize, maximized: bool, window: &mut Window, cx: &mut App) -> Div {
+        div().flex().flex_col().child(header(tabs, selected, maximized, &StripHandlers::default(), window, cx))
     }
     let tab = |title: &str, unread, ended| StripTab { unread, ended, ..StripTab::new(title.to_string(), PaneView::Terminal.icon()) };
     let tabs = vec![tab("zsh", false, false), tab("cargo", true, false), tab("zsh", false, true)];
     let t2 = tabs.clone();
     vec![ComponentPreview::new(Area::Shell, "Terminal", "The terminal pane: tabs, the grid in the code font, and notices.").stacked().examples([
-        Example::new("pane", move |_, _| {
+        Example::new("pane", move |window, cx| {
             div()
                 .w(px(640.))
                 .h(px(340.))
@@ -277,11 +277,11 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 .bg(color::bg_side())
                 .border_1()
                 .border_color(color::border())
-                .child(strip(&tabs, 0, false))
+                .child(strip(&tabs, 0, false, window, cx))
                 .child(div().flex_1().child(terminal_grid(Arc::new(sample_frame(80, 14)), true, Rc::new(|_, _, _| {}))))
                 .into_any_element()
         }),
-        Example::new("ended", move |_, _| {
+        Example::new("ended", move |window, cx| {
             div()
                 .w(px(640.))
                 .flex()
@@ -289,7 +289,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 .bg(color::bg_side())
                 .border_1()
                 .border_color(color::border())
-                .child(strip(&t2, 2, true))
+                .child(strip(&t2, 2, true, window, cx))
                 .child(div().h(px(80.)))
                 .child(ended_notice(Some(130)))
                 .into_any_element()

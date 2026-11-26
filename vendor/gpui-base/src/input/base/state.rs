@@ -3008,6 +3008,21 @@ impl<M: InputModeKind> InputBaseState<M> {
         }
     }
 
+    /// Space patch: how far the text can still scroll sideways from where it
+    /// is, toward the start of its lines and toward their end. Both are zero
+    /// when the lines fit (or wrap).
+    pub fn horizontal_scroll_room(&self) -> (Pixels, Pixels) {
+        let offset = self.scroll_handle.offset().x;
+        // The farthest toward the end the offset may go.
+        let end = clamp_horizontal_scroll_offset(
+            px(f32::MIN),
+            self.scroll_size.width,
+            self.input_bounds.size.width,
+            self.text_align,
+        );
+        ((-offset).max(px(0.)), (offset - end).max(px(0.)))
+    }
+
     /// Whether the text has room to scroll along the axis `delta` mostly
     /// moves on. A trackpad swipe drifts a little off its axis, so the drift
     /// alone does not claim the scroll.

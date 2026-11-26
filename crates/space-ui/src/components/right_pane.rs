@@ -88,21 +88,33 @@ impl Default for StripHandlers {
 
 /// The pane's header: its tabs (`active`: the one shown), `+` for a new tab, then maximize (it
 /// fills the window beside the sidebar) or restore.
-pub fn header(tabs: &[StripTab], active: usize, maximized: bool, h: &StripHandlers) -> Div {
+pub fn header(tabs: &[StripTab], active: usize, maximized: bool, h: &StripHandlers, window: &mut Window, cx: &mut App) -> Div {
     let new = h.on_new.clone();
     let maximize = h.on_maximize.clone();
+    // Many tabs scroll sideways; a two-finger swipe over them scrolls them first.
+    let scroll = window.use_keyed_state("pane-tabs-scroll", cx, |_, _| ScrollHandle::new()).read(cx).clone();
     bar()
         .child(
             div()
-                .id("pane-tabs")
+                .relative()
                 .flex_1()
                 .min_w_0()
+                .h_full()
                 .flex()
                 .items_center()
-                .gap_1()
-                .overflow_x_scroll()
-                .children(tabs.iter().enumerate().map(|(ix, t)| strip_tab(ix, t, ix == active, h)))
-                .child(icon_button("pane-tab-new", Lucide::Plus, true, false).tip_action("New tab", &NewPaneTab).on_click(move |_, w, cx| new(w, cx))),
+                .child(
+                    div()
+                        .id("pane-tabs")
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .overflow_x_scroll()
+                        .track_scroll(&scroll)
+                        .children(tabs.iter().enumerate().map(|(ix, t)| strip_tab(ix, t, ix == active, h)))
+                        .child(icon_button("pane-tab-new", Lucide::Plus, true, false).tip_action("New tab", &NewPaneTab).on_click(move |_, w, cx| new(w, cx))),
+                )
+                .child(crate::side_scroll::mark(crate::side_scroll::handle_room(&scroll))),
         )
         .child(
             icon_button("pane-maximize", if maximized { Lucide::Minimize2 } else { Lucide::Maximize2 }, true, false)
@@ -344,23 +356,23 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                     rows: vec![LauncherRow::new(Icon::new(file_icon("fit.rs")), "fit.rs", noop()).detail("crates/space-app/src")],
                 },
             ];
-            pane(div().size_full().flex().flex_col().child(header(&tabs(), 3, false, &StripHandlers::default())).child(launcher(&search, sections, None, Some(0))))
+            pane(div().size_full().flex().flex_col().child(header(&tabs(), 3, false, &StripHandlers::default(), window, cx)).child(launcher(&search, sections, None, Some(0))))
                 .into_any_element()
         }),
-        Example::new("a terminal tab", move |_, _| {
+        Example::new("a terminal tab", move |window, cx| {
             pane(
                 div()
                     .size_full()
                     .flex()
                     .flex_col()
-                    .child(header(&tabs(), 2, false, &StripHandlers::default()))
+                    .child(header(&tabs(), 2, false, &StripHandlers::default(), window, cx))
                     .child(div().flex_1().child(terminal_grid(Arc::new(sample_frame(70, 12)), false, Rc::new(|_, _, _| {})))),
             )
             .into_any_element()
         }),
-        Example::new("side chat: nothing asked yet", move |_, _| {
+        Example::new("side chat: nothing asked yet", move |window, cx| {
             let tabs = vec![StripTab::new("Side chat", PaneView::SideChat.icon())];
-            pane(div().size_full().flex().flex_col().child(header(&tabs, 0, false, &StripHandlers::default())).child(side_chat_empty())).into_any_element()
+            pane(div().size_full().flex().flex_col().child(header(&tabs, 0, false, &StripHandlers::default(), window, cx)).child(side_chat_empty())).into_any_element()
         }),
     ])]
 }

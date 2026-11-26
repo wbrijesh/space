@@ -78,4 +78,10 @@ changes notifies, so whatever painted it draws again. A plain `SelectableText` (
 message bubbles) had no listener, so a drag showed nothing until mouse-up. Test:
 `a_drag_redraws_the_window_as_it_goes`.
 
+Sideways room, in `src/input/base/state.rs` (marked "Space patch"): a public
+`horizontal_scroll_room` returns how far the text can still scroll toward the start of its lines
+and toward their end (zero both ways when they fit or wrap). Space's two-finger swipe reads it so
+a gesture over a file's long lines scrolls them first and only swipes at an edge
+(`space_ui::side_scroll`).
+
 To update gpui-base, copy the new version here and re-apply these changes.
