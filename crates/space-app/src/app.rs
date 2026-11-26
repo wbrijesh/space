@@ -976,6 +976,10 @@ impl SpaceApp {
                 }
             }
             self.selected = Some(key);
+            // Panels and menus belong to the thread they were opened on (the context ring's isn't
+            // there at all on a new thread).
+            self.usage_open = None;
+            self.left_branch_page(window, cx);
             let draft = self.thread(key).map(|t| t.draft.clone()).unwrap_or_default();
             self.input.update(cx, |s, cx| s.set_value(draft, window, cx));
             // A new thread left untouched (nothing typed, attached or open in a terminal) goes:

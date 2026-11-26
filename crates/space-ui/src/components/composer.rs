@@ -46,8 +46,9 @@ const TEXT_INSET: f32 = space::XS;
 /// The editor's own horizontal padding at XSmall size (each side).
 const EDITOR_PAD: f32 = space::XS;
 /// Control-row insets: the folder icon centers under "+" (border 1 + padding + half the
-/// button, minus half the 14px icon and the menu button's 8px padding), and the context
-/// ring's right edge meets the send button's (border 1 + padding).
+/// button, minus half the 14px icon and the menu button's 8px padding), and the last control's
+/// right edge (the context ring, or the model picker before the first message) meets the send
+/// button's (border 1 + padding).
 const ROW_INSET_LEFT: f32 = 1. + PAD + BUTTON / 2. - 7. - space::MD;
 const ROW_INSET_RIGHT: f32 = 1. + PAD;
 pub const MAX_LINES: usize = 10;
@@ -965,12 +966,14 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
     if let Some(picker) = model_picker(&status, picker_locked, picker_open, on_pane, h.on_configure.clone()) {
         right = right.child(picker);
     }
+    // Context usage means nothing before the first message (and an empty ring reads as a radio
+    // button), so the ring comes with it.
     let tokens = status.context_tokens.unwrap_or(0);
     let window_size = status.context_window.filter(|w| *w > 0);
     let open = c.context_open;
     let (toggle, close) = (h.on_context.clone(), h.on_context.clone());
     let stats = c.stats.clone();
-    right = right.child(
+    right = right.when(!c.thread_empty, |right| right.child(
         div()
             .id("context-ring")
             .relative()
@@ -996,7 +999,7 @@ fn control_row(c: ComposerControls, h: &ComposerHandlers) -> Div {
                     ),
                 )))
             }),
-    );
+    ));
 
     let mode = c.mode.filter(|m| !m.entries.is_empty()).map(|m| {
         let current = m.current_entry().cloned();
