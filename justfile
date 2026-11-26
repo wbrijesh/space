@@ -16,7 +16,7 @@ run *args: build
     SPACE_TARGET_DIR={{project}}/target/debug SPACE_PROJECT={{project}} SPACE_RELOAD_PLUGINS=1 \
         target/debug/Space.app/Contents/MacOS/Space {{args}}
 
-# The two local apps, detached and kept on the latest build: Space (this repo) on workspace 3,
+# The two local apps, detached and kept on the latest build: Space (this repo) on workspace 2,
 # SpaceTest (the `changes` scenario, fake gh) on 9. See scripts/dev-apps.sh
 # Start whichever of Space and SpaceTest isn't running
 apps:

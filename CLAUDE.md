@@ -20,7 +20,7 @@
 
 ## Local apps
 
-`just apps` starts Space (workspace 3) and SpaceTest (workspace 9), detached. After each committed
+`just apps` starts Space (workspace 2) and SpaceTest (workspace 9), detached. After each committed
 change, run `just apps-update` (build, then restart both on it) and check `just apps-status`.
 
 ## Disk use

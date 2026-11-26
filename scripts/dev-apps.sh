@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The two local apps, kept on the latest build:
-#   Space      this repo's dev bundle (target/debug/Space.app), on AeroSpace workspace 3
+#   Space      this repo's dev bundle (target/debug/Space.app), on AeroSpace workspace 2
 #   SpaceTest  a copy in ~/.cache/space-test with the `changes` scenario and a fake `gh`, on 9
 # Both run detached (nohup; logs and state in ~/.cache/space-dev), so closing a terminal or
 # interrupting an agent doesn't stop them. Windows are moved by window id, without focusing them,
@@ -21,7 +21,7 @@ mkdir -p "$state"
 # Per app: the executable, how to find its process, and its workspace.
 exe() { case "$1" in space) echo "$root/target/debug/Space.app/Contents/MacOS/Space" ;; test) echo "$test_dir/SpaceTest" ;; esac; }
 pattern() { case "$1" in space) echo "target/debug/Space.app/Contents/MacOS/Space" ;; test) echo "SpaceTest --scenario changes" ;; esac; }
-workspace() { case "$1" in space) echo 3 ;; test) echo 9 ;; esac; }
+workspace() { case "$1" in space) echo 2 ;; test) echo 9 ;; esac; }
 name() { case "$1" in space) echo Space ;; test) echo SpaceTest ;; esac; }
 
 pid_of() { pgrep -f "$(pattern "$1")" | head -1 || true; }
