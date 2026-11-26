@@ -262,7 +262,6 @@ impl SpaceApp {
             return;
         }
         let id = thread.id.clone();
-        let at = self.threads.iter().position(|t| t.key == key);
         let terminals = self.has_terminals(key);
         self.finish_thread(key, window, cx);
         let stopped = match (running, terminals) {
@@ -271,7 +270,7 @@ impl SpaceApp {
             (false, true) => Some("Its terminals were closed."),
             (false, false) => None,
         };
-        self.done_notice(id, at, title, stopped, cx);
+        self.done_notice(id, title, stopped, cx);
     }
 
     /// ⌘W: mark the selected thread done.
@@ -344,24 +343,9 @@ impl SpaceApp {
         Some(thread)
     }
 
-    /// The done threads of `dir` that can be reopened, last done first.
-    pub(crate) fn done_threads_in(&self, dir: &std::path::Path) -> Vec<&ThreadMeta> {
-        let dir = dir.display().to_string();
-        let cutoff = self.done_cutoff();
-        let mut done: Vec<_> = self.done_threads.iter().filter(|m| m.project == dir && !expired(m, cutoff)).collect();
-        done.sort_by_key(|m| std::cmp::Reverse(m.done_ms));
-        done
-    }
-
-    /// Reopen a done thread, in place of the new thread it was reopened from (unless that one
-    /// has terminals open).
+    /// Reopen a done thread and show it. It goes back to its place in the sidebar (the list is
+    /// in the order threads were made), scrolled into view.
     pub(crate) fn reopen_thread(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.reopen_at(id, None, window, cx);
-    }
-
-    /// Reopen a done thread at `at` in the sidebar's list (`None`: where the new thread it's
-    /// reopened from was, else last), and show it.
-    pub(crate) fn reopen_at(&mut self, id: &str, at: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ix) = self.done_threads.iter().position(|m| m.id == id) else { return };
         let mut meta = self.done_threads.remove(ix);
         meta.done_ms = None;
@@ -378,18 +362,13 @@ impl SpaceApp {
             }
         })
         .detach();
-        let replace = self.selected.filter(|k| self.thread(*k).is_some_and(Thread::is_empty) && !self.has_terminals(*k));
-        let at = at
-            .or_else(|| replace.and_then(|k| self.threads.iter().position(|t| t.key == k)))
-            .unwrap_or(self.threads.len())
-            .min(self.threads.len());
         let thread = self.saved_thread(meta);
         let key = thread.key;
-        self.threads.insert(at, thread);
-        if let Some(old) = replace {
-            self.drop_thread(old, cx);
-        }
+        self.threads.push(thread);
         self.select_thread(key, window, cx);
+        if let Some(row) = self.listed_threads().iter().position(|k| *k == key) {
+            self.sidebar_scroll.scroll_to_item(row);
+        }
     }
 
     /// A thread for a saved summary, its events read when it's opened.
@@ -420,7 +399,7 @@ impl SpaceApp {
     }
 
     /// Threads marked done before this (Unix ms) are past keeping.
-    fn done_cutoff(&self) -> u64 {
+    pub(crate) fn done_cutoff(&self) -> u64 {
         let days = u64::from(self.settings.settings.threads.keep_done_days.max(1));
         now_ms().saturating_sub(days * DAY_MS)
     }
@@ -429,7 +408,7 @@ impl SpaceApp {
 const DAY_MS: u64 = 24 * 3600 * 1000;
 
 /// A done thread kept past `cutoff`.
-fn expired(meta: &ThreadMeta, cutoff: u64) -> bool {
+pub(crate) fn expired(meta: &ThreadMeta, cutoff: u64) -> bool {
     meta.done_ms.is_some_and(|done| done < cutoff)
 }
 

@@ -37,6 +37,21 @@ pub struct Scenario {
     /// Also run the real session store, keeping threads in a temp folder of the scenario's own
     /// that outlives the run: launch it again to see what was saved.
     pub store: bool,
+    /// Threads already in the store when it starts (with `store`; replacing what it kept).
+    pub saved: Vec<SavedThread>,
+}
+
+/// A thread saved before the scenario starts: made `created` days ago, marked done `done` days
+/// ago (or still open), maybe pinned. One exchange: its title, and a short reply.
+pub struct SavedThread {
+    pub title: &'static str,
+    pub created: f64,
+    pub done: Option<f64>,
+    pub pinned: bool,
+}
+
+fn saved(title: &'static str, created: f64, done: Option<f64>) -> SavedThread {
+    SavedThread { title, created, done, pinned: false }
 }
 
 #[derive(Default)]
@@ -385,6 +400,29 @@ pub fn all() -> Vec<Scenario> {
             ..Default::default()
         },
         Scenario {
+            name: "done-threads",
+            description: "Saved threads, two pinned, and done ones under the sidebar's Done header, from today \
+                          back to last year (kept 800 days). Click a done thread to reopen it. Threads are saved \
+                          in a temp folder, set back to this at each launch.",
+            store: true,
+            settings: Some(r#"{ "threads": { "keepDoneDays": 800 } }"#),
+            saved: vec![
+                SavedThread { pinned: true, ..saved("Release checklist", 20., None) },
+                SavedThread { pinned: true, ..saved("Guardrail notes", 3., None) },
+                saved("Fix the failing smoke test in space-core", 0.1, None),
+                saved("Bump the gpui-kit version", 1.2, None),
+                saved("Explain how plugin discovery works", 6., None),
+                saved("Add a context ring to the composer", 2., Some(0.05)),
+                saved("Fix the flaky stub test", 1.5, Some(1.)),
+                saved("Terminal plugin with alacritty", 9., Some(3.)),
+                saved("Greeting exchange", 12., Some(5.)),
+                saved("Sketch the plugin manifest", 30., Some(15.)),
+                saved("Release 0.1.0", 70., Some(45.)),
+                saved("First prototype", 420., Some(400.)),
+            ],
+            ..Default::default()
+        },
+        Scenario {
             name: "settings",
             description: "The Settings page (⌘,) with the stub's models and a saved default.",
             threads: vec![explain_thread()],
@@ -540,6 +578,9 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         // The store's threads: never `~/.space`.
         space_dir: scenario.store.then(|| std::env::temp_dir().join(format!("space-scenario-store-{}", scenario.name))),
     };
+    if let Some(dir) = host.space_dir.as_ref().filter(|_| !scenario.saved.is_empty()) {
+        write_saved(&dir.join("threads"), &scenario.saved, project_dir)?;
+    }
     let repo = space_core::discovery::find_repo_root(&Path::new(env!("CARGO_MANIFEST_DIR")).join("x")).unwrap_or_default();
     let seed = scenario
         .threads
@@ -575,6 +616,43 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         open_changes: scenario.changes,
     };
     Ok((host, options))
+}
+
+/// Put `threads` in the session store's folder `dir`, in place of what was there.
+fn write_saved(dir: &Path, threads: &[SavedThread], project_dir: &Path) -> Result<()> {
+    use space_core::SessionEvent;
+    use space_core::protocol::service::ThreadMeta;
+    let _ = std::fs::remove_dir_all(dir);
+    let now = crate::app::now_ms();
+    let ago = |days: f64| now - (days * 86_400_000.) as u64;
+    for (ix, t) in threads.iter().enumerate() {
+        let id = format!("scenario-{ix}");
+        let meta = ThreadMeta {
+            id: id.clone(),
+            title: t.title.into(),
+            project: project_dir.display().to_string(),
+            created_ms: ago(t.created),
+            updated_ms: ago(t.done.unwrap_or(t.created)),
+            titled: true,
+            done_ms: t.done.map(ago),
+            pinned_ms: t.pinned.then(|| ago(t.created)),
+            ..Default::default()
+        };
+        let mut json = serde_json::to_value(meta)?;
+        json["version"] = 1.into();
+        let events = [
+            space_core::UserInput::text(t.title).into_message(Some(ago(t.created)), false),
+            SessionEvent::TurnStarted,
+            SessionEvent::AgentText { text: "Done.".into() },
+            SessionEvent::turn_ended("end_turn"),
+        ];
+        let lines: Vec<String> = events.iter().map(serde_json::to_string).collect::<Result<_, _>>()?;
+        let thread = dir.join(id);
+        std::fs::create_dir_all(&thread)?;
+        std::fs::write(thread.join("meta.json"), format!("{json:#}\n"))?;
+        std::fs::write(thread.join("events.jsonl"), lines.join("\n") + "\n")?;
+    }
+    Ok(())
 }
 
 /// The `terminal` scenario's shell: a test run, the 16 colours and styles, then an interactive

@@ -90,11 +90,9 @@ pub(crate) enum NoticeKind {
     Done,
 }
 
-/// A thread just marked done, which ⌘Z (or the notice's Undo) reopens where it was.
+/// A thread just marked done, which ⌘Z (or the notice's Undo) reopens.
 pub(crate) struct DoneUndo {
     pub(crate) id: String,
-    /// Its place in the sidebar's list.
-    pub(crate) at: Option<usize>,
     /// The thread shown after it went: ⌘Z reopens it only while that one is still shown.
     pub(crate) after: Option<u64>,
 }
@@ -545,20 +543,20 @@ impl SpaceApp {
         true
     }
 
-    /// Reopen the thread just marked done, where it was.
+    /// Reopen the thread just marked done (it goes back to its place in the list).
     pub(crate) fn undo_done(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(done) = self.rewind.done.take() else { return };
         if self.rewind.notice.as_ref().is_some_and(|n| n.kind == NoticeKind::Done) {
             self.rewind.notice = None;
         }
-        self.reopen_at(&done.id, done.at, window, cx);
+        self.reopen_thread(&done.id, window, cx);
     }
 
     /// The notice for a thread just marked done (`stopped`: what of it was stopped), with Undo.
-    pub(crate) fn done_notice(&mut self, id: String, at: Option<usize>, title: String, stopped: Option<&str>, cx: &mut Context<Self>) {
+    pub(crate) fn done_notice(&mut self, id: String, title: String, stopped: Option<&str>, cx: &mut Context<Self>) {
         let after = self.selected;
         self.show_notice(after.unwrap_or(0), NoticeKind::Done, format!("Done: {title}"), stopped.map(Into::into), Vec::new(), cx);
-        self.rewind.done = Some(DoneUndo { id, at, after });
+        self.rewind.done = Some(DoneUndo { id, after });
     }
 
     /// You sent another message: the thread's rewinds can't be undone any more, nor the thread

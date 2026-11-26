@@ -288,19 +288,24 @@ pub fn local_day(at_ms: u64, offset_secs: i32) -> i64 {
     (at_ms as i64 / 1000 + offset_secs as i64).div_euclid(86_400)
 }
 
-/// A sidebar section for threads created at `created_ms`: "Today", "Yesterday", else the date,
-/// "3 Nov", with the year when it isn't this year's ("3 Nov 2025"). Days are local, the zone
-/// `offset_secs` ahead of UTC; a time after `now_ms` (a clock that moved back) counts as today.
-pub fn day_label(created_ms: u64, now_ms: u64, offset_secs: i32) -> String {
+/// The sidebar's date section for a thread made (open threads) or marked done (Done) at
+/// `at_ms`, coarser with age, as Finder and Mail group by date: "Today", "Yesterday", "Previous 7 Days", "Previous 30
+/// Days", then the month ("October") while it's this year, else the year ("2025"). The windows
+/// roll back from today rather than following the calendar week, so none is empty on a Monday.
+/// Days are local, the zone `offset_secs` ahead of UTC; a time after `now_ms` (a clock that
+/// moved back) counts as today.
+pub fn date_section(at_ms: u64, now_ms: u64, offset_secs: i32) -> String {
     use chrono::{DateTime, Datelike as _};
-    let (day, today) = (local_day(created_ms, offset_secs), local_day(now_ms, offset_secs));
+    let (day, today) = (local_day(at_ms, offset_secs), local_day(now_ms, offset_secs));
     match today - day {
         ..=0 => "Today".into(),
         1 => "Yesterday".into(),
+        2..=7 => "Previous 7 Days".into(),
+        8..=30 => "Previous 30 Days".into(),
         _ => {
             let date = |d: i64| DateTime::from_timestamp(d * 86_400, 0).map(|t| t.date_naive());
             let (Some(date), Some(now)) = (date(day), date(today)) else { return String::new() };
-            if date.year() == now.year() { date.format("%-d %b").to_string() } else { date.format("%-d %b %Y").to_string() }
+            if date.year() == now.year() { date.format("%B").to_string() } else { date.year().to_string() }
         }
     }
 }
@@ -338,23 +343,36 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_days_are_local_calendar_days() {
+    fn date_sections_coarsen_with_age() {
         // 2026-11-10 12:00 UTC.
         let now = 1_794_312_000_000;
-        let hour = 3_600_000;
-        assert_eq!(day_label(now, now, 0), "Today");
-        assert_eq!(day_label(now - 12 * hour, now, 0), "Today"); // 00:00 the same day
-        assert_eq!(day_label(now - 12 * hour - 1, now, 0), "Yesterday"); // 23:59:59.999 the day before
-        assert_eq!(day_label(now - 36 * hour, now, 0), "Yesterday");
-        assert_eq!(day_label(now - 7 * 24 * hour, now, 0), "3 Nov");
-        assert_eq!(day_label(now - 372 * 24 * hour, now, 0), "3 Nov 2025");
+        let (hour, day) = (3_600_000, 86_400_000);
+        let at = |ms: u64| date_section(ms, now, 0);
+        assert_eq!(at(now), "Today");
+        assert_eq!(at(now - 12 * hour), "Today"); // 00:00 the same day
+        assert_eq!(at(now - 12 * hour - 1), "Yesterday"); // 23:59:59.999 the day before
+        assert_eq!(at(now - 36 * hour), "Yesterday");
+        assert_eq!(at(now - 2 * day), "Previous 7 Days");
+        assert_eq!(at(now - 7 * day), "Previous 7 Days"); // 3 Nov
+        assert_eq!(at(now - 8 * day), "Previous 30 Days"); // 2 Nov
+        assert_eq!(at(now - 30 * day), "Previous 30 Days"); // 11 Oct
+        assert_eq!(at(now - 31 * day), "October"); // 10 Oct
+        assert_eq!(at(now - 40 * day), "October"); // 1 Oct
+        assert_eq!(at(now - 41 * day), "September"); // 30 Sep
+        assert_eq!(at(now - 313 * day), "January"); // 1 Jan
+        assert_eq!(at(now - 314 * day), "2025"); // 31 Dec last year
+        assert_eq!(at(now - 800 * day), "2024");
         // A clock that moved back: still today.
-        assert_eq!(day_label(now + hour, now, 0), "Today");
+        assert_eq!(at(now + hour), "Today");
         // The zone decides the day. At 12:00 UTC, 11:00 UTC was earlier today in UTC+14 (01:00
         // and 02:00 on the 11th), but in UTC-12 it was 23:00 on the 9th and now is 00:00 on the 10th.
         let eleven = now - hour;
-        assert_eq!(day_label(eleven, now, 14 * 3600), "Today");
-        assert_eq!(day_label(eleven, now, -12 * 3600), "Yesterday");
+        assert_eq!(date_section(eleven, now, 14 * 3600), "Today");
+        assert_eq!(date_section(eleven, now, -12 * 3600), "Yesterday");
+        // Early in January, a month back is last year: the year, not "December".
+        let jan_5 = 1_799_150_400_000; // 2027-01-05 12:00 UTC
+        assert_eq!(date_section(jan_5 - 31 * day, jan_5, 0), "2026"); // 5 Dec 2026
+        assert_eq!(date_section(jan_5 - 30 * day, jan_5, 0), "Previous 30 Days");
     }
 
     #[test]

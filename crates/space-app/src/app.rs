@@ -481,6 +481,8 @@ pub struct SpaceApp {
     pub(crate) cmd_other: bool,
     /// Done threads kept to be reopened (their saved summaries).
     pub(crate) done_threads: Vec<space_core::protocol::service::ThreadMeta>,
+    /// The sidebar's Done list is expanded (collapsed at launch).
+    pub(crate) done_open: bool,
     pub(crate) settings: SettingsStore,
     /// The Settings page replaces the thread view.
     pub(crate) show_settings: bool,
@@ -748,6 +750,7 @@ impl SpaceApp {
             pane_max_for: None,
             banner,
             done_threads: Vec::new(),
+            done_open: false,
             sidebar_scroll: ScrollHandle::new(),
             cmd_alone: false,
             cmd_numbers: false,

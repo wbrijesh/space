@@ -11,7 +11,7 @@ use gpui::component::input::InputState;
 use space_core::protocol::service::SettingKind;
 use space_ui::components::model_picker::PickerPane;
 use space_ui::components::composer::{
-    DoneThread, Composer, ComposerBlocker, ComposerControls, ComposerHandlers, ComposerMenu, FolderPage, Handler, PlusPage, ModeChoice,
+    Composer, ComposerBlocker, ComposerControls, ComposerHandlers, ComposerMenu, FolderPage, Handler, ModeChoice,
 };
 use space_ui::components::settings::{
     Catalog, FieldView, ModelChoice, PluginApproval, PluginRow, PluginSettingsView, SettingsHandlers, SettingsPage,
@@ -24,7 +24,7 @@ use space_ui::components::trajectory::{TrajectoryHandlers, TrajectoryView};
 use space_ui::components::shell::{
     Activity, activity_bar, banner, confirm_card, empty_heading, panel, problem_card, side_panel, sidebar_column, sidebar_header,
 };
-use space_ui::components::thread_row::{RowIndicator, ThreadRow, section_header};
+use space_ui::components::thread_row::{RowIndicator, ThreadRow, done_header, section_header};
 use space_ui::components::tip::TipExt as _;
 use space_ui::components::title_bar::{TitleBar, TitleBarNav};
 use gpui::component::Icon;
@@ -431,17 +431,20 @@ fn sidebar(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> impl IntoElement {
         return sidebar_column(sidebar_header(app.activity.label(), None), Vec::new(), &app.sidebar_scroll);
     }
     let shortcuts = app.row_shortcuts();
-    // Pinned threads first, then by day (`listed_sections`); a new thread isn't listed until
-    // its first message is sent (the new-thread button shows it's the current one). A section's
-    // header is drawn in its first row's element, so the list keeps one element per row (⌘
-    // numbers find rows by position).
-    let rows = app
-        .listed_sections()
-        .into_iter()
+    // Pinned threads first, under "Pinned", then the rest under date headers by when each was
+    // made (`listed_threads`); a new thread isn't listed until its first message is sent (the
+    // new-thread button shows it's the current one). Headers are drawn in a row's own element,
+    // so the list keeps one element per row (⌘ numbers find rows by position).
+    let listed: Vec<&Thread> = app.listed_threads().into_iter().filter_map(|key| app.thread(key)).collect();
+    let any_pinned = listed.first().is_some_and(|t| t.pinned_ms.is_some());
+    let pinned = listed.iter().take_while(|t| t.pinned_ms.is_some()).count();
+    let dates = crate::pin::date_headers(&listed[pinned..], |t| t.created_ms);
+    let date_header = |ix: usize| ix.checked_sub(pinned).and_then(|i| dates.get(i)).and_then(|(_, h)| h.clone());
+    let mut rows: Vec<AnyElement> = listed
+        .iter()
         .enumerate()
-        .filter_map(|(ix, (key, header))| app.thread(key).map(|t| (ix, t, header)))
         .zip(shortcuts)
-        .map(|((ix, t, header), shortcut)| {
+        .map(|((ix, t), shortcut)| {
             let key = t.key;
             // On the Settings page no thread is shown, so none is highlighted.
             let selected = app.selected == Some(key) && !app.show_settings;
@@ -464,12 +467,40 @@ fn sidebar(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> impl IntoElement {
                 .on_pin(t.pinned_ms.is_some(), !t.is_empty(), cx.listener(move |this, _, _, cx| this.toggle_pin(key, cx)))
                 .on_rename(cx.listener(move |this, _, w, cx| this.rename_thread(key, w, cx)))
                 .on_done(cx.listener(move |this, _, w, cx| this.mark_done(key, w, cx)));
-            match header {
-                Some(label) => div().child(section_header(label, ix == 0)).child(row).into_any_element(),
-                None => row.into_any_element(),
+            if ix == 0 && any_pinned {
+                div().child(section_header("Pinned", true)).child(row).into_any_element()
+            } else if let Some(label) = date_header(ix) {
+                div().child(section_header(label, ix == 0)).child(row).into_any_element()
+            } else if ix > 0 && ix == pinned {
+                // One date section: no header, just a gap after the pinned threads.
+                div().pt(size::SIDEBAR_SECTION_GAP).child(row).into_any_element()
+            } else {
+                row.into_any_element()
             }
         })
         .collect();
+    // Done threads, under a header at the bottom that expands and collapses them; grouped by
+    // when each was marked done. A click reopens one. None (or threads not saved): no header.
+    let done = app.done_sections();
+    if !done.is_empty() {
+        rows.push(
+            done_header(done.len(), app.done_open, listed.is_empty())
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_done_list(cx)))
+                .into_any_element(),
+        );
+        if app.done_open {
+            rows.extend(done.into_iter().enumerate().map(|(ix, (meta, header))| {
+                let id = meta.id.clone();
+                let row = ThreadRow::new(SharedString::from(format!("done-{}", meta.id)), meta.title.clone())
+                    .done(true)
+                    .on_click(cx.listener(move |this, _, w, cx| this.reopen_thread(&id, w, cx)));
+                match header {
+                    Some(label) => div().child(section_header(label, ix == 0)).child(row).into_any_element(),
+                    None => row.into_any_element(),
+                }
+            }));
+        }
+    }
 
     // Just the icon: it brightens under the pointer.
     let new_thread = div()
@@ -1310,12 +1341,6 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
                 let _ = this.update(cx, |this, cx| this.switch_branch(name, true, w, cx));
             })
         },
-        on_reopen: {
-            let this = cx.entity().downgrade();
-            Rc::new(move |id, w: &mut Window, cx: &mut App| {
-                let _ = this.update(cx, |this, cx| this.reopen_thread(&id, w, cx));
-            })
-        },
         on_command: {
             let this = cx.entity().downgrade();
             Rc::new(move |name, w: &mut Window, cx: &mut App| {
@@ -1329,26 +1354,6 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
         on_close_commands: handler(cx, |this, _, cx| {
             this.close_command_menu(cx);
         }),
-    };
-    // A new thread with nothing typed offers this folder's done threads.
-    let untouched = thread.is_empty()
-        && thread.attachments.is_empty()
-        && thread.images.is_empty()
-        && thread.pastes.is_empty()
-        && thread.quote.is_none()
-        && app.input.read(cx).value().trim().is_empty();
-    let now = crate::app::now_ms();
-    let reopenable = if untouched {
-        app.done_threads_in(&thread.cwd)
-            .into_iter()
-            .map(|m| DoneThread {
-                id: m.id.clone(),
-                title: m.title.clone().into(),
-                done: format::time_ago(m.done_ms.unwrap_or(now), now).into(),
-            })
-            .collect()
-    } else {
-        Vec::new()
     };
     let mode = app
         .effective_mode(thread)
@@ -1403,7 +1408,6 @@ fn composer(app: &SpaceApp, thread: &Thread, cx: &mut Context<SpaceApp>) -> AnyE
             stats: app.host.has_trajectory().then(|| app.trajectories.stats.get(&thread.id).cloned()).flatten(),
             context_open: app.usage_open.as_deref() == Some(CONTEXT_PANEL),
             menu: app.usage_open.as_deref().and_then(composer_menu),
-            reopenable,
         })
         .handlers(handlers)
         .into_any_element()
@@ -1422,8 +1426,6 @@ fn menu_slot(menu: ComposerMenu) -> String {
         ComposerMenu::Folder(FolderPage::Root) => crate::branches::FOLDER_MENU,
         ComposerMenu::Folder(FolderPage::Branches) => crate::branches::BRANCH_PAGE,
         ComposerMenu::Mode => "composer:mode",
-        ComposerMenu::Plus(PlusPage::Root) => "composer:plus",
-        ComposerMenu::Plus(PlusPage::Done) => "composer:plus:resume",
         ComposerMenu::Model(PickerPane::Root) => "composer:picker",
         ComposerMenu::Model(PickerPane::Models) => "composer:picker:models",
         ComposerMenu::Model(PickerPane::Efforts) => "composer:picker:efforts",
@@ -1435,7 +1437,7 @@ pub(crate) fn composer_menu(slot: &str) -> Option<ComposerMenu> {
     [PickerPane::Root, PickerPane::Models, PickerPane::Efforts]
         .map(ComposerMenu::Model)
         .into_iter()
-        .chain([ComposerMenu::Folder(FolderPage::Root), ComposerMenu::Folder(FolderPage::Branches), ComposerMenu::Mode, ComposerMenu::Plus(PlusPage::Root), ComposerMenu::Plus(PlusPage::Done)])
+        .chain([ComposerMenu::Folder(FolderPage::Root), ComposerMenu::Folder(FolderPage::Branches), ComposerMenu::Mode])
         .find(|m| menu_slot(*m) == slot)
 }
 

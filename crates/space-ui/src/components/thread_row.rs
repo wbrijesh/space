@@ -1,6 +1,9 @@
 //! Sidebar thread row: one line with the thread title and an activity indicator; on hover an
-//! archive button marks it done. Right-click for Pin, Rename Thread… and Mark as Done.
+//! archive button marks it done. Right-click for Pin, Rename Thread… and Mark as Done. A done
+//! thread's row (under the Done header) is dimmer, and only reopens it.
 
+use gpui::assets::IconName;
+use gpui::component::Icon;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
@@ -52,6 +55,8 @@ pub struct ThreadRow {
     id: ElementId,
     title: SharedString,
     selected: bool,
+    /// A done thread, listed under Done: its title dimmer than open ones'.
+    done: bool,
     indicator: RowIndicator,
     /// Preview only: paint the hover state without a pointer.
     force_hover: bool,
@@ -73,6 +78,7 @@ impl ThreadRow {
             id: id.into(),
             title: title.into(),
             selected: false,
+            done: false,
             indicator: RowIndicator::None,
             force_hover: false,
             terminal: false,
@@ -92,6 +98,12 @@ impl ThreadRow {
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// A done thread's row, listed under Done (a click reopens it; no actions or menu).
+    pub fn done(mut self, done: bool) -> Self {
+        self.done = done;
         self
     }
 
@@ -195,7 +207,7 @@ impl RenderOnce for ThreadRow {
                 } else if self.force_hover {
                     d.bg(hover_bg).text_color(color::text())
                 } else {
-                    d.text_color(color::text_2())
+                    d.text_color(if self.done { color::text_3() } else { color::text_2() })
                         // Quieter than the selected fill, so hover never reads as a second selection.
                         .hover(|s| s.bg(hover_bg).text_color(color::text()))
                         .active(|s| s.bg(color::hover()))
@@ -214,8 +226,8 @@ impl RenderOnce for ThreadRow {
     }
 }
 
-/// A quiet header over a section of the thread list ("Pinned", "Today", "3 Nov"), aligned
-/// with the row titles; `first`: no space above it. Not clickable.
+/// A quiet header over a section of the thread list ("Pinned", or one of Done's: "Today",
+/// "October"), aligned with the row titles; `first`: no space above it. Not clickable.
 pub fn section_header(label: impl Into<SharedString>, first: bool) -> Div {
     div()
         .when(!first, |d| d.pt(size::SIDEBAR_SECTION_GAP))
@@ -229,6 +241,30 @@ pub fn section_header(label: impl Into<SharedString>, first: bool) -> Div {
                 .text_color(color::text_3())
                 .child(label.into()),
         )
+}
+
+/// The header of the Done list at the bottom of the thread list: "Done" (a step brighter than
+/// the date headers inside it), how many, and a chevron that says whether it's expanded; a
+/// click expands or collapses it. `first`: nothing
+/// above it.
+pub fn done_header(count: usize, open: bool, first: bool) -> Stateful<Div> {
+    div().id("done-header").when(!first, |d| d.pt(size::SIDEBAR_SECTION_GAP)).child(
+        div()
+            .h(size::SIDEBAR_SECTION_H)
+            .px_2p5()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .cursor_pointer()
+            .text_size(text::XS)
+            // A step brighter than the section headers under it: their parent, and a control.
+            .text_color(color::text_2())
+            .hover(|s| s.text_color(color::text()))
+            .child("Done")
+            .child(div().text_color(color::text_3()).child(count.to_string()))
+            .child(div().flex_1())
+            .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size(size::ICON_SM).text_color(color::text_3())),
+    )
 }
 
 /// A row's right-click menu: Pin (or Unpin) Thread, Rename Thread… and Mark as Done, with the
@@ -298,8 +334,25 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 row("⌘ held", |r| r.shortcut(Some(("3".into(), true)))),
                 row("⌘ held, selected and working", |r| r.selected(true).indicator(RowIndicator::Working).shortcut(Some(("12".into(), true)))),
                 row("⌘ held, not what's typed", |r| r.shortcut(Some(("4".into(), false)))),
-                Example::new("sections", |_, _| {
-                    let row = |title: &'static str| ThreadRow::new(SharedString::from(format!("sections-{title}")), title).into_any_element();
+                row("done", |r| r.done(true)),
+                row("done, hover", |r| r.done(true).force_hover(true)),
+                Example::new("pinned, the rest by date, Done collapsed", |_, _| {
+                    let row = |title: &'static str| ThreadRow::new(SharedString::from(format!("list-{title}")), title);
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(div().child(section_header("Pinned", true)).child(row("Release checklist")))
+                        .child(row("Guardrail notes"))
+                        .child(div().child(section_header("Today", false)).child(row("Fix the failing smoke test in space-core")))
+                        .child(div().child(section_header("Yesterday", false)).child(row("Bump the gpui-kit version")))
+                        .child(div().child(section_header("Previous 7 Days", false)).child(row("Explain how plugin discovery works")))
+                        .child(done_header(14, false, false))
+                        .into_any_element()
+                })
+                .width(size::SIDEBAR_W - px(20.)),
+                Example::new("Done expanded", |_, _| {
+                    let row = |title: &'static str| ThreadRow::new(SharedString::from(format!("done-{title}")), title).done(true).into_any_element();
                     let section = |label: &'static str, first: bool, titles: &[&'static str]| {
                         let mut rows = titles.iter().map(|t| row(t));
                         let head = rows.next().map(|r| div().child(section_header(label, first)).child(r).into_any_element());
@@ -309,11 +362,13 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                         .flex()
                         .flex_col()
                         .gap_0p5()
-                        .children(section("Pinned", true, &["Release checklist", "Guardrail notes"]))
-                        .children(section("Today", false, &["Fix the failing smoke test in space-core", "Bump the gpui-kit version"]))
-                        .children(section("Yesterday", false, &["Explain how plugin discovery works"]))
-                        .children(section("3 Nov", false, &["Add a context ring to the composer"]))
-                        .children(section("28 Oct 2025", false, &["Sketch the plugin manifest"]))
+                        .child(ThreadRow::new("open-row", "Fix the failing smoke test in space-core"))
+                        .child(done_header(6, true, false))
+                        .children(section("Today", true, &["Add a context ring to the composer"]))
+                        .children(section("Previous 7 Days", false, &["Terminal plugin with alacritty", "Greeting exchange"]))
+                        .children(section("Previous 30 Days", false, &["Sketch the plugin manifest"]))
+                        .children(section("September", false, &["Release 0.1.0"]))
+                        .children(section("2025", false, &["First prototype"]))
                         .into_any_element()
                 })
                 .width(size::SIDEBAR_W - px(20.)),

@@ -1,44 +1,41 @@
-//! Pinned threads and the sidebar's sections: pinned threads at the top, then the rest by the
-//! local day they were created (Today, Yesterday, "3 Nov"). Pinning is saved with the thread
-//! (`ThreadMeta::pinned_ms`) and kept while it's closed.
+//! Pinned threads and the sidebar's order: pinned threads at the top, then the rest, each
+//! newest created first (writing in a thread doesn't move it, so ⌘-numbers stay put), the rest
+//! under date headers by when each was made. Done threads are listed apart, under Done, by when
+//! they were marked done, under the same headers. Pinning is saved with
+//! the thread (`ThreadMeta::pinned_ms`) and kept while it's done.
 
 use gpui::*;
+use space_core::protocol::service::ThreadMeta;
 
 use crate::app::{SpaceApp, now_ms};
 
 impl SpaceApp {
-    /// The listed threads in sidebar order: pinned first, then the rest, each newest first. A
-    /// new thread with nothing sent isn't listed (it isn't saved, so it can't be pinned either).
+    /// The listed threads in sidebar order: pinned first, then the rest, each newest created
+    /// first. A new thread with nothing sent isn't listed (it isn't saved, so it can't be pinned
+    /// either).
     pub(crate) fn listed_threads(&self) -> Vec<u64> {
-        self.listed_sections().into_iter().map(|(key, _)| key).collect()
+        let mut listed: Vec<_> = self.threads.iter().filter(|t| !t.is_empty()).collect();
+        listed.sort_by_key(|t| (t.pinned_ms.is_none(), std::cmp::Reverse(t.created_ms)));
+        listed.into_iter().map(|t| t.key).collect()
     }
 
-    /// The listed threads in sidebar order, each with the header of the section it starts
-    /// ("Pinned", "Today", "Yesterday", "3 Nov"). Pinned threads come first; the rest are grouped
-    /// by the local day they were created, newest day first, keeping their order within a day
-    /// (writing in a thread doesn't move it).
-    pub(crate) fn listed_sections(&self) -> Vec<(u64, Option<String>)> {
-        use space_ui::format::{day_label, local_day, local_offset_secs};
-        let (now, offset) = (now_ms(), local_offset_secs());
-        let listed = || self.threads.iter().rev().filter(|t| !t.is_empty());
-        let mut out: Vec<(u64, Option<String>)> = listed()
-            .filter(|t| t.pinned_ms.is_some())
-            .enumerate()
-            .map(|(ix, t)| (t.key, (ix == 0).then(|| "Pinned".to_string())))
-            .collect();
-        let mut rest: Vec<_> = listed().filter(|t| t.pinned_ms.is_none()).collect();
-        rest.sort_by_key(|t| std::cmp::Reverse(local_day(t.created_ms, offset)));
-        let mut last_day = None;
-        for t in rest {
-            let day = local_day(t.created_ms, offset);
-            let header = (last_day != Some(day)).then(|| day_label(t.created_ms, now, offset));
-            last_day = Some(day);
-            out.push((t.key, header));
-        }
-        out
+    /// The Done list: done threads, last done first, each with the header of the section it
+    /// starts ("Today", "Previous 7 Days", "October", "2025").
+    pub(crate) fn done_sections(&self) -> Vec<(&ThreadMeta, Option<String>)> {
+        let cutoff = self.done_cutoff();
+        let mut done: Vec<_> = self.done_threads.iter().filter(|m| !crate::persist::expired(m, cutoff)).collect();
+        done.sort_by_key(|m| std::cmp::Reverse(m.done_ms));
+        let now = now_ms();
+        date_headers(done, |m| m.done_ms.unwrap_or(now))
     }
 
-    /// Render again at the next local midnight (and every one after), so "Today" becomes
+    /// Show or hide the Done list (collapsed at launch).
+    pub(crate) fn toggle_done_list(&mut self, cx: &mut Context<Self>) {
+        self.done_open = !self.done_open;
+        cx.notify();
+    }
+
+    /// Render again at the next local midnight (and every one after), so a "Today" header becomes
     /// "Yesterday" without a restart.
     pub(crate) fn watch_midnight(&self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
@@ -98,5 +95,41 @@ impl SpaceApp {
             self.save_thread(key, cx);
         }
         cx.notify();
+    }
+}
+
+/// Each item (newest first) with the date header of the section it starts, if it starts one:
+/// sections as [`space_ui::format::date_section`], from the time `at` gives. A list that's all
+/// one section has no header: it would only repeat what every row shares.
+pub(crate) fn date_headers<T>(items: impl IntoIterator<Item = T>, at: impl Fn(&T) -> u64) -> Vec<(T, Option<String>)> {
+    let (now, offset) = (now_ms(), space_ui::format::local_offset_secs());
+    let mut last = None;
+    let mut items: Vec<_> = items
+        .into_iter()
+        .map(|item| {
+            let section = space_ui::format::date_section(at(&item), now, offset);
+            let header = (last.as_ref() != Some(&section)).then(|| section.clone());
+            last = Some(section);
+            (item, header)
+        })
+        .collect();
+    if items.iter().filter(|(_, header)| header.is_some()).count() == 1 {
+        items.iter_mut().for_each(|(_, header)| *header = None);
+    }
+    items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{date_headers, now_ms};
+
+    #[test]
+    fn one_section_has_no_header() {
+        let now = now_ms();
+        let day = 86_400_000;
+        let headers = |times: &[u64]| date_headers(times.iter().copied(), |t| *t).into_iter().map(|(_, h)| h).collect::<Vec<_>>();
+        assert_eq!(headers(&[now, now]), vec![None, None]);
+        assert_eq!(headers(&[now, now, now - 3 * day]), vec![Some("Today".into()), None, Some("Previous 7 Days".into())]);
+        assert!(headers(&[]).is_empty());
     }
 }

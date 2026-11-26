@@ -237,7 +237,8 @@ short ends as cancelled, so no card waits). Writing in it loads its session agai
 that fails, it goes on in a new session (a divider says so). Marking a thread done (⌘W, or
 the row's archive button) stops its turn and terminals at once and saves it with `doneMs` (read from
 the older `closedMs` too); the notice offers Undo (⌘Z) while the thread shown after it is. It's listed
-under + ▸ Done threads (a pin, `pinnedMs`, stays through marking done and reopening), and deleted
+under the sidebar's Done header, by when it was done (a pin, `pinnedMs`, stays through marking done and
+reopening); clicking it there reopens it in its place in the list, which is by `createdMs`. It's deleted
 (`store/delete`, observers get `thread/deleted`) once older than Settings ▸ Threads allows. A new thread
 isn't saved or listed until its first message. Without a store, threads live in memory. A reloaded session's guards start with what
 the thread shows (`Session::seed_history`: its messages, and its tool calls by title), so their first

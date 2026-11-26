@@ -31,13 +31,15 @@ cask clears macOS's download mark so it opens normally.
 - **No checks:** the agent runs every tool call it decides on (shell commands, edits, fetches)
   without asking. Space's guard hooks stay open to a plugin that wants to add checks
   ([writing a plugin](docs/plugins.md)).
-- **Done** (⌘W, or the archive button on a thread's row) takes a thread off the sidebar and keeps it;
-  **⌘Z** brings it back. A new, empty thread in the same folder offers it under **+ ▸ Done threads**.
-  Done threads are deleted after 30 days (Settings ▸ Threads).
+- **Done** (⌘W, or the archive button on a thread's row) moves a thread to the sidebar's **Done**
+  list at the bottom, collapsed until you open it; **⌘Z** brings it back, and so does clicking it
+  there. Done threads are grouped by when they were done (Today, Yesterday, Previous 7 Days,
+  Previous 30 Days, then by month and year), and deleted after 30 days (Settings ▸ Threads).
 - **Titles** come from the agent's model after your first message. A name you give (⌘R) stays.
-- **The sidebar** groups threads under Pinned, Today, Yesterday, then one header per earlier day
-  (by when each was created; writing in one doesn't move it). Pinned threads keep their pin while
-  closed.
+- **The sidebar** lists pinned threads first, then the rest, each newest first (by when it was
+  made: writing in one doesn't move it, so ⌘1–9 keep their rows), the rest under the same date
+  headers as Done. Pinned threads keep their pin
+  while done.
 - **Folders.** Each thread works in one folder, picked under the composer before its first message
   and shown there after (hover for the full path). In a git repo the menu's branch row opens its
   branches: type to filter, or a new name to create one; picking switches the folder (git refuses
