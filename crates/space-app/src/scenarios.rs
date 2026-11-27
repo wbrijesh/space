@@ -408,7 +408,7 @@ pub fn all() -> Vec<Scenario> {
         Scenario {
             name: "done-threads",
             description: "Saved threads, two pinned, and done ones under the sidebar's Done header, from today \
-                          back to last year (never deleted). Click a done thread to reopen it. Threads are saved \
+                          back to last year (never deleted). Click a done thread to read it; its restore button (or a message) reopens it. Threads are saved \
                           in a temp folder, set back to this at each launch.",
             store: true,
             settings: Some(r#"{ "threads": { "keepDoneDays": null } }"#),

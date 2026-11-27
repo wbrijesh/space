@@ -67,7 +67,8 @@ impl SpaceApp {
             updated_ms: now_ms(),
             titled: thread.name.is_some(),
             renamed: thread.renamed,
-            done_ms: None,
+            // A done thread opened to read stays done whatever saves it.
+            done_ms: thread.done_ms,
             pinned_ms: thread.pinned_ms,
             side_of: thread.side_of.and_then(|main| self.thread(main)).map(|t| t.id.clone()),
         }
@@ -240,7 +241,8 @@ impl SpaceApp {
     /// once, and the notice offers Undo. Only when threads aren't saved (it couldn't be reopened)
     /// does it ask first. A thread with nothing in it just goes.
     pub(crate) fn mark_done(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread) = self.thread(key) else { return };
+        // A done thread opened to read is done already.
+        let Some(thread) = self.thread(key).filter(|t| t.done_ms.is_none()) else { return };
         if thread.is_empty() {
             // ⌘W on a new thread: nothing to keep (the empty thread would only come back).
             if self.threads.iter().any(|t| t.key != key) {
@@ -343,14 +345,40 @@ impl SpaceApp {
         Some(thread)
     }
 
-    /// Reopen a done thread and show it. It goes back to its place in the sidebar (the list is
-    /// in the order threads were made), scrolled into view.
+    /// Open a done thread to read: it stays done, listed under Done (its row selected), and
+    /// goes when you leave it. Sending a message in it reopens it (`reopen_done`).
+    pub(crate) fn view_done_thread(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(key) = self.threads.iter().find(|t| t.id == id).map(|t| t.key) {
+            self.select_thread(key, window, cx);
+            return;
+        }
+        let Some(meta) = self.done_threads.iter().find(|m| m.id == id).cloned() else { return };
+        let mut thread = self.saved_thread(meta);
+        thread.done_ms = thread.meta.as_ref().and_then(|m| m.done_ms);
+        let key = thread.key;
+        self.threads.push(thread);
+        self.select_thread(key, window, cx);
+    }
+
+    /// The row's reopen button, or ⌘Z after marking it done: reopen a done thread and show it.
     pub(crate) fn reopen_thread(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(ix) = self.done_threads.iter().position(|m| m.id == id) else { return };
+        if let Some(key) = self.reopen_done(id, cx) {
+            self.select_thread(key, window, cx);
+        }
+    }
+
+    /// Reopen done thread `id`: it goes back to its place in the sidebar (the list is in the
+    /// order threads were made), scrolled into view, and that it's open is saved. The thread
+    /// opened to read, if it's that one, is the one reopened. Its key, or `None` if it isn't done.
+    pub(crate) fn reopen_done(&mut self, id: &str, cx: &mut Context<Self>) -> Option<u64> {
+        let ix = self.done_threads.iter().position(|m| m.id == id)?;
         let mut meta = self.done_threads.remove(ix);
+        let viewed = self.threads.iter().position(|t| t.id == id);
+        // Newer than the save that marked it done, and than any save made while it was read,
+        // even one still in flight.
+        let last = viewed.and_then(|ix| self.threads[ix].meta.as_ref()).map_or(meta.updated_ms, |m| m.updated_ms.max(meta.updated_ms));
         meta.done_ms = None;
-        // Newer than the save that marked it done, even one still in flight.
-        meta.updated_ms = now_ms().max(meta.updated_ms + 1);
+        meta.updated_ms = now_ms().max(last + 1);
         let host = self.host.clone();
         let saved = meta.clone();
         cx.spawn(async move |this, cx| {
@@ -362,12 +390,34 @@ impl SpaceApp {
             }
         })
         .detach();
-        let thread = self.saved_thread(meta);
-        let key = thread.key;
-        self.threads.push(thread);
-        self.select_thread(key, window, cx);
+        let key = match viewed {
+            Some(ix) => {
+                let thread = &mut self.threads[ix];
+                thread.done_ms = None;
+                thread.meta = Some(meta);
+                thread.key
+            }
+            None => {
+                let thread = self.saved_thread(meta);
+                let key = thread.key;
+                self.threads.push(thread);
+                key
+            }
+        };
         if let Some(row) = self.listed_threads().iter().position(|k| *k == key) {
             self.sidebar_scroll.scroll_to_item(row);
+        }
+        cx.notify();
+        Some(key)
+    }
+
+    /// The composer's placeholder says sending reopens the thread while a done one is open to read.
+    pub(crate) fn sync_composer_placeholder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let reopens = self.current().is_some_and(|t| t.done_ms.is_some());
+        if reopens != self.composer_reopens {
+            self.composer_reopens = reopens;
+            use space_ui::components::composer::{PLACEHOLDER, REOPEN_PLACEHOLDER};
+            self.input.update(cx, |s, cx| s.set_placeholder(if reopens { REOPEN_PLACEHOLDER } else { PLACEHOLDER }, window, cx));
         }
     }
 

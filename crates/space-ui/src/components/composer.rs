@@ -70,9 +70,14 @@ pub enum RecallStep {
 /// it move the caret.
 pub type RecallHandler = Rc<dyn Fn(RecallStep, &mut Window, &mut App) -> bool>;
 
+/// The composer's placeholder.
+pub const PLACEHOLDER: &str = "Describe a task or ask a question";
+/// Its placeholder in a done thread opened to read.
+pub const REOPEN_PLACEHOLDER: &str = "Send a message to reopen this thread";
+
 /// A textarea configured for the composer (placeholder, 1–10 line auto-grow, Enter submits).
 pub fn new_input(window: &mut Window, cx: &mut Context<TextareaState>) -> TextareaState {
-    let mut state = TextareaState::new(window, cx).placeholder("Describe a task or ask a question");
+    let mut state = TextareaState::new(window, cx).placeholder(PLACEHOLDER);
     state.set_auto_grow(1, MAX_LINES, cx);
     state.set_submit_on_enter(true, cx);
     state
@@ -641,7 +646,7 @@ pub fn command_menu(menu: &CommandMenu, on_command: StringHandler) -> Div {
     surface().w(px(440.)).max_w(px(440.)).children(menu.items.iter().enumerate().map(|(ix, c)| {
         let (name, run) = (c.name.clone(), on_command.clone());
         row(("command", ix))
-            .when(ix == menu.selected, |d| d.bg(color::hover()))
+            .when(ix == menu.selected, |d| d.bg(color::menu_highlight()))
             // Names in one column, so the descriptions line up.
             .child(div().w(px(96.)).flex_none().truncate().text_color(color::text()).child(format!("/{}", c.name)))
             .child(div().flex_1().min_w_0().truncate().text_size(text::SM).text_color(color::text_3()).child(c.description.clone()))

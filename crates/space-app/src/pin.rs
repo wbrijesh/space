@@ -12,9 +12,9 @@ use crate::app::{SpaceApp, now_ms};
 impl SpaceApp {
     /// The listed threads in sidebar order: pinned first, then the rest, each newest created
     /// first. A new thread with nothing sent isn't listed (it isn't saved, so it can't be pinned
-    /// either).
+    /// either), nor a done thread opened to read (it stays under Done).
     pub(crate) fn listed_threads(&self) -> Vec<u64> {
-        let mut listed: Vec<_> = self.threads.iter().filter(|t| !t.is_empty()).collect();
+        let mut listed: Vec<_> = self.threads.iter().filter(|t| !t.is_empty() && t.done_ms.is_none()).collect();
         listed.sort_by_key(|t| (t.pinned_ms.is_none(), std::cmp::Reverse(t.created_ms)));
         listed.into_iter().map(|t| t.key).collect()
     }
@@ -68,7 +68,8 @@ impl SpaceApp {
     /// Pin the thread, or unpin it, and save that the way a rename is saved. A thread with
     /// nothing sent isn't saved, so it isn't pinned.
     pub(crate) fn toggle_pin(&mut self, key: u64, cx: &mut Context<Self>) {
-        let Some(thread) = self.thread_mut(key).filter(|t| !t.is_empty()) else { return };
+        // A done thread opened to read isn't pinned until it's reopened.
+        let Some(thread) = self.thread_mut(key).filter(|t| !t.is_empty() && t.done_ms.is_none()) else { return };
         let pinned = thread.pinned_ms.is_none().then(now_ms);
         thread.pinned_ms = pinned;
         if !self.saving_threads() {

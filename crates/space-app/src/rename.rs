@@ -31,9 +31,9 @@ impl SpaceApp {
     }
 
     /// Ask for a new name for the thread. A new, empty thread has nothing to rename (it isn't
-    /// listed yet).
+    /// listed yet), nor a done thread opened to read (until it's reopened).
     pub(crate) fn rename_thread(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread) = self.thread(key).filter(|t| !t.is_empty()) else { return };
+        let Some(thread) = self.thread(key).filter(|t| !t.is_empty() && t.done_ms.is_none()) else { return };
         let title = thread.title();
         let answer = text_prompt::ask(
             window,

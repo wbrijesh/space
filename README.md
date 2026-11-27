@@ -32,8 +32,9 @@ cask clears macOS's download mark so it opens normally.
   without asking. Space's guard hooks stay open to a plugin that wants to add checks
   ([writing a plugin](docs/plugins.md)).
 - **Done** (⌘W, or the archive button on a thread's row) moves a thread to the sidebar's **Done**
-  list at the bottom, collapsed until you open it; **⌘Z** brings it back, and so does clicking it
-  there. Done threads are grouped by when they were done (Today, Yesterday, Previous 7 Days,
+  list at the bottom, collapsed until you open it; **⌘Z** brings it back. Clicking a done thread
+  there opens it to read, and it stays done; its row's restore button reopens it, and so does
+  sending a message in it. Done threads are grouped by when they were done (Today, Yesterday, Previous 7 Days,
   Previous 30 Days, then by month and year), and deleted after 30 days (Settings ▸ Threads: 7, 30 or 90 days, or never).
 - **Titles** come from the agent's model after your first message. A name you give (⌘R) stays.
 - **The sidebar** lists pinned threads first, then the rest, each newest first (by when it was

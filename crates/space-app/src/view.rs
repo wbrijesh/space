@@ -60,6 +60,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
     // A stopped turn's queued messages go back into the composer; so does a message rewound to.
     app.restore_stopped_queue(window, cx);
     app.apply_composer_changes(window, cx);
+    app.sync_composer_placeholder(window, cx);
     let clock = space_ui::clock::AnimationClock::global(cx);
     let (now, pinned, clock_running) = (clock.now(), clock.pinned(), clock.is_running());
     let (shown, moving) = app.sidebar_shown.at(now, pinned);
@@ -481,8 +482,10 @@ fn sidebar(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> impl IntoElement {
         })
         .collect();
     // Done threads, under a header at the bottom that expands and collapses them; grouped by
-    // when each was marked done. A click reopens one. None (or threads not saved): no header.
+    // when each was marked done. A click opens one to read (it stays here, selected); its
+    // restore button reopens it. None (or threads not saved): no header.
     let done = app.done_sections();
+    let reading = app.current().filter(|t| t.done_ms.is_some() && !app.show_settings).map(|t| t.id.clone());
     if !done.is_empty() {
         rows.push(
             done_header(done.len(), app.done_open, listed.is_empty())
@@ -491,10 +494,12 @@ fn sidebar(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> impl IntoElement {
         );
         if app.done_open {
             rows.extend(done.into_iter().enumerate().map(|(ix, (meta, header))| {
-                let id = meta.id.clone();
+                let (id, reopen) = (meta.id.clone(), meta.id.clone());
                 let row = ThreadRow::new(SharedString::from(format!("done-{}", meta.id)), meta.title.clone())
                     .done(true)
-                    .on_click(cx.listener(move |this, _, w, cx| this.reopen_thread(&id, w, cx)));
+                    .selected(reading.as_deref() == Some(meta.id.as_str()))
+                    .on_click(cx.listener(move |this, _, w, cx| this.view_done_thread(&id, w, cx)))
+                    .on_reopen(cx.listener(move |this, _, w, cx| this.reopen_thread(&reopen, w, cx)));
                 match header {
                     Some(label) => div().child(section_header(label, ix == 0)).child(row).into_any_element(),
                     None => row.into_any_element(),

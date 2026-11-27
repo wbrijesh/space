@@ -424,7 +424,11 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                         let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
                         if let Some(app) = app {
                             let app = app.read(cx);
-                            let titles: Vec<String> = app.threads.iter().map(|t| format!("{}{}", if app.selected == Some(t.key) { "*" } else { "" }, t.title())).collect();
+                            let titles: Vec<String> = app
+                                .threads
+                                .iter()
+                                .map(|t| format!("{}{}{}", if app.selected == Some(t.key) { "*" } else { "" }, t.title(), if t.done_ms.is_some() { " (reading, done)" } else { "" }))
+                                .collect();
                             let done: Vec<&str> = app.done_threads.iter().map(|m| m.title.as_str()).collect();
                             let notice = app.rewind.notice.as_ref().map(|n| (n.title.clone(), n.body.clone()));
                             eprintln!("script: threads {titles:?} done {done:?} notice {notice:?} undo {}", app.rewind.done.is_some());

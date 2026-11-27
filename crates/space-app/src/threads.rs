@@ -45,6 +45,9 @@ pub struct Thread {
     pub renamed: bool,
     /// When you pinned it (Unix ms): listed at the top of the sidebar.
     pub pinned_ms: Option<u64>,
+    /// A done thread opened to read (when it was marked done): it stays done and under Done, isn't
+    /// listed, and goes when you leave it. Sending a message reopens it.
+    pub done_ms: Option<u64>,
     /// The agent session to load to continue a saved conversation.
     pub resume: Option<String>,
     pub cwd: PathBuf,
@@ -161,6 +164,7 @@ impl Thread {
             name: None,
             renamed: false,
             pinned_ms: None,
+            done_ms: None,
             resume: None,
             branch: format::git_branch(&cwd),
             cwd,
@@ -662,6 +666,14 @@ impl SpaceApp {
     /// Send `message` in thread `key`: now, queued while the agent works, or once a session is up.
     pub(crate) fn dispatch(&mut self, key: u64, when: crate::queue::When, running: bool, message: Outgoing, cx: &mut Context<Self>) {
         let message = message.with_id();
+        // A done thread opened to read is reopened by writing in it.
+        if let Some(id) = self.thread(key).filter(|t| t.done_ms.is_some()).map(|t| t.id.clone())
+            && self.reopen_done(&id, cx).is_none()
+            && let Some(thread) = self.thread_mut(key)
+        {
+            // No longer kept as done (deleted meanwhile): it's an open thread from here on.
+            thread.done_ms = None;
+        }
         // The agent is working: the message waits (for the turn, or for the current step).
         if running {
             self.queue_message(key, when, message, cx);

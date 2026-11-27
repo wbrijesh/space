@@ -238,7 +238,9 @@ that fails, it goes on in a new session (a divider says so). Marking a thread do
 the row's archive button) stops its turn and terminals at once and saves it with `doneMs` (read from
 the older `closedMs` too); the notice offers Undo (⌘Z) while the thread shown after it is. It's listed
 under the sidebar's Done header, by when it was done (a pin, `pinnedMs`, stays through marking done and
-reopening); clicking it there reopens it in its place in the list, which is by `createdMs`. It's deleted
+reopening). Clicking it there opens it to read: a `Thread` built from its summary with `done_ms` set,
+not listed, saved (if at all) still done, and dropped when you leave it. The row's restore button, a
+message sent in it, or ⌘Z reopens it (`reopen_done`) in its place in the list, which is by `createdMs`. It's deleted
 (`store/delete`, observers get `thread/deleted`) once older than Settings ▸ Threads allows. A new thread
 isn't saved or listed until its first message. Without a store, threads live in memory. A reloaded session's guards start with what
 the thread shows (`Session::seed_history`: its messages, and its tool calls by title), so their first

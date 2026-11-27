@@ -481,6 +481,8 @@ pub struct SpaceApp {
     pub(crate) done_threads: Vec<space_core::protocol::service::ThreadMeta>,
     /// The sidebar's Done list is expanded (collapsed at launch).
     pub(crate) done_open: bool,
+    /// The composer says sending reopens the thread (a done thread is open to read).
+    pub(crate) composer_reopens: bool,
     pub(crate) settings: SettingsStore,
     /// The Settings page replaces the thread view.
     pub(crate) show_settings: bool,
@@ -749,6 +751,7 @@ impl SpaceApp {
             banner,
             done_threads: Vec::new(),
             done_open: false,
+            composer_reopens: false,
             sidebar_scroll: ScrollHandle::new(),
             cmd_alone: false,
             cmd_numbers: false,
@@ -987,6 +990,12 @@ impl SpaceApp {
             if let Some(prev) = left
                 && self.thread(prev).is_some_and(|t| t.is_empty() && t.draft.trim().is_empty() && t.attachments.is_empty() && t.images.is_empty() && t.pastes.is_empty() && t.quote.is_none())
                 && !self.has_terminals(prev)
+            {
+                self.drop_thread(prev, cx);
+            }
+            // So does a done thread opened to read: it's still under Done, to open again.
+            if let Some(prev) = left
+                && self.thread(prev).is_some_and(|t| t.done_ms.is_some())
             {
                 self.drop_thread(prev, cx);
             }

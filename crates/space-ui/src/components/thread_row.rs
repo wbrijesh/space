@@ -1,6 +1,7 @@
 //! Sidebar thread row: one line with the thread title and an activity indicator; on hover an
 //! archive button marks it done. Right-click for Pin, Rename Thread… and Mark as Done. A done
-//! thread's row (under the Done header) is dimmer, and only reopens it.
+//! thread's row (under the Done header) is dimmer: a click opens it to read, and on hover a
+//! restore button reopens it.
 
 use gpui::assets::IconName;
 use gpui::component::Icon;
@@ -65,6 +66,8 @@ pub struct ThreadRow {
     terminal: bool,
     on_click: Option<ClickHandler>,
     on_done: Option<ClickHandler>,
+    /// A done thread's: reopen it (the restore button on hover).
+    on_reopen: Option<ClickHandler>,
     on_rename: Option<ClickHandler>,
     /// Pin or unpin it: whether it's pinned, whether it can be (it's saved), and the handler.
     on_pin: Option<(bool, bool, ClickHandler)>,
@@ -84,6 +87,7 @@ impl ThreadRow {
             terminal: false,
             on_click: None,
             on_done: None,
+            on_reopen: None,
             on_rename: None,
             on_pin: None,
             shortcut: None,
@@ -101,7 +105,7 @@ impl ThreadRow {
         self
     }
 
-    /// A done thread's row, listed under Done (a click reopens it; no actions or menu).
+    /// A done thread's row, listed under Done (a click opens it to read; no menu).
     pub fn done(mut self, done: bool) -> Self {
         self.done = done;
         self
@@ -146,6 +150,13 @@ impl ThreadRow {
         self.on_done = Some(std::rc::Rc::new(f));
         self
     }
+
+    /// A done row's: reopen it, from the restore button on hover (where an open row has its
+    /// archive button).
+    pub fn on_reopen(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
+        self.on_reopen = Some(std::rc::Rc::new(f));
+        self
+    }
 }
 
 impl RenderOnce for ThreadRow {
@@ -170,13 +181,14 @@ impl RenderOnce for ThreadRow {
             })
         });
         let hover_bg = color::surface();
-        // Whether the pointer is on the row, kept by `on_hover` below, so the archive button is
+        // Whether the pointer is on the row, kept by `on_hover` below, so the hover button is
         // chosen here, not shown by a hover style (a hover `display` can panic GPUI; see
         // `hover_styles_never_change_display`).
         let hovered = window.use_keyed_state(SharedString::from(format!("thread-row-hover-{menu_key}")), cx, |_, _| false);
-        let show_done = self.force_hover || *hovered.read(cx);
-        // On hover the archive button takes the indicator's place (not while ⌘ shows numbers).
-        let done = self.on_done.clone().filter(|_| show_done && self.shortcut.is_none()).map(|f| {
+        let show_button = (self.force_hover || *hovered.read(cx)) && self.shortcut.is_none();
+        // On hover the archive button (a done row's: restore) takes the indicator's place (not
+        // while ⌘ shows numbers).
+        let done = self.on_done.clone().filter(|_| show_button).map(|f| {
             icon_button(SharedString::from(format!("{menu_key}-done")), gpui::assets::IconName::Archive, true, false)
                 .size(px(20.))
                 .tip_action("Mark as Done", &MarkDone)
@@ -184,6 +196,19 @@ impl RenderOnce for ThreadRow {
                     cx.stop_propagation();
                     f(e, w, cx)
                 })
+                .into_any_element()
+        });
+        let done = done.or_else(|| {
+            self.on_reopen.clone().filter(|_| show_button).map(|f| {
+                icon_button(SharedString::from(format!("{menu_key}-reopen")), gpui::assets::IconName::ArchiveRestore, true, false)
+                    .size(px(20.))
+                    .tip("Reopen Thread")
+                    .on_click(move |e, w, cx| {
+                        cx.stop_propagation();
+                        f(e, w, cx)
+                    })
+                    .into_any_element()
+            })
         });
         let indicator = indicator.filter(|_| done.is_none()).map(|i| div().flex_none().flex().items_center().child(i));
         let row = div()
@@ -338,7 +363,8 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 row("⌘ held, selected and working", |r| r.selected(true).indicator(RowIndicator::Working).shortcut(Some(("12".into(), true)))),
                 row("⌘ held, not what's typed", |r| r.shortcut(Some(("4".into(), false)))),
                 row("done", |r| r.done(true)),
-                row("done, hover", |r| r.done(true).force_hover(true)),
+                row("done, hover", |r| r.done(true).force_hover(true).on_reopen(|_, _, _| {})),
+                row("done, open to read", |r| r.done(true).selected(true)),
                 Example::new("pinned, the rest by date, Done collapsed", |_, _| {
                     let row = |title: &'static str| ThreadRow::new(SharedString::from(format!("list-{title}")), title);
                     div()
