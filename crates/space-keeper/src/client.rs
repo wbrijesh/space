@@ -61,6 +61,8 @@ struct Slot {
 pub struct Welcome {
     pub pid: u32,
     pub agents: Vec<AgentInfo>,
+    pub server: Option<ServerCommand>,
+    pub previous_server: Option<ServerCommand>,
 }
 
 impl std::fmt::Debug for KeeperClient {
@@ -79,8 +81,8 @@ impl KeeperClient {
         write.write_all(format!("{hello}\n").as_bytes()).await?;
         let mut lines = BufReader::new(read).lines();
         let first = lines.next_line().await?.context("the keeper hung up")?;
-        let (pid, agents) = match serde_json::from_str::<FromKeeper>(&first)? {
-            FromKeeper::Welcome { pid, agents, .. } => (pid, agents),
+        let (pid, agents, server, previous_server) = match serde_json::from_str::<FromKeeper>(&first)? {
+            FromKeeper::Welcome { pid, agents, server, previous_server, .. } => (pid, agents, server, previous_server),
             FromKeeper::Refused { reason } => bail!("the keeper refused this server: {reason}"),
             other => bail!("unexpected first message from the keeper: {other:?}"),
         };
@@ -110,7 +112,7 @@ impl KeeperClient {
             }
             shared.lost();
         });
-        Ok((client, Welcome { pid, agents }, pipes))
+        Ok((client, Welcome { pid, agents, server, previous_server }, pipes))
     }
 
     /// Start `name` under the keeper.
@@ -141,6 +143,11 @@ impl KeeperClient {
     /// Stop every agent and the keeper.
     pub fn quit(&self) {
         let _ = self.send(ToKeeper::Quit);
+    }
+
+    /// Run `server` from now on, once the current one exits.
+    pub fn replace_server(&self, server: ServerCommand) {
+        let _ = self.send(ToKeeper::ReplaceServer { server });
     }
 
     /// Whether the connection is up; changes once, when it ends.
@@ -227,20 +234,25 @@ impl Shared {
             let _ = slot.events.send(AgentEvent::Lost);
         }
         self.spawns.lock().unwrap().clear();
-        let _ = self.connected.send(false);
+        self.connected.send_replace(false);
     }
 }
 
 /// Start a keeper for `socket` from `exe`, detached from this process (its own session, so it
-/// outlives the server and the app), logging to `log`. Returns once it answers.
-pub async fn start(exe: &Path, socket: &Path, log: &Path) -> Result<()> {
+/// outlives the server and the app), logging to `log`, running `server`. Returns once it
+/// answers.
+pub async fn start(exe: &Path, socket: &Path, log: &Path, server: Option<&ServerCommand>) -> Result<()> {
     use std::os::unix::process::CommandExt as _;
     if let Some(dir) = log.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let out = std::fs::OpenOptions::new().create(true).append(true).open(log)?;
     let mut cmd = std::process::Command::new(exe);
-    cmd.arg("--socket").arg(socket).stdin(std::process::Stdio::null()).stdout(out.try_clone()?).stderr(out);
+    cmd.arg("--socket").arg(socket);
+    if let Some(server) = server {
+        cmd.arg("--server-log").arg(log.with_file_name("server.log")).arg("--server").arg(&server.program).args(&server.args);
+    }
+    cmd.stdin(std::process::Stdio::null()).stdout(out.try_clone()?).stderr(out);
     // SAFETY: setsid is async-signal-safe; nothing else runs between fork and exec.
     unsafe {
         cmd.pre_exec(|| {

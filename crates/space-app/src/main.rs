@@ -13,7 +13,8 @@
 //! The app starts the agent plugin (`claude-agent`, or `SPACE_AGENT=<plugin id>`) on launch and
 //! opens an empty thread. Env: `SPACE_AUTOPROMPT="..."` sends that prompt in the first
 //! thread; `SPACE_PLUGIN_DIRS` overrides the bundled plugin roots; `SPACE_SETTINGS` overrides
-//! the settings file (`~/.space/settings.json`). Dev: `SPACE_SCRIPT=file`
+//! the settings file (`~/.space/settings.json`); `SPACE_SERVER_DIR` runs the shared server in
+//! that folder instead of Space's own (to try it alongside the real one). Dev: `SPACE_SCRIPT=file`
 //! replays input commands (see `devscript`).
 
 mod app;
@@ -71,7 +72,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use space_core::smoke::{self, SmokeOptions};
-use space_core::{DiscoveryOptions, Host, HostOptions};
+use space_core::{DiscoveryOptions, HostOptions};
 
 use crate::app::{Launch, Options, SeedThread};
 
@@ -214,14 +215,13 @@ fn main() -> Result<()> {
     if args.check_plugins {
         // Nothing is kept: no approvals or threads are written.
         host_options.space_dir = None;
-        let (host, _events) = Host::new(runtime.handle().clone(), host_options);
+        let (host, _events) = space_core::Host::new(runtime.handle().clone(), host_options);
         let ok = runtime.block_on(check::run(&host, &args.project_dir, options.agent.clone()));
         std::process::exit(if ok { 0 } else { 1 });
     }
 
-    let (host, events) = Host::new(runtime.handle().clone(), host_options);
-
     if let Some(prompt) = args.smoke {
+        let (host, events) = space_core::Host::new(runtime.handle().clone(), host_options);
         let opts = SmokeOptions {
             plugin_id: args.plugin,
             cwd: args.project_dir,
@@ -234,6 +234,21 @@ fn main() -> Result<()> {
         println!("ok: {} transcript item(s)", state.items.len());
         return Ok(());
     }
+
+    // The real Space works on the shared server, which outlives it (quitting leaves agents
+    // working); everything else (the gallery, scenarios, test copies, scripts) on a private one
+    // inside this process, which ends with it.
+    // `SPACE_SERVER_DIR`: a shared server in that folder instead (to try it without touching
+    // Space's own folder).
+    let test_server = std::env::var_os("SPACE_SERVER_DIR").filter(|d| !d.is_empty()).map(std::path::PathBuf::from);
+    let shared_dir = test_server.or_else(|| host_options.space_dir.clone().filter(|_| own_data && window_app));
+    let (host, events) = match shared_dir {
+        Some(dir) => runtime.block_on(space_client::connect_shared(&dir, &args.project_dir, args.no_folder))?,
+        None => {
+            let (core, core_events) = space_core::Host::new(runtime.handle().clone(), host_options);
+            runtime.block_on(space_client::start_private(core, core_events))?
+        }
+    };
 
     let launch = if args.gallery { Launch::Gallery } else { Launch::App(options) };
     app::run(host, events, launch);

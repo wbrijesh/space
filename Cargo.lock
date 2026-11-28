@@ -6602,6 +6602,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "similar",
+ "space-client",
  "space-core",
  "space-protocol",
  "space-terminal",
@@ -6610,6 +6611,24 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "space-client"
+version = "0.1.6"
+dependencies = [
+ "anyhow",
+ "futures",
+ "serde",
+ "serde_json",
+ "space-core",
+ "space-keeper",
+ "space-plugin",
+ "space-protocol",
+ "space-server",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -6671,6 +6690,26 @@ dependencies = [
  "thiserror 2.0.21",
  "toml 0.9.12+spec-1.1.0",
  "ts-rs",
+]
+
+[[package]]
+name = "space-server"
+version = "0.1.6"
+dependencies = [
+ "anyhow",
+ "dirs 6.0.0",
+ "futures",
+ "libc",
+ "serde",
+ "serde_json",
+ "space-core",
+ "space-keeper",
+ "space-plugin",
+ "space-protocol",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

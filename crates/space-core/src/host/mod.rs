@@ -81,7 +81,7 @@ use pipeline::SessionMeta;
 use services::Service;
 
 /// Lifecycle of a plugin process.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PluginStatus {
     Stopped,
     Starting,
@@ -105,7 +105,7 @@ impl PluginStatus {
 }
 
 /// Everything the host reports.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum HostEvent {
     PluginStatus { plugin_id: String, status: PluginStatus },
     /// One stderr line from a plugin.
@@ -134,10 +134,13 @@ pub enum HostEvent {
     Steered { session_id: SessionId, steer_id: String },
     /// Saving a thread failed; its events wait and the write is tried again.
     SaveFailed { thread_id: String, message: String },
+    /// [`Host::open_thread`] read the thread here: its session events before this are in what
+    /// it returned.
+    ThreadOpened { thread_id: String },
 }
 
 /// One plugin setting as the Settings page shows it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SettingState {
     pub field: SettingField,
     pub set: bool,
@@ -188,7 +191,7 @@ impl HostOptions {
 }
 
 /// Why a plugin setting wasn't saved.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, serde::Serialize, serde::Deserialize)]
 pub enum SettingError {
     /// The plugin rejected the value; nothing was stored.
     #[error("{0}")]
@@ -289,6 +292,11 @@ impl Host {
         self.inner.statuses.lock().unwrap().get(plugin_id).cloned()
     }
 
+    /// The thread session `session_id` was made for.
+    pub fn session_thread(&self, session_id: &str) -> Option<String> {
+        self.inner.session_thread(session_id)
+    }
+
     pub fn project_dir(&self) -> &Path {
         &self.inner.options.project_dir
     }
@@ -341,8 +349,7 @@ impl HostInner {
 
     fn emit_session(&self, session_id: &str, event: SessionEvent) {
         self.observe_session(session_id, &event);
-        self.record_session_event(session_id, &event);
-        self.emit(HostEvent::Session { session_id: session_id.to_string(), event });
+        self.emit_saved_session(session_id, event);
     }
 }
 

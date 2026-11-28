@@ -38,12 +38,20 @@ pub const QUEUE_LIMIT: usize = 64 << 20;
 /// Stderr lines kept per agent for a new server.
 const STDERR_KEEP: usize = 200;
 
-/// Run the keeper on `socket` until a server sends [`ToKeeper::Quit`]. Fails if another keeper
-/// already answers there.
-pub async fn run(socket: &Path) -> Result<()> {
+/// Run the keeper on `socket` until a server sends [`ToKeeper::Quit`], keeping `server` running
+/// (its output appended to the log file given with it). Fails if another keeper already answers
+/// there.
+pub async fn run(socket: &Path, server: Option<(ServerCommand, PathBuf)>) -> Result<()> {
     let listener = bind(socket).await?;
     let keeper = Arc::new(Keeper { state: Mutex::new(State::default()), quit: Notify::new() });
     tracing::info!("keeper {} listening on {}", std::process::id(), socket.display());
+    if let Some((command, log)) = server {
+        keeper.state.lock().unwrap().server = Some(command);
+        tokio::spawn(keeper.clone().supervise(log));
+    }
+    // Asked to stop by a signal: the same as Quit Server.
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut int = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -51,8 +59,11 @@ pub async fn run(socket: &Path) -> Result<()> {
                 tokio::spawn(keeper.clone().serve(stream));
             }
             _ = keeper.quit.notified() => break,
+            _ = term.recv() => break,
+            _ = int.recv() => break,
         }
     }
+    keeper.state.lock().unwrap().quitting = true;
     keeper.stop_all().await;
     let _ = std::fs::remove_file(socket);
     tracing::info!("keeper quit");
@@ -87,6 +98,13 @@ struct State {
     generation: u64,
     conn: Option<Conn>,
     agents: HashMap<String, Agent>,
+    /// The server the keeper runs, and the one before it.
+    server: Option<ServerCommand>,
+    previous_server: Option<ServerCommand>,
+    server_pid: Option<u32>,
+    /// A new server was asked for: the current one's exit isn't a failure.
+    replaced: bool,
+    quitting: bool,
 }
 
 /// The connected server.
@@ -299,7 +317,8 @@ impl Keeper {
             let mut names: Vec<_> = state.agents.keys().cloned().collect();
             names.sort();
             let agents = names.iter().map(|n| state.agents[n].info(n, generation)).collect();
-            conn.send(&FromKeeper::Welcome { protocol: KEEPER_PROTOCOL, pid: std::process::id(), agents });
+            let (server, previous_server) = (state.server.clone(), state.previous_server.clone());
+            conn.send(&FromKeeper::Welcome { protocol: KEEPER_PROTOCOL, pid: std::process::id(), agents, server, previous_server });
             for name in &names {
                 for msg in state.agents[name].backlog(name, generation) {
                     conn.send(&msg);
@@ -371,6 +390,12 @@ impl Keeper {
                 }
             }
             ToKeeper::Quit => self.quit.notify_one(),
+            ToKeeper::ReplaceServer { server } => {
+                let mut state = self.state.lock().unwrap();
+                tracing::info!("next server: {}", server.program.display());
+                state.previous_server = state.server.replace(server);
+                state.replaced = true;
+            }
         }
     }
 
@@ -496,8 +521,70 @@ impl Keeper {
         }
     }
 
-    /// Quit: stop every agent, politely first.
+    /// Keep the server running: start it again when it exits, after a moment; after repeated
+    /// quick failures go back to the server before it, if there is one.
+    async fn supervise(self: Arc<Self>, log: PathBuf) {
+        let mut failures: VecDeque<std::time::Instant> = VecDeque::new();
+        loop {
+            let command = {
+                let state = self.state.lock().unwrap();
+                state.server.clone().filter(|_| !state.quitting)
+            };
+            let Some(command) = command else { return };
+            let out = std::fs::OpenOptions::new().create(true).append(true).open(&log);
+            let spawned = out.and_then(|out| {
+                Command::new(&command.program)
+                    .args(&command.args)
+                    .stdin(Stdio::null())
+                    .stdout(out.try_clone()?)
+                    .stderr(out)
+                    .spawn()
+            });
+            match spawned {
+                Ok(mut child) => {
+                    self.state.lock().unwrap().server_pid = child.id();
+                    tracing::info!("started the server {} (pid {:?})", command.program.display(), child.id());
+                    let status = child.wait().await;
+                    self.state.lock().unwrap().server_pid = None;
+                    tracing::info!("the server exited ({status:?})");
+                }
+                Err(e) => tracing::warn!("starting the server {}: {e}", command.program.display()),
+            }
+            let replaced = {
+                let mut state = self.state.lock().unwrap();
+                if state.quitting {
+                    return;
+                }
+                std::mem::take(&mut state.replaced)
+            };
+            if replaced {
+                failures.clear();
+                continue;
+            }
+            let now = std::time::Instant::now();
+            failures.push_back(now);
+            while failures.front().is_some_and(|t| now.duration_since(*t) > std::time::Duration::from_secs(60)) {
+                failures.pop_front();
+            }
+            if failures.len() >= 3 {
+                let mut state = self.state.lock().unwrap();
+                if let Some(previous) = state.previous_server.take() {
+                    tracing::warn!("the server keeps failing: going back to {}", previous.program.display());
+                    state.server = Some(previous);
+                    failures.clear();
+                    continue;
+                }
+            }
+            let wait = std::time::Duration::from_millis(500 * failures.len().min(20) as u64);
+            tokio::time::sleep(wait).await;
+        }
+    }
+
+    /// Quit: stop every agent and the server, politely first.
     async fn stop_all(&self) {
+        if let Some(pid) = self.state.lock().unwrap().server_pid {
+            signal(pid, libc::SIGTERM);
+        }
         let pids: Vec<u32> = self.state.lock().unwrap().agents.values().filter(|a| a.exited.is_none()).map(|a| a.pid).collect();
         for pid in &pids {
             signal(*pid, libc::SIGTERM);

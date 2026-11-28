@@ -144,7 +144,7 @@ pub fn new_message_id() -> String {
 }
 
 /// What the user sends: the text, a quote it answers, and what goes with it.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UserInput {
     pub text: String,
     /// Text quoted from the transcript, sent before the message.
@@ -271,7 +271,7 @@ pub enum SessionEvent {
 }
 
 /// One entry in the rendered transcript.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TranscriptItem {
     User {
         text: String,

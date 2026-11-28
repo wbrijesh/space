@@ -7,9 +7,10 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use gpui::*;
+use space_client::{AgentHandle, Session};
 use space_core::protocol::ConfigureSession;
 use space_core::protocol::service::ThreadMeta;
-use space_core::{AgentHandle, PluginStatus, Session, SessionEvent, SessionState, TranscriptItem};
+use space_core::{PluginStatus, SessionEvent, SessionState, TranscriptItem};
 use space_ui::format;
 
 use crate::app::{SeedThread, SpaceApp};
@@ -28,6 +29,8 @@ pub struct Thread {
     pub meta: Option<ThreadMeta>,
     /// A save was asked for while the thread was loading.
     pub save_again: bool,
+    /// A session an earlier app left open on the server, attached once the thread has loaded.
+    pub adopted: Option<Session>,
     /// A saved thread whose events haven't been read yet (they are when it's opened).
     pub unloaded: bool,
     pub loading: bool,
@@ -148,6 +151,7 @@ impl Thread {
             created_ms: crate::app::now_ms(),
             meta: None,
             save_again: false,
+            adopted: None,
             unloaded: false,
             loading: false,
             name: None,

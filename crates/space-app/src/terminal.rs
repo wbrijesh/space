@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gpui::*;
-use space_core::Host;
+use space_client::{Host};
 use space_core::protocol::terminal::{TerminalOpen, TerminalReplay};
 use space_terminal::{Screen, Size as TermSize};
 use space_ui::components::right_pane::PaneView;
@@ -638,6 +638,11 @@ impl SpaceApp {
     /// through here.)
     pub(crate) fn quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.asking_to_quit {
+            return;
+        }
+        // The shared server keeps working: quitting the app stops nothing.
+        if self.host.is_shared() {
+            cx.quit();
             return;
         }
         let working = self.threads.iter().filter(|t| t.state.running).count();

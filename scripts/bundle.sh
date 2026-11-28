@@ -38,6 +38,12 @@ for manifest in "$root"/plugins/*/space-plugin.toml; do
     cp "$out/$binary" "$app/Contents/Helpers/$binary"
 done
 
+# The server and the keeper, which the app starts and which outlive it.
+for binary in space-server space-keeper; do
+    [ -x "$out/$binary" ] || { echo "missing $out/$binary" >&2; exit 1; }
+    cp "$out/$binary" "$app/Contents/Helpers/$binary"
+done
+
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -19,12 +19,10 @@ use std::time::Duration;
 
 use gpui::component::input::{self, InputEvent, InputState, TextareaState};
 use gpui::*;
+use space_client::{AgentHandle, EventReceiver, Host};
 use space_core::protocol::service::{BlockerAction, CatalogEntry};
 use space_core::protocol::{CATALOG_PERMISSION_MODES, ConfigureSession, ModelInfo};
-use space_core::{
-    AgentHandle, Approval, DiscoveredPlugin, EventReceiver, Host, HostEvent, PermissionDecision, PluginStatus, SessionEvent,
-    SessionId, SettingState,
-};
+use space_core::{Approval, DiscoveredPlugin, HostEvent, PermissionDecision, PluginStatus, SessionEvent, SessionId, SettingState};
 use space_ui::components::settings::FieldCheck;
 
 pub use space_ui::actions::{
@@ -633,11 +631,46 @@ impl SpaceApp {
         // Quitting: save what the threads haven't yet and the drafts, then stop the plugins,
         // each before what it requires.
         let quit = cx.on_app_quit(|this, cx| {
+            // Sessions dropped from here on stay open on the server, for the next app.
+            this.host.close();
             this.save_all_now();
             this.save_drafts(cx);
             this.host.shutdown();
             async {}
         });
+
+        // The shared server went away (an update restarts it, or it crashed): its keeper starts
+        // it again, with the agents still working. Once it answers, start again on it: the
+        // threads, drafts and running turns all come back.
+        if host.is_shared() {
+            cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(Duration::from_millis(250)).await;
+                    let Ok(gone) = this.update(cx, |this, _| this.host.is_disconnected()) else { return };
+                    if gone {
+                        break;
+                    }
+                }
+                tracing::info!("the server went away; waiting for it to come back");
+                let _ = this.update(cx, |this, cx| {
+                    this.banner = Some("Reconnecting to the Space server…".into());
+                    cx.notify();
+                });
+                loop {
+                    cx.background_executor().timer(Duration::from_millis(250)).await;
+                    let Ok(back) = this.update(cx, |this, _| this.host.server_answers()) else { return };
+                    if back {
+                        break;
+                    }
+                }
+                tracing::info!("the server is back; starting again on it");
+                let _ = this.update(cx, |this, cx| {
+                    this.save_drafts(cx);
+                    relaunch();
+                });
+            })
+            .detach();
+        }
 
         // Drafts are kept beside the settings file.
         let drafts = crate::drafts::Drafts::load(options.settings_path.as_ref().and_then(|p| Some(p.parent()?.join("drafts.json"))));
@@ -880,6 +913,7 @@ impl SpaceApp {
 
     fn on_host_event(&mut self, event: HostEvent, cx: &mut Context<Self>) {
         match event {
+            HostEvent::ThreadOpened { .. } => {}
             HostEvent::SaveFailed { message, .. } => {
                 self.banner = Some(format!("Couldn't save a thread (Space keeps trying): {message}"));
                 cx.notify();
@@ -1482,6 +1516,15 @@ pub(crate) fn slide(spring: &mut space_ui::theme::motion::Spring, target: f32, d
     }
 }
 
+/// Start this app again in place (same process, same arguments): its windows and state are
+/// rebuilt from what's saved and what the server holds.
+pub(crate) fn relaunch() {
+    use std::os::unix::process::CommandExt as _;
+    let Ok(exe) = std::env::current_exe() else { return };
+    let error = std::process::Command::new(exe).args(std::env::args_os().skip(1)).exec();
+    tracing::error!("couldn't start again: {error}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::{CatalogEntry, resolve_mode};
@@ -1502,3 +1545,4 @@ mod tests {
         assert_eq!(resolve_mode(&no_default, None, None).as_deref(), Some("a"));
     }
 }
+

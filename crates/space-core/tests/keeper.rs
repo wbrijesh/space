@@ -72,7 +72,7 @@ fn a_new_host_takes_over_a_running_agent() {
     let keeper_rt = runtime();
     {
         let socket = socket.clone();
-        keeper_rt.spawn(async move { space_keeper::daemon::run(&socket).await.unwrap() });
+        keeper_rt.spawn(async move { space_keeper::daemon::run(&socket, None).await.unwrap() });
     }
     while !socket.exists() {
         std::thread::sleep(Duration::from_millis(10));
@@ -158,7 +158,7 @@ fn dropping_an_agent_stops_it_and_an_exit_is_reported() {
     let rt = runtime();
     rt.block_on(async {
         let socket2 = socket.clone();
-        tokio::spawn(async move { space_keeper::daemon::run(&socket2).await.unwrap() });
+        tokio::spawn(async move { space_keeper::daemon::run(&socket2, None).await.unwrap() });
         while !socket.exists() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }

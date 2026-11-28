@@ -18,6 +18,7 @@ dev = ["space-ui/dev", "dep:schemars"]
 
 [dependencies]
 space-core.workspace = true
+space-client.workspace = true
 space-ui.workspace = true
 serde.workspace = true
 serde_json.workspace = true

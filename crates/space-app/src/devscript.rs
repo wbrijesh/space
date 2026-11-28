@@ -29,6 +29,7 @@
 //! find                print find's state (query, matches, current) and the transcript's scroll
 //! rename some name    rename the selected thread as the Rename sheet would (then print its title)
 //! title               print the selected thread's title
+//! transcript          print the selected thread's transcript, one line per item
 //! editmenu            print the Edit menu's items: AppKit action and key equivalent
 //! sidechat            print the selected thread's side chat: focused, its input, the composer's, items, running
 //! trajectory          print whether the selected thread shows its trajectory, and what has focus
@@ -338,6 +339,25 @@ pub fn spawn_from_env(window: AnyWindowHandle, cx: &mut App) {
                                 f32::from(scroll.max_offset().y),
                                 app.transcript_scroll.is_following(),
                             );
+                        }
+                    });
+                }
+                "transcript" => {
+                    let _ = window.update(cx, |root, _, cx| {
+                        let app = root.downcast::<gpui::base::Root>().ok().and_then(|r| r.read(cx).view().clone().downcast::<crate::app::SpaceApp>().ok());
+                        if let Some(app) = app {
+                            let app = app.read(cx);
+                            let Some(t) = app.current() else { return };
+                            eprintln!("script: transcript of {:?} ({} threads listed, running {}):", t.title(), app.threads.len(), t.state.running);
+                            for item in &t.state.items {
+                                let line = match item {
+                                    space_core::TranscriptItem::User { text, .. } => format!("user: {text}"),
+                                    space_core::TranscriptItem::Agent(text) => format!("agent: {text}"),
+                                    space_core::TranscriptItem::TurnEnd { reason, .. } => format!("turn end: {reason}"),
+                                    other => format!("{other:?}").chars().take(80).collect(),
+                                };
+                                eprintln!("script:   {line}");
+                            }
                         }
                     });
                 }

@@ -7,4 +7,4 @@ pub mod daemon;
 pub mod proto;
 
 pub use client::{AgentEvent, AgentPipe, KeeperClient, Welcome};
-pub use proto::{AgentInfo, KEEPER_PROTOCOL, ORPHAN_REPLY, OpenRequest, OrphanReply, SpawnSpec};
+pub use proto::{AgentInfo, KEEPER_PROTOCOL, ORPHAN_REPLY, OpenRequest, OrphanReply, ServerCommand, SpawnSpec};

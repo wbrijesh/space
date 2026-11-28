@@ -209,3 +209,46 @@ async fn the_host_saves_a_thread_as_it_happens() {
     host.delete_thread("t1").await.unwrap();
     assert!(!host.is_saving("t1"));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_thread_opened_mid_turn_has_every_event_once() {
+    let root = root();
+    let (host, mut events) = host(root.path());
+    host.start_services().await;
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.new_session_in(root.path(), Some("t2")).await.unwrap();
+    host.save_thread_meta(meta("t2", session.id(), root.path()));
+    // A first turn, saved; then a second one, opened while it streams.
+    session.prompt("hello").await.unwrap();
+    host.flush_saves(Duration::from_secs(5)).await;
+    let turn = tokio::spawn({
+        let session = session.clone();
+        async move { session.prompt("hello again").await }
+    });
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let (_, opened) = host.open_thread("t2").await.unwrap();
+    turn.await.unwrap().unwrap();
+    // Everything reported, and what came after the marker.
+    let (mut all, mut after, mut marked) = (Vec::new(), Vec::new(), false);
+    while let Ok(Some(e)) = tokio::time::timeout(Duration::from_millis(300), events.recv()).await {
+        match e {
+            HostEvent::ThreadOpened { thread_id } if thread_id == "t2" => marked = true,
+            HostEvent::Session { event, .. } => {
+                if marked {
+                    after.push(event.clone());
+                }
+                all.push(event);
+            }
+            _ => {}
+        }
+    }
+    assert!(marked);
+    let fold = |events: &[SessionEvent]| {
+        let mut state = SessionState::new("t2");
+        events.iter().for_each(|e| state.apply(e));
+        state.items
+    };
+    let mut shown = opened.clone();
+    shown.extend(after);
+    assert_eq!(fold(&shown), fold(&all), "opened + after the marker = everything, once");
+}

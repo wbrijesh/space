@@ -31,6 +31,17 @@ pub enum ToKeeper {
     Kill { agent: String },
     /// Stop every agent and the keeper.
     Quit,
+    /// Run this server from now on (an update): the keeper starts it once the current one exits,
+    /// and goes back to the current one if the new one keeps failing.
+    ReplaceServer { server: ServerCommand },
+}
+
+/// How the keeper starts the server.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerCommand {
+    pub program: PathBuf,
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 /// How to start a process: everything resolved by the server (the keeper knows no manifests).
@@ -50,7 +61,16 @@ pub struct SpawnSpec {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FromKeeper {
     /// The answer to [`ToKeeper::Hello`]: what the keeper holds.
-    Welcome { protocol: u32, pid: u32, agents: Vec<AgentInfo> },
+    Welcome {
+        protocol: u32,
+        pid: u32,
+        agents: Vec<AgentInfo>,
+        /// The server it runs, and the one before it (kept to go back to).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server: Option<ServerCommand>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous_server: Option<ServerCommand>,
+    },
     /// The server speaks another protocol; the keeper hangs up after this.
     Refused { reason: String },
     Spawned { agent: String, pid: u32 },

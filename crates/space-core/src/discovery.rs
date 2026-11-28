@@ -15,7 +15,7 @@ use space_protocol::{MANIFEST_FILE, Manifest, ManifestError};
 pub const PLUGIN_DIRS_ENV: &str = "SPACE_PLUGIN_DIRS";
 
 /// Where a plugin was found.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PluginSource {
     Bundled,
     User,
@@ -23,7 +23,7 @@ pub enum PluginSource {
 }
 
 /// A plugin directory with a valid manifest.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DiscoveredPlugin {
     pub manifest: Manifest,
     /// Absolute plugin directory.

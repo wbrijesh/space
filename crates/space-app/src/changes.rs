@@ -1037,7 +1037,7 @@ impl SpaceApp {
 }
 
 /// One part of a step, in the background (Claude's writing through the host).
-async fn run_part(part: &Part, root: &Path, carry: &mut Carry, host: &space_core::Host, session: Option<&str>, cx: &mut AsyncApp) -> Result<(), String> {
+async fn run_part(part: &Part, root: &Path, carry: &mut Carry, host: &space_client::Host, session: Option<&str>, cx: &mut AsyncApp) -> Result<(), String> {
     let root = root.to_path_buf();
     let bg = |f: Box<dyn FnOnce() -> Result<(), String> + Send>| cx.background_spawn(async move { f() });
     match part {

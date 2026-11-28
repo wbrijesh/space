@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Result;
 use space_protocol::service::ThreadMeta;
 
 use super::{Host, HostEvent, HostInner};
@@ -35,6 +36,8 @@ pub(super) struct ThreadSaver {
     unsaved: Vec<SessionEvent>,
     /// A write is in flight or scheduled.
     busy: bool,
+    /// Being opened ([`Host::open_thread`]): no write starts.
+    paused: bool,
 }
 
 /// Add `event` to the events waiting to be saved, merging streamed chunks.
@@ -97,6 +100,46 @@ impl Host {
         let _ = self.inner.rt.spawn(async move { tokio::time::timeout(timeout, flush).await }).await;
     }
 
+    /// A saved thread's summary and every event so far (the store's, and those not written
+    /// yet), with a [`HostEvent::ThreadOpened`] marker reported at that exact point: its events
+    /// before the marker are in what's returned, those after it are reported after it. For a
+    /// thread that's still going (its agent kept working while no app showed it).
+    pub async fn open_thread(&self, thread_id: &str) -> Result<(ThreadMeta, Vec<SessionEvent>)> {
+        let tracked = {
+            let mut savers = self.inner.savers.lock().unwrap();
+            savers.get_mut(thread_id).map(|s| s.paused = true).is_some()
+        };
+        if !tracked {
+            let (meta, events, _) = self.load_thread(thread_id).await?;
+            self.inner.emit(HostEvent::ThreadOpened { thread_id: thread_id.to_string() });
+            return Ok((meta, events));
+        }
+        // Let a write in flight finish; none starts while paused.
+        while self.inner.savers.lock().unwrap().get(thread_id).is_some_and(|s| s.busy) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let loaded = self.load_thread(thread_id).await;
+        let pending = {
+            let mut savers = self.inner.savers.lock().unwrap();
+            let saver = savers.get_mut(thread_id);
+            let pending = saver.map(|s| {
+                s.paused = false;
+                s.unsaved.clone()
+            });
+            self.inner.emit(HostEvent::ThreadOpened { thread_id: thread_id.to_string() });
+            pending.unwrap_or_default()
+        };
+        self.inner.schedule_save(thread_id, Duration::ZERO);
+        let (meta, mut events, _) = match loaded {
+            Ok(loaded) => loaded,
+            // A thread not written yet (its first summary hasn't come): only what waits.
+            Err(e) if format!("{e:#}").contains("no saved thread") && !pending.is_empty() => (ThreadMeta { id: thread_id.to_string(), ..Default::default() }, Vec::new(), 0),
+            Err(e) => return Err(e),
+        };
+        events.extend(pending);
+        Ok((meta, events))
+    }
+
     /// Stop saving thread `thread_id` and drop what waits (it's deleted).
     pub(super) fn forget_saves(&self, thread_id: &str) {
         self.inner.savers.lock().unwrap().remove(thread_id);
@@ -112,12 +155,33 @@ impl HostInner {
         self.savers.lock().unwrap().entry(thread_id.to_string()).or_default();
     }
 
-    /// A session event: saved if its thread is.
-    pub(super) fn record_session_event(&self, session_id: &str, event: &SessionEvent) {
+    /// Report a session event, recording it for saving if its thread is saved. Both happen under
+    /// the savers' lock, so [`Host::open_thread`]'s marker splits the events exactly: those before
+    /// it are in what it returns, those after it are reported after it.
+    pub(super) fn emit_saved_session(&self, session_id: &str, event: SessionEvent) {
         let thread_id = self.sessions.lock().unwrap().get(session_id).and_then(|m| m.thread_id.clone());
-        if let Some(thread_id) = thread_id {
-            self.record_saved(&thread_id, event);
+        let mut save = None;
+        {
+            let mut savers = self.savers.lock().unwrap();
+            if let Some(thread_id) = thread_id
+                && let Some(saver) = savers.get_mut(&thread_id)
+            {
+                let before = saver.unsaved.len();
+                record(&mut saver.unsaved, &event);
+                if saver.unsaved.len() != before || matches!(event, SessionEvent::AgentText { .. } | SessionEvent::AgentThought { .. } | SessionEvent::Status(_)) {
+                    save = Some(thread_id);
+                }
+            }
+            self.emit(HostEvent::Session { session_id: session_id.to_string(), event });
         }
+        if let Some(thread_id) = save {
+            self.schedule_save(&thread_id, SAVE_DELAY);
+        }
+    }
+
+    /// The thread a session was made for.
+    pub(super) fn session_thread(&self, session_id: &str) -> Option<String> {
+        self.sessions.lock().unwrap().get(session_id).and_then(|m| m.thread_id.clone())
     }
 
     fn record_saved(&self, thread_id: &str, event: &SessionEvent) {
@@ -139,7 +203,7 @@ impl HostInner {
         {
             let mut savers = self.savers.lock().unwrap();
             let Some(saver) = savers.get_mut(thread_id) else { return };
-            if saver.busy {
+            if saver.busy || saver.paused {
                 return;
             }
             saver.busy = true;

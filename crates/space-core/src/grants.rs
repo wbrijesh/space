@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::discovery::{DiscoveredPlugin, PluginSource};
 
 /// Whether a plugin may start.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Approval {
     /// Bundled with Space.
     Trusted,

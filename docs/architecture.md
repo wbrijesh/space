@@ -7,12 +7,16 @@ the agent's tool calls run unchecked unless one is installed.
 ```
 ┌──────────────────────────── space (Rust) ─────────────────────────────┐
 │  space-app       GPUI UI: threads · transcript · composer · terminal  │
-│  space-terminal  a terminal's screen, keys and mouse                  │
+│  space-client    the host's methods, as calls to the server           │
+└──────────────────────────────────┬────────────────────────────────────┘
+                                   │ space_core::remote (JSON-RPC over a Unix socket)
+┌──────────────────────────────────▼────────────────────────────────────┐
+│  space-server    serves apps; outlives them                           │
 │  space-core      registry · supervisor · sessions · tool pipeline     │
 │  space-protocol  manifest · ACP re-exports · _space/* · service proto │
-│  space-plugin    SDK for service plugins in Rust                      │
+│  space-keeper    parent of the agents, so the server can restart      │
 └──────┬──────────────────────────────────────────┬────────────────────┘
-       │ ACP (JSON-RPC over stdio)                │ service protocol (JSON-RPC over stdio)
+       │ ACP (JSON-RPC over stdio, via the keeper)│ service protocol (JSON-RPC over stdio)
 ┌──────▼───────────────────────┐   ┌──────────────▼──────────────────────────┐
 │ plugins/claude-agent (TS,Bun)│   │ alerts · session-store · titles         │
 │ Claude Agent SDK → `claude`  │   │ trajectory · terminal                   │
@@ -34,7 +38,7 @@ hook chain and routes seams to whichever plugin provides them. Agents and guards
 | Composition | Plugins declare **capabilities** (`provides`) and **hooks**; the host routes by capability | Swap a provider without touching consumers (learned from DeepSeek Harness's seams) |
 | Tool pipeline | Owned by the host, run for every agent | Every agent gets the same guards for free |
 | Failing guards | Fail closed: the call is **held** until the guard can decide | A broken guard never lets a call through or turns into a prompt |
-| Core placement | `space-core` is a library used in-process by `space-app` | One binary; everything crosses a protocol |
+| Core placement | `space-core` runs in the Space server, a process apart from the app (`space-server`); the real Space's server outlives it, everything else (scenarios, test copies, scripts) runs a private one inside the app | Quitting or relaunching the app stops no work |
 | Model access | The Claude Agent SDK driving the user's `claude` CLI | Claude Code's agent loop, commands and compaction on the user's Claude subscription; no API key, nothing of the user's Claude Code setup loaded |
 
 ## Plugin manifest
@@ -321,6 +325,13 @@ host's own records; never tool output).
 - **Runtime bridge.** `space-core` runs on its own tokio runtime; every async method spawns onto it,
   so GPUI tasks can await them. Host events go out on a channel that a GPUI task drains in batches,
   folding each `SessionEvent` into the thread's `SessionState`.
+- **Server.** The real Space connects to the shared server in `~/.space` (`server.sock`), starting
+  it with its keeper (`keeper.sock`) when none runs; ⌘Q quits only the app. The keeper is the
+  agents' parent and restarts the server when it exits; a new server takes over the agents and the
+  sessions the last one wrote down (`server-sessions.json`), and an app whose server went away
+  starts again on the new one. A thread's session events reach an app once it opened the thread
+  (`Host::open_thread`), so a thread that went on without an app is read whole, then followed.
+  Logs: `~/.space/logs`. `SPACE_SERVER_DIR=<dir>` runs a shared server in another folder.
 - **ACP client.** `agent-client-protocol` with typed handlers for `session/update`, the `_space/*`
   notifications and `session/request_permission`; permission answers come from a spawned task, so
   the dispatch loop keeps running while the user decides.
@@ -358,6 +369,9 @@ space/
 │  ├─ space-protocol/   # manifest, ACP re-exports, _space extensions, service protocol
 │  ├─ space-plugin/     # SDK for Rust service plugins
 │  ├─ space-core/       # discovery, supervisor, ACP + service connections, pipeline, sessions
+│  ├─ space-server/     # the server: serves apps, outlives them
+│  ├─ space-keeper/     # the keeper: parent of the agents
+│  ├─ space-client/     # the app's side of the server
 │  ├─ space-terminal/   # a terminal's screen: alacritty's parser, keys, mouse, selection
 │  ├─ space-ui/         # components, tokens, gallery
 │  └─ space-app/        # GPUI binary `Space`

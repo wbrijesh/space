@@ -139,6 +139,7 @@ impl SpaceApp {
                     let thread = this.saved_thread(meta);
                     this.threads.insert(ix, thread);
                 }
+                this.adopt_live_sessions(cx);
                 cx.notify();
             });
         })
@@ -156,6 +157,19 @@ impl SpaceApp {
         let fresh: Vec<u64> = self.threads.iter().filter(|t| t.is_empty() && !t.has_draft() && t.cwd == home).map(|t| t.key).collect();
         for key in fresh {
             self.move_empty_thread(key, dir.clone(), cx);
+        }
+    }
+
+    /// Threads whose sessions an earlier app left open on the server (their agents kept working
+    /// after it quit): read now, then go on in those sessions, following what they do.
+    fn adopt_live_sessions(&mut self, cx: &mut Context<Self>) {
+        for live in self.host.live_sessions() {
+            let Some(key) = live.thread_id.as_ref().and_then(|id| self.threads.iter().find(|t| &t.id == id)).map(|t| t.key) else { continue };
+            let Some(session) = self.host.adopt_session(&live) else { continue };
+            if let Some(thread) = self.thread_mut(key) {
+                thread.adopted = Some(session);
+            }
+            self.ensure_loaded(key, cx);
         }
     }
 
@@ -178,10 +192,19 @@ impl SpaceApp {
                         for event in &events {
                             thread.apply(event);
                         }
-                        if thread.state.running || thread.state.pending_permission().is_some() {
-                            thread.apply(&SessionEvent::turn_ended("cancelled"));
+                        let (adopted, save_again) = (thread.adopted.take(), thread.save_again);
+                        match adopted {
+                            // Still open on the server: what it does from here follows.
+                            Some(session) => this.attach_session(key, session, cx),
+                            None => {
+                                if let Some(thread) = this.thread_mut(key)
+                                    && (thread.state.running || thread.state.pending_permission().is_some())
+                                {
+                                    thread.apply(&SessionEvent::turn_ended("cancelled"));
+                                }
+                            }
                         }
-                        if thread.save_again {
+                        if save_again {
                             this.save_thread(key, cx);
                         }
                     }

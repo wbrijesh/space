@@ -2,13 +2,13 @@
 //! into bytes for its shell. It has its own key context (`Terminal`), so the composer's
 //! shortcuts don't fire in it; ⌘ shortcuts that aren't terminal ones still reach the app.
 
+use space_client::{Host};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use gpui::*;
-use space_core::Host;
 use space_terminal::{Key, Mods, MouseButton as TermButton, MouseEvent, SelectKind, Size as TermSize, paste_bytes};
 use space_ui::actions::{TerminalClear, TerminalCopy, TerminalPaste};
 use space_ui::components::terminal::{GridLayout, ended_notice, terminal_grid};

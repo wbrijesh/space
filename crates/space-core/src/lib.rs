@@ -17,6 +17,7 @@ pub mod discovery;
 pub mod grants;
 mod host;
 pub mod process;
+pub mod remote;
 pub mod secrets;
 pub mod session;
 pub mod smoke;

@@ -22,7 +22,8 @@ use std::time::{Duration, Instant};
 use gpui::component::input::{InputEvent, TextareaState};
 use gpui::*;
 use sha2::{Digest, Sha256};
-use space_core::{ImageRef, Session, SessionEvent, TranscriptItem};
+use space_client::{Session};
+use space_core::{ImageRef, SessionEvent, TranscriptItem};
 
 use crate::app::SpaceApp;
 use crate::queue::{Pending as Queued, When};

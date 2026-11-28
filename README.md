@@ -26,7 +26,7 @@ cask clears macOS's download mark so it opens normally.
 | **Transcript** | ⌘F find · ⌘G / ⇧⌘G next / previous · ⌘↓ scroll to the bottom · ⇧⌘T the trajectory (Esc back to the chat) · select text in a message, then **Quote** to answer it (the agent gets it as a blockquote) |
 | **Right pane** | ⌘⌥B (or the title bar's pane button) show / hide, on the tab used last · ⌘J (or ⌃\`) Terminal, from it hide · ⌘P Files with its tree, from the tree hide · ⇧⌘L Side chat, from it hide · ⌃⇧G Changes, from it hide · ⌘W closes the shown file or terminal tab (in Changes, the open diff); with no file open, one terminal, or in the side chat, it hides the pane · ⇧⌘⏎ (or the pane's expand button) maximize / restore it · in a terminal, ⌘T new tab · ⌃Tab next tab · ⌘K clear |
 | **Trackpad** | two-finger swipe left shows the right pane, again maximizes it; swipe right restores it, again hides it; wherever the pointer is (Settings ▸ General: the sidebar instead, the other way round, or nothing) |
-| **App** | ⌘, Settings · ⌘Q quit (always asks, and says if threads are working or terminals run something) |
+| **App** | ⌘, Settings · ⌘Q quits the app only: agents keep working and terminals keep running in the Space server, and the next launch picks them up |
 
 - **No checks:** the agent runs every tool call it decides on (shell commands, edits, fetches)
   without asking. Space's guard hooks stay open to a plugin that wants to add checks
@@ -126,6 +126,9 @@ plugin folders, `SPACE_SETTINGS=<file>` another settings file, `SPACE_NOTIFY=0` 
 ```
 crates/space-protocol   the protocol: manifest, ACP extensions, service and terminal methods
 crates/space-core       discovery, supervisor, ACP client, tool pipeline, sessions (no UI)
+crates/space-server     the server: the host and its agents, outliving the app
+crates/space-keeper     the keeper: parent of the agents, so the server can restart
+crates/space-client     the app's side of the server
 crates/space-plugin     SDK for Rust service plugins
 crates/space-terminal   a terminal's screen (alacritty's parser), keys and mouse to bytes
 crates/space-ui         tokens, components, previews and gallery
