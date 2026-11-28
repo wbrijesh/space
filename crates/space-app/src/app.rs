@@ -424,6 +424,8 @@ pub struct SpaceApp {
     pub(crate) pane_max: space_ui::theme::motion::Spring,
     pub(crate) pane_max_for: Option<u64>,
     pub(crate) banner: Option<String>,
+    /// The update notice closed (until the update moves on).
+    pub(crate) update_closed: Option<(String, space_core::remote::UpdateStage, bool)>,
     /// The image viewer: a message's pictures and the one shown.
     pub(crate) viewer: Option<(Vec<space_ui::components::images::Pic>, usize)>,
     pub(crate) viewer_focus: FocusHandle,
@@ -670,8 +672,8 @@ impl SpaceApp {
                 }
                 tracing::info!("the server is back; starting again on it");
                 let _ = this.update(cx, |this, cx| {
-                    this.save_drafts(cx);
-                    relaunch();
+                    let exe = this.host.relaunch_into();
+                    this.relaunch_from(exe, cx);
                 });
             })
             .detach();
@@ -798,6 +800,7 @@ impl SpaceApp {
             pane_max: space_ui::theme::motion::Spring::new(0.),
             pane_max_for: None,
             banner,
+            update_closed: None,
             done_threads: Vec::new(),
             done_open: false,
             composer_reopens: false,
@@ -919,6 +922,7 @@ impl SpaceApp {
     fn on_host_event(&mut self, event: HostEvent, cx: &mut Context<Self>) {
         match event {
             HostEvent::ThreadOpened { .. } => {}
+            HostEvent::UpdateChanged => self.update_changed(cx),
             HostEvent::SaveFailed { message, .. } => {
                 self.banner = Some(format!("Couldn't save a thread (Space keeps trying): {message}"));
                 cx.notify();
@@ -1521,11 +1525,11 @@ pub(crate) fn slide(spring: &mut space_ui::theme::motion::Spring, target: f32, d
     }
 }
 
-/// Start this app again in place (same process, same arguments): its windows and state are
-/// rebuilt from what's saved and what the server holds.
-pub(crate) fn relaunch() {
+/// Start this app again in place (same process, same arguments), from `exe` (a new build) or
+/// this executable: its windows and state are rebuilt from what's saved and what the server holds.
+pub(crate) fn relaunch(exe: Option<std::path::PathBuf>) {
     use std::os::unix::process::CommandExt as _;
-    let Ok(exe) = std::env::current_exe() else { return };
+    let Some(exe) = exe.or_else(|| std::env::current_exe().ok()) else { return };
     let error = std::process::Command::new(exe).args(std::env::args_os().skip(1)).exec();
     tracing::error!("couldn't start again: {error}");
 }

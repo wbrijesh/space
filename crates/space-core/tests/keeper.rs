@@ -182,3 +182,47 @@ fn dropping_an_agent_stops_it_and_an_exit_is_reported() {
         keeper.quit();
     });
 }
+
+#[test]
+fn a_planned_handover_ends_no_turn_and_the_next_host_gets_its_end() {
+    let root = stub_root(r#"{"turns": [{"prompt": "slow", "steps": [{"type": "text", "text": "a"}, {"type": "sleep", "ms": 800}, {"type": "text", "text": "b"}]}]}"#);
+    let socket = root.path().join("keeper.sock");
+    let keeper_rt = runtime();
+    {
+        let socket = socket.clone();
+        keeper_rt.spawn(async move { space_keeper::daemon::run(&socket, None).await.unwrap() });
+    }
+    while !socket.exists() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let rt = runtime();
+    rt.block_on(async {
+        let (keeper, _, _) = KeeperClient::connect(&socket).await.unwrap();
+        let (host, mut events) = host(root.path(), keeper.clone());
+        let agent = host.start_agent("stub").await.unwrap();
+        let session = agent.new_session(PathBuf::from(root.path())).await.unwrap();
+        let sid = session.id().to_string();
+        tokio::spawn({
+            let session = session.clone();
+            async move { session.prompt("slow").await }
+        });
+        next(&mut events, &sid, |e| matches!(e, SessionEvent::AgentText { .. })).await;
+        // Hand over, as an update does.
+        host.hand_over_agents();
+        keeper.close();
+        let ended_here = tokio::time::timeout(Duration::from_millis(500), next(&mut events, &sid, |e| matches!(e, SessionEvent::TurnEnded { .. } | SessionEvent::Error { .. }))).await;
+        assert!(ended_here.is_err(), "the old host reports no end: {ended_here:?}");
+        std::mem::forget((host, agent, session));
+        // The turn ends while no host is there: its end waits in the keeper.
+        tokio::time::sleep(Duration::from_millis(900)).await;
+
+        let (keeper, _, mut pipes) = KeeperClient::connect(&socket).await.unwrap();
+        let (next_host, mut events) = self::host(root.path(), keeper.clone());
+        let agent = next_host.adopt_agent(pipes.remove(0)).await.unwrap();
+        let _session = agent.adopt_session(&sid, root.path(), None);
+        let end = next(&mut events, &sid, |e| matches!(e, SessionEvent::TurnEnded { .. })).await;
+        assert!(matches!(end, SessionEvent::TurnEnded { stop_reason, .. } if stop_reason == "end_turn"));
+        keeper.quit();
+    });
+    keeper_rt.shutdown_timeout(Duration::from_secs(5));
+}

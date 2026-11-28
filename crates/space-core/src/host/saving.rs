@@ -76,6 +76,13 @@ impl Host {
         self.inner.savers.lock().unwrap().contains_key(thread_id)
     }
 
+    /// This host hands over to the next one (an update): events from now on aren't saved (the
+    /// next host gets them, and a turn's connection closing here isn't its end). What waits is
+    /// still written by [`Host::flush_saves`].
+    pub fn freeze_saves(&self) {
+        self.inner.frozen.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// [`Host::flush_saves`] from outside the runtime (Space is quitting).
     pub fn flush_saves_blocking(&self, timeout: Duration) {
         let host = self.clone();
@@ -87,7 +94,16 @@ impl Host {
         let inner = self.inner.clone();
         let flush = async move {
             loop {
-                let pending: Vec<String> = inner.savers.lock().unwrap().iter().filter(|(_, s)| s.busy || !s.unsaved.is_empty() || s.meta.is_some()).map(|(id, _)| id.clone()).collect();
+                // A thread without a summary can't be written yet: not waited for.
+                let writable = |s: &ThreadSaver| s.meta.is_some() || s.known || s.saved.is_none();
+                let pending: Vec<String> = inner
+                    .savers
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(_, s)| s.busy || (!s.unsaved.is_empty() && writable(s)) || s.meta.is_some())
+                    .map(|(id, _)| id.clone())
+                    .collect();
                 if pending.is_empty() {
                     return;
                 }
@@ -163,7 +179,8 @@ impl HostInner {
         let mut save = None;
         {
             let mut savers = self.savers.lock().unwrap();
-            if let Some(thread_id) = thread_id
+            let frozen = self.frozen.load(std::sync::atomic::Ordering::SeqCst);
+            if let Some(thread_id) = thread_id.filter(|_| !frozen)
                 && let Some(saver) = savers.get_mut(&thread_id)
             {
                 let before = saver.unsaved.len();

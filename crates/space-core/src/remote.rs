@@ -45,7 +45,80 @@ pub struct HostState {
     pub has_trajectory: bool,
     pub terminal_plugin: Option<String>,
     pub project_dir: PathBuf,
+    /// A new build of Space, while one is on its way or ready.
+    pub update: Option<Update>,
 }
+
+/// A new build of Space: found, being built (development) or downloaded (release), ready to
+/// switch to, or failed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Update {
+    /// Its version ("e4f5a6b", or "0.1.9").
+    pub version: String,
+    pub stage: UpdateStage,
+    /// What switching to it costs (once ready).
+    pub kind: Option<UpdateKind>,
+    /// Waiting for every thread to finish before restarting (Restart when idle).
+    pub waiting_for_idle: bool,
+    /// Why it isn't ready (didn't build, didn't download), with where the log is.
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UpdateStage {
+    /// Being built or downloaded.
+    Getting,
+    Ready,
+    Failed,
+}
+
+/// What switching to a build costs, by what changed in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UpdateKind {
+    /// Only the window: the app relaunches. Nothing stops.
+    App,
+    /// The server (and maybe the app): it restarts, the app relaunches. Nothing stops.
+    Server,
+    /// An agent, the keeper or the protocol between server and agents: agents restart, so
+    /// running turns stop (or it waits until none runs).
+    Agent,
+}
+
+/// What each part of a build is (`components.json`, from `scripts/components.sh`):
+/// comparing two says what an update between them changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Components {
+    pub app: String,
+    pub server: String,
+    pub agent: String,
+    #[serde(default)]
+    pub keeper: String,
+    pub protocol: u32,
+}
+
+impl Components {
+    /// What switching from `running` (unknown: `None`) to `self` costs; `None`: nothing changed.
+    pub fn kind_from(&self, running: Option<&Components>) -> Option<UpdateKind> {
+        let Some(old) = running else { return Some(UpdateKind::Agent) };
+        if old.agent != self.agent || old.keeper != self.keeper || old.protocol != self.protocol {
+            Some(UpdateKind::Agent)
+        } else if old.server != self.server {
+            Some(UpdateKind::Server)
+        } else if old.app != self.app {
+            Some(UpdateKind::App)
+        } else {
+            None
+        }
+    }
+
+    /// Whether the keeper changed (everything restarts, not only the agents).
+    pub fn keeper_changed(&self, running: Option<&Components>) -> bool {
+        running.is_none_or(|old| old.keeper != self.keeper)
+    }
+}
+
+/// Notification: start the app again from this executable (an update).
+pub const RELAUNCH: &str = "server.relaunch";
 
 /// The answer to `server.hello`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,4 +177,31 @@ pub struct TextSettings {
 /// The socket a server listens on, in a Space data folder.
 pub fn socket_path(space_dir: &std::path::Path) -> PathBuf {
     space_dir.join("server.sock")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn what_changed_decides_what_an_update_costs() {
+        let base = Components { app: "a".into(), server: "s".into(), agent: "g".into(), keeper: "k".into(), protocol: 5 };
+        let with = |f: fn(&mut Components)| {
+            let mut c = base.clone();
+            f(&mut c);
+            c
+        };
+        assert_eq!(base.kind_from(Some(&base)), None);
+        assert_eq!(with(|c| c.app = "a2".into()).kind_from(Some(&base)), Some(UpdateKind::App));
+        assert_eq!(with(|c| c.server = "s2".into()).kind_from(Some(&base)), Some(UpdateKind::Server));
+        // The app changing too doesn't make a server update cost more.
+        assert_eq!(with(|c| { c.server = "s2".into(); c.app = "a2".into() }).kind_from(Some(&base)), Some(UpdateKind::Server));
+        assert_eq!(with(|c| c.agent = "g2".into()).kind_from(Some(&base)), Some(UpdateKind::Agent));
+        assert_eq!(with(|c| c.protocol = 6).kind_from(Some(&base)), Some(UpdateKind::Agent));
+        let keeper = with(|c| c.keeper = "k2".into());
+        assert_eq!(keeper.kind_from(Some(&base)), Some(UpdateKind::Agent));
+        assert!(keeper.keeper_changed(Some(&base)) && !base.keeper_changed(Some(&base)));
+        // Not knowing what runs: the most careful.
+        assert_eq!(base.kind_from(None), Some(UpdateKind::Agent));
+    }
 }

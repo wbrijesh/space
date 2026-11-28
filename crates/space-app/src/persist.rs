@@ -85,6 +85,17 @@ impl SpaceApp {
         }
     }
 
+    /// Hand the server this thread's summary now, even with nothing in it yet (its first message
+    /// is on its way): from here its events are saved.
+    pub(crate) fn save_thread_meta_now(&mut self, key: u64) {
+        let Some(thread) = self.thread(key).filter(|t| !t.unloaded && !t.loading) else { return };
+        let meta = self.thread_meta(thread);
+        self.host.save_thread_meta(meta.clone());
+        if let Some(thread) = self.thread_mut(key) {
+            thread.meta = Some(meta);
+        }
+    }
+
     /// Before quitting: every thread's summary as it is now, and everything the host has
     /// waiting written. Blocks briefly.
     pub(crate) fn save_all_now(&mut self) {

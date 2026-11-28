@@ -22,6 +22,7 @@ use space_plugin::rpc::{self, Peer, RpcError};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 pub mod keeper_host;
+pub mod updates;
 #[cfg(target_os = "macos")]
 pub mod menubar;
 
@@ -43,6 +44,10 @@ pub struct Server {
     /// crash or an update) starts the same plugins.
     config_file: Option<PathBuf>,
     config: Mutex<SavedConfig>,
+    /// A new build on its way or ready ([`updates`]).
+    update: Mutex<Option<remote::Update>>,
+    /// What `server.apply_update` does (`true`: when idle).
+    on_apply: OnceLock<Box<dyn Fn(bool) + Send + Sync>>,
 }
 
 /// The plugin choices an app last gave ([`Server::config_file`]).
@@ -67,6 +72,8 @@ struct Conn {
     /// Threads being opened: their events start with the host's marker.
     opening: Mutex<HashSet<String>>,
     last_state: Mutex<Option<HostState>>,
+    /// The app's build, as it said hello.
+    version: Mutex<Option<String>>,
 }
 
 impl Conn {
@@ -116,6 +123,8 @@ impl Server {
             pid: options.pid,
             config: Mutex::new(options.config_file.as_ref().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()),
             config_file: options.config_file,
+            update: Mutex::new(None),
+            on_apply: OnceLock::new(),
         });
         {
             let weak = Arc::downgrade(&server);
@@ -168,6 +177,10 @@ impl Server {
             .and_then(|f| std::fs::read(f).ok())
             .and_then(|b| serde_json::from_slice(&b).map_err(|e| tracing::warn!("reading the open sessions: {e}")).ok())
             .unwrap_or_default();
+        // Known before the agents speak: a turn that ended meanwhile is saved with its thread.
+        for s in &saved {
+            self.host.expect_session(&s.session_id, &s.plugin_id, s.cwd.clone(), s.thread_id.as_deref());
+        }
         for pipe in pipes {
             let name = pipe.name.clone();
             match self.host.adopt_agent(pipe).await {
@@ -205,6 +218,7 @@ impl Server {
             opened: Mutex::new(HashSet::new()),
             opening: Mutex::new(HashSet::new()),
             last_state: Mutex::new(None),
+            version: Mutex::new(None),
         });
         let handler: rpc::RequestHandler = {
             let (server, conn) = (self.clone(), conn.clone());
@@ -301,6 +315,45 @@ impl Server {
         }
     }
 
+    /// Show an update (or none) to the apps.
+    pub fn set_update(&self, update: Option<remote::Update>) {
+        *self.update.lock().unwrap() = update;
+        for conn in self.conns() {
+            self.push_state(&conn);
+        }
+    }
+
+    /// What `server.apply_update` does.
+    pub fn on_apply(&self, apply: impl Fn(bool) + Send + Sync + 'static) {
+        let _ = self.on_apply.set(Box::new(apply));
+    }
+
+    /// How many apps are connected.
+    pub fn app_count(&self) -> usize {
+        self.conns().len()
+    }
+
+    /// The builds of the connected apps.
+    pub fn app_versions(&self) -> Vec<String> {
+        self.conns().iter().filter_map(|c| c.version.lock().unwrap().clone()).collect()
+    }
+
+    /// Tell every app to start again from `exe` (an update).
+    pub fn relaunch_apps(&self, exe: &Path) {
+        for conn in self.conns() {
+            conn.notify(remote::RELAUNCH, exe);
+        }
+    }
+
+    /// Stop every agent (an update replaces them); their sessions end.
+    pub fn stop_agents(&self) {
+        for (_, agent) in self.agents.lock().unwrap().drain() {
+            agent.stop();
+        }
+        self.sessions.lock().unwrap().clear();
+        self.write_sessions();
+    }
+
     /// How many sessions have a turn running.
     pub fn working(&self) -> usize {
         self.live_sessions().iter().filter(|s| s.running).count()
@@ -311,6 +364,7 @@ impl Server {
         let host = &self.host;
         let plugins = host.plugins();
         let mut state = HostState {
+            update: self.update.lock().unwrap().clone(),
             has_session_store: host.has_session_store(),
             has_terminal: host.has_terminal(),
             has_trajectory: host.has_trajectory(),
@@ -529,13 +583,21 @@ impl Server {
         let host = &self.host;
         match method {
             "server.hello" => {
-                let protocol: (u32,) = args(params)?;
-                if protocol.0 != remote::SERVER_PROTOCOL {
+                let (protocol, version): (u32, Option<String>) = args(params)?;
+                if protocol != remote::SERVER_PROTOCOL {
                     return Err(RpcError::new(-32001, format!("this server speaks protocol {}", remote::SERVER_PROTOCOL)));
                 }
+                *conn.version.lock().unwrap() = version;
                 let welcome = self.welcome();
                 *conn.last_state.lock().unwrap() = Some(welcome.state.clone());
                 ok(welcome)
+            }
+            "server.apply_update" => {
+                let (when_idle,): (bool,) = args(params)?;
+                if let Some(apply) = self.on_apply.get() {
+                    apply(when_idle);
+                }
+                ok(())
             }
             "server.quit" => {
                 self.quit().await;

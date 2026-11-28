@@ -709,6 +709,11 @@ impl SpaceApp {
         if first && !message.text.trim().is_empty() {
             self.request_title(key, session.id().to_string(), message.text.clone(), cx);
         }
+        // A thread's first message: from here the server saves it, even if this app goes away
+        // before the turn ends.
+        if first && self.saving_threads() {
+            self.save_thread_meta_now(key);
+        }
         let dir = thread_attachments_dir(self.thread(key));
         let note = self.thread_mut(key).and_then(|t| t.branch_note.take());
         cx.spawn(async move |this, cx| {

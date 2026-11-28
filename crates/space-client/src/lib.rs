@@ -54,6 +54,8 @@ struct Inner {
     closing: AtomicBool,
     /// The server said it's quitting (Quit Server).
     server_quitting: AtomicBool,
+    /// The server asked the app to start again from this executable (an update).
+    relaunch: Mutex<Option<PathBuf>>,
     connected: watch::Sender<bool>,
     /// The shared server's socket.
     socket: Mutex<Option<PathBuf>>,
@@ -79,7 +81,8 @@ impl Host {
         };
         let handler = Arc::new(|method: String, _params: Value| async move { Err(RpcError::method_not_found(&method)) }.boxed());
         let (peer, task) = Peer::spawn(reader, writer, handler, notes);
-        let welcome: Welcome = call(&peer, "server.hello", json!([remote::SERVER_PROTOCOL])).await?;
+        let version = space_core::build_info::current().version.clone();
+        let welcome: Welcome = call(&peer, "server.hello", json!([remote::SERVER_PROTOCOL, version])).await?;
         let (connected, _) = watch::channel(true);
         let inner = Arc::new(Inner {
             peer,
@@ -90,6 +93,7 @@ impl Host {
             alive: Mutex::new(welcome.agents.iter().map(|a| a.plugin_id.clone()).collect()),
             closing: AtomicBool::new(false),
             server_quitting: AtomicBool::new(false),
+            relaunch: Mutex::new(None),
             welcome,
             connected,
             socket: Mutex::new(None),
@@ -151,6 +155,16 @@ impl Host {
     /// The app is quitting: sessions it drops from now on stay with the server.
     pub fn close(&self) {
         self.inner.closing.store(true, Ordering::SeqCst);
+    }
+
+    /// Switch to the ready update: now, or (one that stops agents) once no thread is working.
+    pub async fn apply_update(&self, when_idle: bool) -> Result<()> {
+        self.request("server.apply_update", json!([when_idle])).await
+    }
+
+    /// The update waiting for the app to start again from it (the server asked).
+    pub fn relaunch_into(&self) -> Option<PathBuf> {
+        self.inner.relaunch.lock().unwrap().clone()
     }
 
     /// Stop the shared server and everything it runs (agents, terminals).
@@ -223,6 +237,11 @@ impl Host {
 
     pub fn project_dir(&self) -> PathBuf {
         self.state(|s| s.project_dir.clone())
+    }
+
+    /// A new build of Space on its way or ready.
+    pub fn update(&self) -> Option<remote::Update> {
+        self.state(|s| s.update.clone())
     }
 
     // ----- calls without an answer ------------------------------------------------------
@@ -425,9 +444,21 @@ impl Inner {
             }
             remote::QUITTING => self.server_quitting.store(true, Ordering::SeqCst),
             remote::STATE => match serde_json::from_value::<HostState>(params) {
-                Ok(state) => *self.state.lock().unwrap() = state,
+                Ok(state) => {
+                    let changed = self.state.lock().unwrap().update != state.update;
+                    *self.state.lock().unwrap() = state;
+                    if changed {
+                        let _ = events.send(HostEvent::UpdateChanged);
+                    }
+                }
                 Err(e) => tracing::warn!("unreadable state from the server: {e}"),
             },
+            remote::RELAUNCH => {
+                if let Ok(exe) = serde_json::from_value::<PathBuf>(params) {
+                    *self.relaunch.lock().unwrap() = Some(exe);
+                    let _ = events.send(HostEvent::UpdateChanged);
+                }
+            }
             remote::TERMINAL_DATA => {
                 let Ok(data) = serde_json::from_value::<TerminalData>(params) else { return };
                 let sink = self.sink.lock().unwrap().clone();

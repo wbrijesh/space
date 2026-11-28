@@ -67,6 +67,9 @@ pub(super) struct Shared {
     /// Turns an earlier host started that are still running (an adopted agent's): their end
     /// arrives as a [`KeeperOrphanReply`].
     orphan_turns: Mutex<HashSet<SessionId>>,
+    /// Handed over to the next host ([`Host::hand_over_agents`]): the connection ending here
+    /// ends no turn.
+    handed_over: AtomicBool,
 }
 
 /// A steering message the agent hasn't handed to the model yet.
@@ -200,6 +203,7 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
         dead: AtomicBool::new(false),
         steers: Mutex::new(HashMap::new()),
         orphan_turns: Mutex::new(HashSet::new()),
+        handed_over: AtomicBool::new(false),
     });
 
     let launch = host.launch(&plugin_id);
@@ -262,7 +266,7 @@ fn kept(shared: &Arc<Shared>, keeper: KeeperClient, pipe: AgentPipe, launch: u64
                         let kind = if killed.load(Ordering::SeqCst) { ExitKind::Killed } else { ExitKind::Exited(code) };
                         exit_status(kind, &logs.tail(20))
                     }
-                    AgentEvent::Lost if killed.load(Ordering::SeqCst) => PluginStatus::Stopped,
+                    AgentEvent::Lost if killed.load(Ordering::SeqCst) || shared.handed_over.load(Ordering::SeqCst) => PluginStatus::Stopped,
                     AgentEvent::Lost => PluginStatus::Crashed("the keeper holding it went away".into()),
                 };
                 shared.dead.store(true, Ordering::SeqCst);
@@ -278,6 +282,25 @@ fn kept(shared: &Arc<Shared>, keeper: KeeperClient, pipe: AgentPipe, launch: u64
 }
 
 impl Host {
+    /// This host is about to hand its agents to the next one (an update): a turn whose connection
+    /// ends from here doesn't end, and an agent that goes away from here only stopped.
+    pub fn hand_over_agents(&self) {
+        for agent in self.inner.agents.lock().unwrap().values().filter_map(std::sync::Weak::upgrade) {
+            agent.shared.handed_over.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Before taking over an agent: a session it has open, made for `thread_id`, so what the agent
+    /// says in it from the first moment (a turn ending) is saved with the thread.
+    pub fn expect_session(&self, session_id: &str, plugin_id: &str, cwd: PathBuf, thread_id: Option<&str>) {
+        let mut meta = SessionMeta::new(cwd, plugin_id.to_string());
+        meta.thread_id = thread_id.map(str::to_string);
+        self.inner.sessions.lock().unwrap().insert(session_id.to_string(), meta);
+        if let Some(thread_id) = thread_id {
+            self.inner.track_thread(thread_id);
+        }
+    }
+
     /// Take over an agent the keeper held for an earlier host (a [`space_keeper::KeeperClient::connect`]
     /// pipe). Its turns still running end as they would have; continue its sessions with
     /// [`AgentHandle::adopt_session`].
@@ -299,6 +322,7 @@ impl Host {
             dead: AtomicBool::new(false),
             steers: Mutex::new(HashMap::new()),
             orphan_turns: Mutex::new(info.open.iter().filter(|r| r.method == "session/prompt").filter_map(|r| r.session_id.clone()).collect()),
+            handed_over: AtomicBool::new(false),
         });
         let launch = host.launch(&plugin_id);
         let rt = host.rt.clone();
@@ -905,7 +929,10 @@ impl Session {
             .and_then(|r| r);
         self.inner.running.store(false, Ordering::SeqCst);
 
-        turn_ended(&host, &id, result.as_ref().map_err(|e| anyhow!("{e:#}")));
+        // Handed over to the next host: the turn goes on there, and ends there.
+        if !self.inner.agent.inner.shared.handed_over.load(Ordering::SeqCst) {
+            turn_ended(&host, &id, result.as_ref().map_err(|e| anyhow!("{e:#}")));
+        }
         result.map(|response| convert::wire_str(&response.stop_reason))
     }
 

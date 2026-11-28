@@ -381,7 +381,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
 /// The notice in the window's bottom-right corner (over the composer too), if one is up.
 fn notice(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
     use space_ui::components::notice::{self, MARGIN, Notice};
-    let n = app.rewind.notice.as_ref()?;
+    let Some(n) = app.rewind.notice.as_ref() else { return crate::update::element(app, cx) };
     let icon = match n.kind {
         crate::rewind::NoticeKind::Rewound => Icon::new(Lucide::RotateCcw),
         crate::rewind::NoticeKind::Edited => Icon::new(Lucide::Pencil),
@@ -409,6 +409,7 @@ fn notice(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> Option<AnyElement> {
         kept: n.kept.iter().map(|(path, why)| (path.clone().into(), SharedString::from(*why))).collect(),
         error: n.kind == crate::rewind::NoticeKind::Problem,
         undo,
+        actions: Vec::new(),
         on_close: handler(cx, |this, _, cx| this.close_notice(cx)),
     });
     Some(div().absolute().right(MARGIN).bottom(MARGIN).child(element).into_any_element())

@@ -4,6 +4,7 @@
 # it knows it's a release from its build (`just release` sets SPACE_RELEASE=1).
 #   commit=<full commit>                   what it was built from (its version is the first 7)
 #   checkout=<repo root>                   where, to follow that checkout for new commits
+#                                          ($SPACE_CHECKOUT when built for another checkout)
 #   edited=true|false                      whether the checkout had uncommitted edits
 #   built=24 Nov 2026, 00:41               when
 #   source=<commit>-<hash of the edits>    exactly what was built, to tell whether it's current
@@ -24,7 +25,7 @@ exe="$1"
 edited=false
 [ -n "$(git status --porcelain)" ] && edited=true
 echo "commit=$(git rev-parse HEAD)"
-echo "checkout=$root"
+echo "checkout=${SPACE_CHECKOUT:-$root}"
 echo "edited=$edited"
 echo "built=$(date '+%-d %b %Y, %H:%M')"
 echo "source=$(source_id)"

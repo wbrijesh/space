@@ -16,8 +16,8 @@ use tokio::sync::mpsc;
 pub struct Menu {
     /// Lines about the server (not clickable).
     pub lines: Vec<String>,
-    /// An update to apply, as its menu item says it.
-    pub update: Option<String>,
+    /// What can be done about an update, under the lines.
+    pub update: Vec<(String, Action)>,
     /// What Quit Server would stop, for its confirmation ("2 threads working and 3 terminals").
     pub stops: Option<String>,
 }
@@ -26,7 +26,10 @@ pub struct Menu {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     OpenSpace,
-    ApplyUpdate,
+    /// Switch to the ready update once no thread is working.
+    UpdateWhenIdle,
+    /// Switch now.
+    UpdateNow,
     QuitServer,
 }
 
@@ -45,9 +48,14 @@ define_class!(
             send(Action::OpenSpace);
         }
 
-        #[unsafe(method(applyUpdate:))]
-        fn apply_update(&self, _sender: &AnyObject) {
-            send(Action::ApplyUpdate);
+        #[unsafe(method(updateWhenIdle:))]
+        fn update_when_idle(&self, _sender: &AnyObject) {
+            send(Action::UpdateWhenIdle);
+        }
+
+        #[unsafe(method(updateNow:))]
+        fn update_now(&self, _sender: &AnyObject) {
+            send(Action::UpdateNow);
         }
 
         #[unsafe(method(quitServer:))]
@@ -142,8 +150,14 @@ fn fill(menu: &NSMenu, target: &Target, model: &Menu, mtm: MainThreadMarker) {
     for line in &model.lines {
         add(line, None);
     }
-    if let Some(update) = &model.update {
-        add(update, Some(sel!(applyUpdate:)));
+    for (title, action) in &model.update {
+        let selector = match action {
+            Action::UpdateWhenIdle => sel!(updateWhenIdle:),
+            Action::UpdateNow => sel!(updateNow:),
+            Action::OpenSpace => sel!(openSpace:),
+            Action::QuitServer => sel!(quitServer:),
+        };
+        add(title, Some(selector));
     }
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     add("Open Space", Some(sel!(openSpace:)));

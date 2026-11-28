@@ -137,6 +137,9 @@ pub enum HostEvent {
     /// [`Host::open_thread`] read the thread here: its session events before this are in what
     /// it returned.
     ThreadOpened { thread_id: String },
+    /// A new build of Space is on its way, ready, or gone (the app's server says; see
+    /// `space_core::remote::Update`).
+    UpdateChanged,
 }
 
 /// One plugin setting as the Settings page shows it.
@@ -250,6 +253,8 @@ struct HostInner {
     savers: saving::Savers,
     /// This host, for work it starts from `&self`.
     me: std::sync::OnceLock<Weak<HostInner>>,
+    /// Handing over to the next host: what happens from here isn't saved ([`Host::freeze_saves`]).
+    frozen: std::sync::atomic::AtomicBool,
 }
 
 impl Host {
@@ -280,6 +285,7 @@ impl Host {
                 terminal_sink: Mutex::new(None),
                 savers: Mutex::new(HashMap::new()),
                 me: std::sync::OnceLock::new(),
+                frozen: std::sync::atomic::AtomicBool::new(false),
             }),
         };
         let _ = host.inner.me.set(Arc::downgrade(&host.inner));

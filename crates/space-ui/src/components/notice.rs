@@ -1,6 +1,7 @@
 //! A notice in the window's bottom-right corner, over everything (the composer too): what just
-//! happened, in a sentence, with Undo when it can be undone. It goes by itself after a moment,
-//! unless it lists something to look at; × closes it.
+//! happened (or is ready), in a sentence, with Undo when it can be undone and the actions it
+//! offers. It goes by itself after a moment, unless it lists something to look at or waits for
+//! a choice; × closes it.
 
 use std::rc::Rc;
 
@@ -29,11 +30,33 @@ pub struct Notice {
     pub error: bool,
     /// Undo, with the key that does it too (`⌘Z`).
     pub undo: Option<(SharedString, Handler)>,
+    /// Buttons after Undo, the last one the main choice.
+    pub actions: Vec<(SharedString, Handler)>,
     pub on_close: Handler,
 }
 
 pub fn notice(n: Notice) -> Stateful<Div> {
-    let Notice { icon, title, body, kept, error, undo, on_close } = n;
+    let Notice { icon, title, body, kept, error, undo, actions, on_close } = n;
+    let last = actions.len().saturating_sub(1);
+    let actions: Vec<_> = actions
+        .into_iter()
+        .enumerate()
+        .map(|(ix, (label, on_click))| {
+            div()
+                .id(("notice-action", ix))
+                .flex_none()
+                .flex()
+                .items_center()
+                .h(px(24.))
+                .px_2()
+                .rounded(radius::MD)
+                .text_color(if ix == last { color::accent() } else { color::text() })
+                .cursor_pointer()
+                .hover(|s| s.bg(color::hover()))
+                .on_click(move |_, w, cx| on_click(w, cx))
+                .child(label)
+        })
+        .collect();
     let undo = undo.map(|(keys, on_undo)| {
         div()
             .id("notice-undo")
@@ -104,7 +127,7 @@ pub fn notice(n: Notice) -> Stateful<Div> {
                 .child(div().flex().items_start().gap_2().child(div().flex_1().min_w_0().child(title)).child(close))
                 .children(body.map(|b| div().text_color(color::text_2()).child(b)))
                 .children(kept)
-                .children(undo.map(|u| div().pt_1().flex().justify_end().child(u))),
+                .children((undo.is_some() || !actions.is_empty()).then(|| div().pt_1().flex().justify_end().gap_1().children(undo).children(actions))),
         )
 }
 
@@ -119,15 +142,22 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
             kept: Vec::new(),
             error: false,
             undo: Some(("⌘Z".into(), Rc::new(|_, _| {}))),
+            actions: Vec::new(),
             on_close: Rc::new(|_, _| {}),
         }
     }
-    vec![ComponentPreview::new(Area::Transcript, "Notice", "Bottom right of the window: what just happened, with Undo.").stacked().examples([
+    vec![ComponentPreview::new(Area::Transcript, "Notice", "Bottom right of the window: what just happened, with Undo, or what's ready, with its choices.").stacked().examples([
         Example::new("rewound", move |_, _| notice(base(Icon::new(Lucide::RotateCcw), "Rewound.", Some("Claude's file changes after this point were undone."))).into_any_element()),
         Example::new("edited", move |_, _| notice(base(Icon::new(Lucide::Pencil), "Edited.", Some("Claude's file changes after it were undone."))).into_any_element()),
         Example::new("files kept", move |_, _| {
             let mut n = base(Icon::new(Lucide::RotateCcw), "Rewound.", Some("Claude's file changes after this point were undone."));
             n.kept = vec![("src/app.rs".into(), "you changed it since".into()), ("docs/notes.md".into(), "written by a subagent".into())];
+            notice(n).into_any_element()
+        }),
+        Example::new("update ready", move |_, _| {
+            let mut n = base(Icon::new(Lucide::RefreshCw), "Space e4f5a6b is ready.", Some("Agents restart, so 2 working threads would stop."));
+            n.undo = None;
+            n.actions = vec![("Restart now".into(), Rc::new(|_, _| {})), ("Restart when idle".into(), Rc::new(|_, _| {}))];
             notice(n).into_any_element()
         }),
         Example::new("couldn't", move |_, _| {

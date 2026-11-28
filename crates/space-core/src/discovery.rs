@@ -139,14 +139,15 @@ pub fn bundled_plugin_roots() -> Vec<PathBuf> {
 }
 
 /// The `Contents` folder of the app `exe` runs from, when it's an installed app: inside a
-/// `….app/Contents/MacOS/` and not under a `target/` folder (the dev builds dx and the release
+/// `….app/Contents/MacOS/` (or its `Contents/Helpers/`: the server, the keeper) and not under a `target/` folder (the dev builds dx and the release
 /// step put there are still development: their plugins come from the repo). An installed app
 /// carries its plugins: binaries in `Contents/Helpers`, manifests in `Contents/Resources/plugins`.
 pub fn installed_app_contents(exe: &Path) -> Option<PathBuf> {
     let macos = exe.parent()?;
     let contents = macos.parent()?;
     let app = contents.parent()?;
-    let is_app = macos.file_name()? == "MacOS"
+    // The app (Contents/MacOS) or the server and keeper beside the plugins (Contents/Helpers).
+    let is_app = (macos.file_name()? == "MacOS" || macos.file_name()? == "Helpers")
         && contents.file_name()? == "Contents"
         && app.extension().is_some_and(|e| e == "app");
     let in_target = exe.ancestors().any(|d| d.file_name().is_some_and(|n| n == "target"));
@@ -175,6 +176,8 @@ mod tests {
         // Builds under target/ are development builds (the repo's plugins).
         assert_eq!(app("/Users/me/space/target/release/Space.app/Contents/MacOS/Space"), None);
         assert_eq!(app("/Users/me/space/target/dx/space-app/debug/macos/Space.app/Contents/MacOS/Space"), None);
+        // The server and keeper in its Helpers belong to it too.
+        assert_eq!(app("/Users/me/.space/builds/a1b2c3d/Space.app/Contents/Helpers/space-server"), Some(PathBuf::from("/Users/me/.space/builds/a1b2c3d/Space.app/Contents")));
         // A bare binary isn't an app.
         assert_eq!(app("/Users/me/space/target/debug/Space"), None);
         assert_eq!(app("/usr/local/bin/Space"), None);

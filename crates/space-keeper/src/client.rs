@@ -42,6 +42,8 @@ pub struct AgentPipe {
 pub struct KeeperClient {
     tx: mpsc::UnboundedSender<ToKeeper>,
     shared: Arc<Shared>,
+    /// Ends the connection once what's been sent is written ([`KeeperClient::close`]).
+    close: Arc<tokio::sync::Notify>,
 }
 
 struct Shared {
@@ -88,14 +90,30 @@ impl KeeperClient {
         };
         let (tx, mut rx) = mpsc::unbounded_channel::<ToKeeper>();
         let (connected, _) = watch::channel(true);
+        let close = Arc::new(tokio::sync::Notify::new());
         let client = KeeperClient {
             tx: tx.clone(),
             shared: Arc::new(Shared { slots: Mutex::new(HashMap::new()), spawns: Mutex::new(HashMap::new()), connected }),
+            close: close.clone(),
         };
         // Pipes for the adopted agents exist before their backlog is read.
         let pipes = agents.iter().map(|info| client.open_slot(&info.agent, info.pid, Some(info.clone()))).collect();
         tokio::spawn(async move {
-            while let Some(msg) = rx.recv().await {
+            loop {
+                let msg = tokio::select! {
+                    msg = rx.recv() => msg,
+                    _ = close.notified() => {
+                        // What was sent before, then hang up: the keeper keeps the agents' lines
+                        // for the next server.
+                        while let Ok(msg) = rx.try_recv() {
+                            let line = serde_json::to_string(&msg).expect("serializable");
+                            let _ = write.write_all(format!("{line}\n").as_bytes()).await;
+                        }
+                        let _ = write.shutdown().await;
+                        break;
+                    }
+                };
+                let Some(msg) = msg else { break };
                 let line = serde_json::to_string(&msg).expect("serializable");
                 if write.write_all(line.as_bytes()).await.is_err() || write.write_all(b"\n").await.is_err() {
                     break;
@@ -143,6 +161,12 @@ impl KeeperClient {
     /// Stop every agent and the keeper.
     pub fn quit(&self) {
         let _ = self.send(ToKeeper::Quit);
+    }
+
+    /// Hang up (this server is about to exit): the keeper holds every agent's lines from here on
+    /// for the next server. What was sent before is written first.
+    pub fn close(&self) {
+        self.close.notify_one();
     }
 
     /// Run `server` from now on, once the current one exits.

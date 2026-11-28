@@ -64,6 +64,7 @@ mod pin;
 mod quote;
 mod rename;
 mod threads;
+mod update;
 mod trajectory;
 mod view;
 

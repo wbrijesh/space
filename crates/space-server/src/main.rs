@@ -11,6 +11,8 @@ use anyhow::{Context as _, Result};
 use space_core::{DiscoveryOptions, Host, HostOptions};
 use space_server::keeper_host::{self, Paths};
 use space_server::menubar::{Action, Menu};
+use space_core::remote::{UpdateKind, UpdateStage};
+use space_server::updates::Updater;
 use space_server::{Options, Server};
 use tokio::sync::mpsc;
 
@@ -21,6 +23,7 @@ fn main() -> Result<()> {
         .with_ansi(false)
         .init();
     let mut args = std::env::args().skip(1);
+    let server_args: Vec<String> = std::env::args().skip(1).collect();
     let (mut space_dir, mut project, mut no_folder) = (None, None, false);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -39,7 +42,7 @@ fn main() -> Result<()> {
     {
         let menu = menu.clone();
         std::thread::spawn(move || {
-            let code = match rt.block_on(run(space_dir, project, no_folder, menu, actions)) {
+            let code = match rt.block_on(run(space_dir, project, no_folder, server_args, menu, actions)) {
                 Ok(()) => 0,
                 Err(e) => {
                     tracing::error!("{e:#}");
@@ -52,7 +55,7 @@ fn main() -> Result<()> {
     space_server::menubar::run(menu, actions_tx)
 }
 
-async fn run(space_dir: PathBuf, project: PathBuf, no_folder: bool, menu: Arc<Mutex<Menu>>, mut actions: mpsc::UnboundedReceiver<Action>) -> Result<()> {
+async fn run(space_dir: PathBuf, project: PathBuf, no_folder: bool, server_args: Vec<String>, menu: Arc<Mutex<Menu>>, mut actions: mpsc::UnboundedReceiver<Action>) -> Result<()> {
     let paths = Paths::new(&space_dir);
     let (keeper, welcome, pipes) = keeper_host::connect_keeper(&space_dir).await?;
     tracing::info!("server {} ({}) under keeper {}, {} agent(s) to take over", std::process::id(), space_core::build_info::current().version, welcome.pid, pipes.len());
@@ -76,15 +79,28 @@ async fn run(space_dir: PathBuf, project: PathBuf, no_folder: bool, menu: Arc<Mu
     );
     server.apply_saved_config().await;
     server.adopt(pipes).await;
+    let updater = Updater::new(server.clone(), keeper.clone(), space_dir.clone(), server_args);
+    {
+        let updater = updater.clone();
+        server.on_apply(move |when_idle| {
+            tokio::spawn(updater.clone().apply(when_idle));
+        });
+    }
+    tokio::spawn(updater.clone().watch());
     tokio::spawn(keep_menu_current(server.clone(), menu));
     {
         let server = server.clone();
         tokio::spawn(async move {
             while let Some(action) = actions.recv().await {
                 match action {
-                    Action::OpenSpace => open_app(),
+                    Action::OpenSpace => open_app(&space_dir),
                     Action::QuitServer => server.quit().await,
-                    Action::ApplyUpdate => {}
+                    Action::UpdateWhenIdle => {
+                        tokio::spawn(updater.clone().apply(true));
+                    }
+                    Action::UpdateNow => {
+                        tokio::spawn(updater.clone().apply(false));
+                    }
                 }
             }
         });
@@ -95,7 +111,7 @@ async fn run(space_dir: PathBuf, project: PathBuf, no_folder: bool, menu: Arc<Mu
     tokio::select! {
         result = listening => result,
         _ = connected.wait_for(|c| !*c) => {
-            tracing::info!("the keeper went away; stopping");
+            tracing::info!("the keeper connection ended; stopping");
             server.host().flush_saves(space_server::FLUSH_TIMEOUT).await;
             Ok(())
         }
@@ -124,9 +140,27 @@ async fn keep_menu_current(server: Arc<Server>, menu: Arc<Mutex<Menu>>) {
             (0, t) => Some(plural(t, "terminal", "terminals")),
             (w, t) => Some(format!("{} working and {}", plural(w, "thread", "threads"), plural(t, "terminal", "terminals"))),
         };
+        let mut lines = vec![name.clone(), status.join(" · ")];
+        let mut actions = Vec::new();
+        if let Some(update) = server.state().update {
+            let v = &update.version;
+            match (update.stage, update.kind) {
+                (UpdateStage::Getting, _) => lines.push(if build.is_release() { format!("Downloading Space {v}…") } else { format!("Building Space {v}…") }),
+                (UpdateStage::Failed, _) => lines.push(update.error.clone().unwrap_or_else(|| format!("Space {v} couldn't be readied"))),
+                (UpdateStage::Ready, Some(UpdateKind::App)) => actions.push((format!("Space {v} is ready · Relaunch"), Action::UpdateNow)),
+                (UpdateStage::Ready, Some(UpdateKind::Server)) => actions.push((format!("Space {v} is ready · Restart (nothing stops)"), Action::UpdateNow)),
+                (UpdateStage::Ready, _) if update.waiting_for_idle => lines.push(format!("Space {v} restarts when every thread is done")),
+                (UpdateStage::Ready, _) => {
+                    lines.push(format!("Space {v} is ready (restarts agents)"));
+                    actions.push(("Restart when idle".into(), Action::UpdateWhenIdle));
+                    actions.push(("Restart now".into(), Action::UpdateNow));
+                }
+            }
+        }
         {
             let mut m = menu.lock().unwrap();
-            m.lines = vec![name.clone(), status.join(" · ")];
+            m.lines = lines;
+            m.update = actions;
             m.stops = stops;
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -143,9 +177,11 @@ fn uptime(d: Duration) -> String {
     }
 }
 
-/// Open Space: the app this server came with (an app bundle's, or this build's dev bundle).
-fn open_app() {
-    let Some(app) = app_bundle() else {
+/// Open Space: the current build's app (the one updates switched to), else the one this server
+/// came with.
+fn open_app(space_dir: &Path) {
+    let current = std::fs::read_to_string(space_dir.join("builds").join("current")).ok().map(|p| PathBuf::from(p.trim())).filter(|p| p.is_dir());
+    let Some(app) = current.or_else(app_bundle) else {
         tracing::warn!("no Space app found beside this server");
         return;
     };
