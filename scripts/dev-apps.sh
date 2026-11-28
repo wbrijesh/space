@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # The two local apps, kept on the latest build:
-#   Space      this repo's dev bundle (target/debug/Space.app), on AeroSpace workspace 2
+#   Space      Space building itself: the build it switched to last (~/.space/builds/current),
+#              or before self-hosting this repo's dev bundle (target/debug/Space.app); workspace 2
 #   SpaceTest  a copy in ~/.cache/space-test with the `changes` scenario and a fake `gh`, on 9
 # Both run detached (nohup; logs and state in ~/.cache/space-dev), so closing a terminal or
 # interrupting an agent doesn't stop them. Windows are moved by window id, without focusing them,
 # and neither app takes focus: each start checks that it didn't (guard).
 #
 #   dev-apps.sh open     start whichever isn't running
-#   dev-apps.sh update   build, then restart both on the new build (a failed build changes nothing)
+#   dev-apps.sh update   build, then restart SpaceTest on it (a failed build changes nothing); Space
+#                        updates itself (its server builds each commit and offers it), so it's
+#                        left alone once self-hosting, and restarted on the dev bundle before
+#   dev-apps.sh self-host  stage this build, quit Space's server (running turns stop, once) and
+#                        start Space from the staged build: from then on it updates itself
 #   dev-apps.sh status   what's running, on which build, and whether it's the latest
 #   dev-apps.sh stop     quit both
 #   dev-apps.sh log      follow both logs
@@ -19,8 +24,16 @@ fixture="$test_dir/changes-test"
 mkdir -p "$state"
 
 # Per app: the executable, how to find its process, and its workspace.
-exe() { case "$1" in space) echo "$root/target/debug/Space.app/Contents/MacOS/Space" ;; test) echo "$test_dir/SpaceTest" ;; esac; }
-pattern() { case "$1" in space) echo "target/debug/Space.app/Contents/MacOS/Space" ;; test) echo "SpaceTest --scenario changes" ;; esac; }
+current="$HOME/.space/builds/current"
+# The staged build Space runs from once self-hosting, else none.
+staged() { [ -f "$current" ] && [ -d "$(cat "$current")" ] && cat "$current" || true; }
+exe() {
+    case "$1" in
+        space) if [ -n "$(staged)" ]; then echo "$(staged)/Contents/MacOS/Space"; else echo "$root/target/debug/Space.app/Contents/MacOS/Space"; fi ;;
+        test) echo "$test_dir/SpaceTest" ;;
+    esac
+}
+pattern() { case "$1" in space) echo "Space.app/Contents/MacOS/Space\$" ;; test) echo "SpaceTest --scenario changes" ;; esac; }
 workspace() { case "$1" in space) echo 2 ;; test) echo 9 ;; esac; }
 name() { case "$1" in space) echo Space ;; test) echo SpaceTest ;; esac; }
 
@@ -34,8 +47,14 @@ start() {
     # script's output open.
     case "$app" in
         space)
-            (cd "$root" && exec env SPACE_TARGET_DIR="$root/target/debug" SPACE_PROJECT="$root" SPACE_RELOAD_PLUGINS=1 \
-                nohup "$(exe space)") < /dev/null > "$state/space.log" 2>&1 & ;;
+            if [ -n "$(staged)" ]; then
+                # A staged build carries its plugins, server and keeper.
+                (cd "$root" && exec env -u SPACE_TARGET_DIR -u SPACE_RELOAD_PLUGINS SPACE_PROJECT="$root" \
+                    nohup "$(exe space)") < /dev/null > "$state/space.log" 2>&1 &
+            else
+                (cd "$root" && exec env SPACE_TARGET_DIR="$root/target/debug" SPACE_PROJECT="$root" SPACE_RELOAD_PLUGINS=1 \
+                    nohup "$(exe space)") < /dev/null > "$state/space.log" 2>&1 &
+            fi ;;
         test)
             (cd "$test_dir" && exec env PATH="$fixture/bin:$PATH" FAKE_GH_STATE="$fixture/pr.json" \
                 nohup "$(exe test)" --scenario changes "$fixture/w") < /dev/null > "$state/test.log" 2>&1 & ;;
@@ -91,7 +110,8 @@ stop() {
 update() {
     (cd "$root" && just build) || { echo "build failed: the running apps are unchanged" >&2; exit 1; }
     "$root/scripts/dev-bundle.sh" > /dev/null
-    stop space
+    # Self-hosting, Space updates itself: its server builds this commit and offers it.
+    if [ -z "$(staged)" ]; then stop space; fi
     stop test
     # rm before cp: copying over the old file keeps its inode, and macOS kills the new binary at
     # launch for a stale code signature.
@@ -99,6 +119,24 @@ update() {
     cp "$root/target/debug/Space.app/Contents/MacOS/build.txt" "$test_dir/build.txt"
     start space
     start test
+}
+
+# Move Space onto a staged build of this checkout, after which it follows the checkout's branch
+# by itself. Quitting the old server stops any running turn, so it asks first if one runs.
+self_host() {
+    (cd "$root" && just build) || { echo "build failed" >&2; exit 1; }
+    local version dest
+    version="$(git -C "$root" rev-parse --short=7 HEAD)"
+    dest="$HOME/.space/builds/$version"
+    [ -z "$(git -C "$root" status --porcelain)" ] || echo "note: the checkout has uncommitted edits; they're in this build" >&2
+    "$root/scripts/stage.sh" "$dest" "$root" > /dev/null
+    stop space
+    # SIGTERM to the keeper is Quit Server: it stops the server, its agents and terminals.
+    pkill -TERM -f "space-keeper --socket $HOME/.space/keeper.sock" 2>/dev/null || true
+    for _ in $(seq 1 50); do pgrep -f "space-keeper --socket $HOME/.space/keeper.sock" > /dev/null || break; sleep 0.2; done
+    printf '%s' "$dest/Space.app" > "$current"
+    start space
+    echo "Space now runs from $dest/Space.app and updates itself from $root"
 }
 
 field() { [ -f "$1" ] && sed -n "s/^$2=//p" "$1" || true; }
@@ -122,7 +160,9 @@ status() {
         local edited=""
         [ "$(field "$info" edited)" = true ] && edited=" · edited"
         printf '%11s%s%s · built %s\n' "" "$(field "$info" commit | cut -c1-7)" "$edited" "$(field "$info" built)"
-        if [ "$(field "$info" binary)" != "$built_binary" ]; then
+        if [ "$app" = space ] && [ -n "$(staged)" ]; then
+            printf '%11s%s\n' "" "self-hosting: updates itself (from $(staged | sed "s|$HOME|~|"))"
+        elif [ "$(field "$info" binary)" != "$built_binary" ]; then
             printf '%11s%s\n' "" "✗ stale: a newer build exists   → just apps-update"
         elif [ "$(field "$info" source)" != "$now_source" ]; then
             printf '%11s%s\n' "" "✗ the code changed since this build   → just apps-update"
@@ -135,8 +175,9 @@ status() {
 case "${1:-status}" in
     open) start space; start test ;;
     update) update ;;
+    self-host) self_host ;;
     status) status ;;
     stop) stop space; stop test; echo "stopped" ;;
     log) tail -n 40 -F "$state/space.log" "$state/test.log" ;;
-    *) echo "usage: dev-apps.sh open|update|status|stop|log" >&2; exit 2 ;;
+    *) echo "usage: dev-apps.sh open|update|self-host|status|stop|log" >&2; exit 2 ;;
 esac

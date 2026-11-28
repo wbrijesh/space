@@ -22,9 +22,15 @@ run *args: build
 apps:
     @scripts/dev-apps.sh open
 
-# Build, then restart Space and SpaceTest on the new build (a failed build leaves them running)
+# Build, then restart SpaceTest on the new build (and Space, until it's self-hosting: then it
+# updates itself). A failed build leaves them running
 apps-update:
     @scripts/dev-apps.sh update
+
+# Move Space onto a staged build of this checkout; from then on it builds each new commit and
+# offers it (Relaunch / Restart). Stops Space's server once (running turns stop)
+self-host:
+    @scripts/dev-apps.sh self-host
 
 # Show whether Space and SpaceTest run, on which build, and whether it's the latest
 apps-status:

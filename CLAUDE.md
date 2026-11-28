@@ -23,7 +23,13 @@
 ## Local apps
 
 `just apps` starts Space (workspace 2) and SpaceTest (workspace 9), detached. After each committed
-change, run `just apps-update` (build, then restart both on it) and check `just apps-status`.
+change, run `just apps-update` (build, then restart SpaceTest on it) and check `just apps-status`.
+
+Space builds itself: once it runs from a staged build (`just self-host`, done once), its server
+builds each new commit on the checkout's branch in `~/.space/builds/worktree` and offers it (a
+notice and the menu bar item: Relaunch, Restart, or Restart now / when idle). Don't restart it
+yourself: the user chooses when. Never kill its server or keeper (`~/.space/*.sock`), and test
+servers only in scratch folders (`SPACE_SERVER_DIR=<dir>`).
 
 ## Disk use
 
