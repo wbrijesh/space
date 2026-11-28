@@ -13,6 +13,8 @@
   `git -c sequence.editor=: rebase -i --autosquash <sha>~1`). A new, separate task gets a new
   commit.
 - **Never push** unless the user asks.
+- **The pre-commit hook** (`.githooks/pre-commit`, enabled by `just hooks`) runs `just lint`
+  and `just test`. Never skip it with `--no-verify`: fix what fails.
 - **Message style** (follow `git log`): a short subject, `Area: what changed` or a plain
   sentence (`Right pane: Files and Terminal modes`, `Ride out a bad network: wait, retry,
   resume`), no trailing period; then a body in plain prose saying what changed and why, wrapped

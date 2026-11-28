@@ -109,6 +109,10 @@ check +crates="space-app":
     cargo clippy {{prepend("-p ", crates)}} --all-targets -- -D warnings
     cargo test {{prepend("-p ", crates)}}
 
+# Lint and test before every commit: point git at the tracked hooks in .githooks (once per clone)
+hooks:
+    git config core.hooksPath .githooks
+
 lint:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo clippy -p space-app --no-default-features --all-targets -- -D warnings

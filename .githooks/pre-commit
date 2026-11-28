@@ -1,0 +1,15 @@
+#!/bin/sh
+# Lint and test before every commit (enable with `just hooks`). Never skip it with --no-verify:
+# fix what fails instead.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+if ! just lint; then
+    echo "" >&2
+    echo "pre-commit: \`just lint\` failed; commit not made. Fix the warnings above." >&2
+    exit 1
+fi
+if ! just test; then
+    echo "" >&2
+    echo "pre-commit: \`just test\` failed; commit not made. Fix the tests above." >&2
+    exit 1
+fi

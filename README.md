@@ -107,6 +107,7 @@ Arguments go to the app: a project folder, `--gallery`, or `--scenario list`.
 | `just test` | Rust tests and the TypeScript plugins' tests; a scripted stub agent, so no model calls |
 | `just check [crates]` | while iterating: clippy and tests for those crates only (default `space-app`) |
 | `just lint` | clippy (with and without dev tooling) and the TypeScript typecheck |
+| `just hooks` | once per clone: a pre-commit hook runs `just lint` and `just test` (`.githooks/pre-commit`) |
 | `just clean` | free disk space: build output and leftover temporary files (`just build` warns past 40 GB) |
 | `just protocol` | regenerate the TypeScript protocol bindings from the Rust types |
 | `just install` | release build into `~/Applications/Space.app` (Spotlight) |
