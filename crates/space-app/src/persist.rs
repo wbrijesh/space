@@ -2,10 +2,11 @@
 //!
 //! A thread is saved as its summary ([`ThreadMeta`]) and its events: the user's messages, the
 //! agent's finished messages and thoughts (chunks merged), tool calls and results, permission
-//! and guardrail decisions, status (model) changes and turn starts and ends. Not streaming
-//! chunks one by one, and not held calls (nothing waits after a restart). Events collect on the
-//! thread and are written when a turn ends, when its mode changes, and when Space quits; a
-//! failed write keeps them for the next one and says so in the banner.
+//! and guardrail decisions, status (model) changes and turn starts and ends. The host saves the
+//! events itself as they happen (`space_core::host::saving`), so a turn is kept even while no
+//! app runs; the app hands it the summary (when a turn ends, on a rename, pin, mode change or
+//! Done, and when Space quits) and the events it makes itself (a new session, going back). A
+//! failed write is tried again and says so in the banner.
 //!
 //! At launch the sidebar lists the saved threads; a thread's events are read when it's opened
 //! and replayed through the same reducer that shows live ones. Writing in it loads the agent's
@@ -20,7 +21,7 @@ use std::time::Duration;
 
 use gpui::{Context, PromptLevel, Window};
 use space_core::protocol::service::ThreadMeta;
-use space_core::{SessionEvent, ThreadSave};
+use space_core::SessionEvent;
 
 use crate::app::{SpaceApp, now_ms};
 use crate::threads::Thread;
@@ -33,17 +34,6 @@ pub(crate) fn new_thread_id() -> String {
     let mut random = std::collections::hash_map::RandomState::new().build_hasher();
     random.write_u64(now_ms());
     format!("{:x}-{:08x}", now_ms(), random.finish() as u32)
-}
-
-/// Add `event` to the events waiting to be saved, merging streamed chunks.
-pub(crate) fn record(unsaved: &mut Vec<SessionEvent>, event: &SessionEvent) {
-    match (unsaved.last_mut(), event) {
-        (_, SessionEvent::Created { .. } | SessionEvent::ToolCallHeld { .. } | SessionEvent::Retry(_)) => {}
-        (Some(SessionEvent::AgentText { text: buf }), SessionEvent::AgentText { text })
-        | (Some(SessionEvent::AgentThought { text: buf }), SessionEvent::AgentThought { text }) => buf.push_str(text),
-        (Some(SessionEvent::Status(last)), SessionEvent::Status(status)) => last.merge(status),
-        _ => unsaved.push(event.clone()),
-    }
 }
 
 impl SpaceApp {
@@ -76,12 +66,12 @@ impl SpaceApp {
 
     /// Write the thread's waiting events and its summary (once it has something to save). One
     /// save at a time per thread: asked for during one (or while the thread loads), it follows.
-    pub(crate) fn save_thread(&mut self, key: u64, cx: &mut Context<Self>) {
+    pub(crate) fn save_thread(&mut self, key: u64, _cx: &mut Context<Self>) {
         let Some(thread) = self.thread_mut(key) else { return };
         if thread.unloaded {
             return;
         }
-        if thread.saving || thread.loading {
+        if thread.loading {
             thread.save_again = true;
             return;
         }
@@ -89,59 +79,29 @@ impl SpaceApp {
             return;
         }
         let meta = self.thread_meta(self.thread(key).expect("thread exists"));
-        let host = self.host.clone();
-        let thread = self.thread_mut(key).expect("thread exists");
-        thread.inflight = std::mem::take(&mut thread.unsaved);
-        thread.saving = true;
-        thread.save_again = false;
-        let (id, first, events) = (thread.id.clone(), thread.saved, thread.inflight.clone());
-        cx.spawn(async move |this, cx| {
-            let result = host.save_thread(&id, Some(meta.clone()), first, &events).await;
-            let _ = this.update(cx, |this, cx| {
-                // Marked done while this save was in flight (marking it wrote it).
-                let Some(thread) = this.thread_mut(key) else { return };
-                thread.saving = false;
-                let sent = std::mem::take(&mut thread.inflight);
-                match result {
-                    Ok(()) => {
-                        thread.saved += sent.len() as u64;
-                        thread.meta = Some(meta);
-                    }
-                    Err(e) => {
-                        tracing::warn!("saving thread {id}: {e:#}");
-                        thread.unsaved.splice(0..0, sent);
-                        this.banner = Some(format!("Couldn't save this thread: {e:#}"));
-                    }
-                }
-                if this.thread(key).is_some_and(|t| t.save_again) {
-                    this.save_thread(key, cx);
-                }
-                cx.notify();
-            });
-        })
-        .detach();
+        self.host.save_thread_meta(meta.clone());
+        if let Some(thread) = self.thread_mut(key) {
+            thread.meta = Some(meta);
+        }
     }
 
-    /// Before quitting: save what every thread has waiting, the events of a save still in
-    /// flight included (the store skips what it already has). Blocks briefly.
+    /// Before quitting: every thread's summary as it is now, and everything the host has
+    /// waiting written. Blocks briefly.
     pub(crate) fn save_all_now(&mut self) {
         if !self.saving_threads() {
             return;
         }
-        let saves: Vec<_> = self
+        let metas: Vec<_> = self
             .threads
             .iter()
             .chain(self.side_chats.values().map(|s| &s.thread))
             .filter(|t| !t.unloaded && !t.loading && !t.state.items.is_empty())
-            .filter(|t| t.saving || !t.unsaved.is_empty() || t.meta.is_none())
-            .map(|t| ThreadSave {
-                id: t.id.clone(),
-                meta: self.thread_meta(t),
-                first: t.saved,
-                events: t.inflight.iter().chain(&t.unsaved).cloned().collect(),
-            })
+            .map(|t| self.thread_meta(t))
             .collect();
-        self.host.save_threads_blocking(saves, Vec::new(), QUIT_SAVE_TIMEOUT);
+        for meta in metas {
+            self.host.save_thread_meta(meta);
+        }
+        self.host.flush_saves_blocking(QUIT_SAVE_TIMEOUT);
     }
 
     /// At launch: list the saved threads in the sidebar, below the launch threads.
@@ -213,8 +173,7 @@ impl SpaceApp {
                 let Some(thread) = this.thread_mut(key) else { return };
                 thread.loading = false;
                 match result {
-                    Ok((_, events, count)) => {
-                        thread.saved = count;
+                    Ok((_, events, _)) => {
                         thread.error = None;
                         for event in &events {
                             thread.apply(event);
@@ -291,11 +250,7 @@ impl SpaceApp {
         let Some(thread) = self.drop_thread(key, cx) else { return };
         if keep {
             // A thread whose events haven't been read keeps the summary it was saved with.
-            let (meta, events) = if thread.unloaded || thread.loading {
-                (thread.meta.clone(), Vec::new())
-            } else {
-                (Some(self.thread_meta(&thread)), thread.inflight.iter().chain(&thread.unsaved).cloned().collect())
-            };
+            let meta = if thread.unloaded || thread.loading { thread.meta.clone() } else { Some(self.thread_meta(&thread)) };
             if let Some(mut meta) = meta {
                 let now = now_ms();
                 meta.done_ms = Some(now);
@@ -303,16 +258,7 @@ impl SpaceApp {
                 meta.updated_ms = meta.updated_ms.max(now);
                 self.done_threads.push(meta.clone());
                 self.purge_done_threads(cx);
-                let (host, first) = (self.host.clone(), thread.saved);
-                cx.spawn(async move |this, cx| {
-                    if let Err(e) = host.save_thread(&meta.id, Some(meta.clone()), first, &events).await {
-                        let _ = this.update(cx, |this, cx| {
-                            this.banner = Some(format!("Couldn't save that the thread is done: {e:#}"));
-                            cx.notify();
-                        });
-                    }
-                })
-                .detach();
+                self.host.save_thread_meta(meta);
             }
         }
         if self.selected.is_none() {
@@ -383,17 +329,7 @@ impl SpaceApp {
         let last = viewed.and_then(|ix| self.threads[ix].meta.as_ref()).map_or(meta.updated_ms, |m| m.updated_ms.max(meta.updated_ms));
         meta.done_ms = None;
         meta.updated_ms = now_ms().max(last + 1);
-        let host = self.host.clone();
-        let saved = meta.clone();
-        cx.spawn(async move |this, cx| {
-            if let Err(e) = host.save_thread(&saved.id, Some(saved.clone()), 0, &[]).await {
-                let _ = this.update(cx, |this, cx| {
-                    this.banner = Some(format!("Couldn't save that the thread was reopened: {e:#}"));
-                    cx.notify();
-                });
-            }
-        })
-        .detach();
+        self.host.save_thread_meta(meta.clone());
         let key = match viewed {
             Some(ix) => {
                 let thread = &mut self.threads[ix];
@@ -550,9 +486,6 @@ impl SpaceApp {
 
 #[cfg(test)]
 mod tests {
-    use space_core::SessionState;
-    use space_core::protocol::SpaceStatus;
-
     use super::*;
 
     #[test]
@@ -591,55 +524,6 @@ mod tests {
         assert!(!expired(&closed(None), cutoff), "open threads never expire");
     }
 
-    #[test]
-    fn chunks_merge_and_holds_are_left_out() {
-        let mut unsaved = Vec::new();
-        let events = [
-            SessionEvent::UserMessage { text: "hi".into(), quote: None, attachments: vec![], images: vec![], texts: vec![], at_ms: None, id: None, steered: false },
-            SessionEvent::TurnStarted,
-            SessionEvent::AgentThought { text: "a".into() },
-            SessionEvent::AgentThought { text: "b".into() },
-            // A hold isn't saved; the agent's report of the call is.
-            SessionEvent::ToolCallHeld { id: "t".into(), title: "ls".into(), reason: Some("down".into()) },
-            SessionEvent::Retry(Some(space_core::protocol::RetryState {
-                kind: space_core::protocol::RetryKind::Offline,
-                attempt: 1,
-                reason: "ECONNRESET".into(),
-            })),
-            SessionEvent::ToolCall(space_core::ToolCallInfo {
-                id: "t".into(),
-                title: "ls".into(),
-                kind: "execute".into(),
-                status: space_core::ToolStatus::Completed,
-                output: "a".into(),
-                locations: vec![],
-                blocked: None,
-                held: None,
-                subagent: false,
-            }),
-            SessionEvent::AgentText { text: "Hel".into() },
-            SessionEvent::AgentText { text: "lo".into() },
-            SessionEvent::Status(SpaceStatus { model: Some("m".into()), ..Default::default() }),
-            SessionEvent::Status(SpaceStatus { thinking_level: Some("high".into()), ..Default::default() }),
-            SessionEvent::turn_ended("end_turn"),
-        ];
-        let mut live = SessionState::default();
-        for e in &events {
-            live.apply(e);
-            record(&mut unsaved, e);
-        }
-        assert_eq!(unsaved.len(), 7);
-        assert_eq!(unsaved[2], SessionEvent::AgentThought { text: "ab".into() });
-        // Replaying what's saved shows what was shown live.
-        let json = serde_json::to_string(&unsaved).unwrap();
-        let mut replayed = SessionState::default();
-        for e in serde_json::from_str::<Vec<SessionEvent>>(&json).unwrap() {
-            replayed.apply(&e);
-        }
-        assert_eq!(replayed.items, live.items);
-        assert_eq!(replayed.status.model.as_deref(), Some("m"));
-        assert_eq!(replayed.status.thinking_level.as_deref(), Some("high"));
-    }
 
     #[test]
     fn thread_ids_are_folder_names() {

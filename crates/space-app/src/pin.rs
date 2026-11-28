@@ -82,16 +82,8 @@ impl SpaceApp {
             let Some(meta) = thread.meta.as_mut() else { return };
             meta.pinned_ms = pinned;
             meta.updated_ms = meta.updated_ms.max(now_ms());
-            let (meta, first, host) = (meta.clone(), thread.saved, self.host.clone());
-            cx.spawn(async move |this, cx| {
-                if let Err(e) = host.save_thread(&meta.id, Some(meta.clone()), first, &[]).await {
-                    let _ = this.update(cx, |this, cx| {
-                        this.banner = Some(format!("Couldn't save the pin: {e:#}"));
-                        cx.notify();
-                    });
-                }
-            })
-            .detach();
+            let meta = meta.clone();
+            self.host.save_thread_meta(meta);
         } else {
             self.save_thread(key, cx);
         }

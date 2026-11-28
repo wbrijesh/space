@@ -729,6 +729,9 @@ impl AgentHandle {
         let mut meta = SessionMeta::new(cwd, self.inner.plugin_id.clone());
         meta.thread_id = thread_id.map(str::to_string);
         self.inner.shared.host.sessions.lock().unwrap().insert(id.clone(), meta);
+        if let Some(thread_id) = thread_id {
+            self.inner.shared.host.track_thread(thread_id);
+        }
         let inner = SessionInner { id, agent: self.clone(), running: AtomicBool::new(false) };
         Session { inner: Arc::new(inner) }
     }

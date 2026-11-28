@@ -257,7 +257,7 @@ impl SpaceApp {
     /// The deleted side chat's moment passed: delete what was saved of it.
     fn finish_deleting_side_chat(&mut self, cx: &mut Context<Self>) {
         let Some(Deleted { side, .. }) = self.deleted_side.take() else { return };
-        if side.thread.meta.is_some() || side.thread.saved > 0 {
+        if side.thread.meta.is_some() {
             self.remove_saved(side.thread.id.clone(), cx);
         }
         cx.notify();

@@ -223,14 +223,16 @@ Images are normalized before they're sent (oriented, 8-bit sRGB, at most 1568 px
 metadata stripped; JPEG, or PNG when they have transparency), written there as `<sha256>.<ext>` before
 the message that refers to them, and the message event keeps only their path, type and size. `plugin/initialize` tells every plugin Space's folder (`spaceDir`; absent in tests and
 scenarios, when nothing is kept). A thread is its summary (`ThreadMeta`: title, project, mode, model,
-session, times) and its session events, which the store keeps without reading them. The app
-saves the user's messages, finished agent messages and thoughts (chunks merged), tool calls and
-results, permission and guardrail decisions, status changes and turn starts and ends, not held calls:
-when a turn ends, when the thread's mode changes, and on quit (up to 2 s). One save at a time per
-thread; one asked for meanwhile follows it. Each write says where its events start (`first`), so the store
-skips events it already has (a failed save that had written them, a quit save repeating one in flight),
-and an older summary never replaces a newer one. A thread deleted during a save is deleted after it. A
-failed save keeps the events for the next one and says so in the banner; the conversation goes on. A
+session, times) and its session events, which the store keeps without reading them. The host
+saves the events of every session made for a thread (`host/saving.rs`) a moment after they happen
+(250 ms), whether or not an app is running: the user's messages, finished agent messages and thoughts
+(chunks merged), tool calls and results, permission and guardrail decisions, status changes and turn
+starts and ends, not held calls. The app hands it the summary (when a turn ends, on a rename, pin,
+mode change or Done, and on quit, which waits up to 2 s for the last writes) and the events it makes
+itself (a new session, going back); a new thread's events wait for its first summary. One write at a
+time per thread. Each write says where its events start (`first`), so the store skips events it already
+has, and an older summary never replaces a newer one. A failed write keeps the events, is tried again
+every 2 s and says so in the banner; the conversation goes on. A
 thread that fails to open is read again when next opened, and nothing is sent into it meanwhile. At launch the sidebar lists
 saved threads; opening one reads its events and replays them through `SessionState::apply` (a turn cut
 short ends as cancelled, so no card waits). Writing in it loads its session again (`session/load`); if

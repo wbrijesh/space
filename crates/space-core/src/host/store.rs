@@ -88,6 +88,7 @@ impl Host {
 
     /// Delete a saved thread; plugins that observe `thread/deleted` drop what they keep of it.
     pub async fn delete_thread(&self, thread_id: &str) -> Result<()> {
+        self.forget_saves(thread_id);
         self.inner.observe(svc::Observed::ThreadDeleted { thread_id: thread_id.to_string() });
         let _: serde_json::Value = self.store_call(svc::STORE_DELETE, thread_ref(thread_id)).await?;
         Ok(())

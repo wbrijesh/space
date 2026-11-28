@@ -26,7 +26,7 @@ pub use discovery::{DiscoveredPlugin, DiscoveryOptions, DiscoveryReport, PluginS
 pub use grants::Approval;
 pub use host::{
     AgentHandle, EventReceiver, GRANTS_FILE, HELD_RECHECK, Host, HostEvent, HostOptions, PluginStatus, Session, SettingError, SettingState,
-    TITLE_TIMEOUT, TerminalSink, ThreadSave,
+    SAVE_DELAY, TITLE_TIMEOUT, TerminalSink, ThreadSave, record_for_saving,
 };
 pub use secrets::Secrets;
 pub use session::{

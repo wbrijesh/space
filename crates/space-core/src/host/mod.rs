@@ -48,6 +48,7 @@ mod agents;
 mod observers;
 mod pipeline;
 mod registry;
+mod saving;
 mod services;
 mod store;
 mod terminals;
@@ -71,6 +72,7 @@ use crate::secrets::Secrets;
 use crate::session::{SessionEvent, SessionId};
 
 pub use agents::{AgentHandle, Session};
+pub use saving::{SAVE_DELAY, record as record_for_saving};
 pub use store::ThreadSave;
 pub use terminals::TerminalSink;
 pub use titles::TITLE_TIMEOUT;
@@ -130,6 +132,8 @@ pub enum HostEvent {
     /// A message sent with [`Session::steer`] was handed to the model (it's in the transcript
     /// now, as a [`SessionEvent::UserMessage`]).
     Steered { session_id: SessionId, steer_id: String },
+    /// Saving a thread failed; its events wait and the write is tried again.
+    SaveFailed { thread_id: String, message: String },
 }
 
 /// One plugin setting as the Settings page shows it.
@@ -239,6 +243,10 @@ struct HostInner {
     watching: Mutex<Option<SessionId>>,
     /// Where terminal output goes ([`Host::set_terminal_sink`]).
     terminal_sink: Mutex<Option<TerminalSink>>,
+    /// Threads being saved as they happen ([`saving`]).
+    savers: saving::Savers,
+    /// This host, for work it starts from `&self`.
+    me: std::sync::OnceLock<Weak<HostInner>>,
 }
 
 impl Host {
@@ -267,8 +275,11 @@ impl Host {
                 agents: Mutex::new(HashMap::new()),
                 watching: Mutex::new(None),
                 terminal_sink: Mutex::new(None),
+                savers: Mutex::new(HashMap::new()),
+                me: std::sync::OnceLock::new(),
             }),
         };
+        let _ = host.inner.me.set(Arc::downgrade(&host.inner));
         host.discover();
         (host, rx)
     }
@@ -330,6 +341,7 @@ impl HostInner {
 
     fn emit_session(&self, session_id: &str, event: SessionEvent) {
         self.observe_session(session_id, &event);
+        self.record_session_event(session_id, &event);
         self.emit(HostEvent::Session { session_id: session_id.to_string(), event });
     }
 }

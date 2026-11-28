@@ -880,6 +880,10 @@ impl SpaceApp {
 
     fn on_host_event(&mut self, event: HostEvent, cx: &mut Context<Self>) {
         match event {
+            HostEvent::SaveFailed { message, .. } => {
+                self.banner = Some(format!("Couldn't save a thread (Space keeps trying): {message}"));
+                cx.notify();
+            }
             HostEvent::PluginStatus { plugin_id, status } => {
                 if self.host.terminal_plugin().as_deref() == Some(plugin_id.as_str()) {
                     match status {
@@ -1286,7 +1290,7 @@ impl SpaceApp {
         self.pending_confirm = None;
         let Some(thread) = self.thread_mut(key) else { return };
         thread.mode = Some(id);
-        let saved = thread.meta.is_some() || thread.saving;
+        let saved = thread.meta.is_some();
         self.sync_session_modes();
         if saved {
             self.save_thread(key, cx);

@@ -26,14 +26,7 @@ pub struct Thread {
     pub created_ms: u64,
     /// The summary last saved (or read from disk); `None` until the thread is first saved.
     pub meta: Option<ThreadMeta>,
-    /// Events to save next (agent text and thoughts merged).
-    pub unsaved: Vec<SessionEvent>,
-    /// How many of its events the store has.
-    pub saved: u64,
-    /// A save is in flight, with these events.
-    pub saving: bool,
-    pub inflight: Vec<SessionEvent>,
-    /// A save was asked for while one was in flight (or the thread was loading).
+    /// A save was asked for while the thread was loading.
     pub save_again: bool,
     /// A saved thread whose events haven't been read yet (they are when it's opened).
     pub unloaded: bool,
@@ -154,10 +147,6 @@ impl Thread {
             id: crate::persist::new_thread_id(),
             created_ms: crate::app::now_ms(),
             meta: None,
-            unsaved: Vec::new(),
-            saved: 0,
-            saving: false,
-            inflight: Vec::new(),
             save_again: false,
             unloaded: false,
             loading: false,
@@ -286,12 +275,9 @@ impl SpaceApp {
             // A rewind or Undo waiting for the turn to stop.
             self.run_waiting(key, cx);
         }
-        if self.saving_threads() {
-            let thread = self.thread_mut(key).expect("thread exists");
-            crate::persist::record(&mut thread.unsaved, event);
-            if matches!(event, SessionEvent::TurnEnded { .. }) {
-                self.save_thread(key, cx);
-            }
+        // The host saves the events; the summary (title, model, times) is the app's.
+        if self.saving_threads() && matches!(event, SessionEvent::TurnEnded { .. }) {
+            self.save_thread(key, cx);
         }
         let Some(thread) = self.thread_mut(key) else { return };
         // A tool call waiting for the guardrail counts once per turn (it may stay paused long).
@@ -319,13 +305,11 @@ impl SpaceApp {
     /// The thread goes on in a new agent session: a divider says so (and is saved, so going back
     /// knows the messages before it aren't in the new conversation).
     fn emit_new_session(&mut self, key: u64, cx: &mut Context<Self>) {
-        let saving = self.saving_threads();
         let Some(thread) = self.thread_mut(key) else { return };
         thread.apply(&SessionEvent::NewSession);
-        if saving {
-            crate::persist::record(&mut thread.unsaved, &SessionEvent::NewSession);
-            self.save_thread(key, cx);
-        }
+        let id = thread.id.clone();
+        self.host.record_event(&id, &SessionEvent::NewSession);
+        self.save_thread(key, cx);
     }
 
     pub(crate) fn add_thread(&mut self, cwd: PathBuf) -> u64 {

@@ -168,3 +168,44 @@ async fn a_store_that_cant_write_doesnt_stop_the_conversation() {
     // The session goes on.
     assert_eq!(session.prompt("again").await.unwrap(), "end_turn");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_host_saves_a_thread_as_it_happens() {
+    let root = root();
+    let (host, mut events) = host(root.path());
+    host.start_services().await;
+    let agent = host.start_agent("stub").await.unwrap();
+    let session = agent.new_session_in(root.path(), Some("t1")).await.unwrap();
+    // Before the summary, nothing is saved; with it, everything from then on.
+    host.save_thread_meta(meta("t1", session.id(), root.path()));
+    assert!(host.is_saving("t1"));
+    session.prompt("hello").await.unwrap();
+    let live = drain(&mut events).await;
+    host.record_event("t1", &SessionEvent::NewSession);
+    host.flush_saves(Duration::from_secs(5)).await;
+
+    let (saved_meta, saved, count) = host.load_thread("t1").await.unwrap();
+    assert_eq!(saved_meta.title, "hello");
+    assert_eq!(count as usize, saved.len());
+    // The thread reads back as it showed (chunks are merged, within each write).
+    let fold = |events: &[SessionEvent]| {
+        let mut state = SessionState::new("t1");
+        events.iter().for_each(|e| state.apply(e));
+        state.items
+    };
+    let mut shown = live.clone();
+    shown.push(SessionEvent::NewSession);
+    assert_eq!(fold(&saved), fold(&shown));
+    assert!(saved.len() < shown.len(), "chunks merged");
+    assert!(matches!(saved.first(), Some(SessionEvent::UserMessage { .. })));
+
+    // A later summary replaces the first; events aren't written twice.
+    host.save_thread_meta(ThreadMeta { title: "renamed".into(), updated_ms: 1, ..meta("t1", session.id(), root.path()) });
+    host.flush_saves(Duration::from_secs(5)).await;
+    let (saved_meta, again, _) = host.load_thread("t1").await.unwrap();
+    assert_eq!((saved_meta.title.as_str(), again.len()), ("renamed", saved.len()));
+
+    // A thread deleted while saving stops being saved.
+    host.delete_thread("t1").await.unwrap();
+    assert!(!host.is_saving("t1"));
+}

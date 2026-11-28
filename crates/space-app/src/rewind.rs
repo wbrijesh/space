@@ -573,13 +573,11 @@ impl SpaceApp {
 
     /// Apply and save an event Space makes itself.
     fn emit_local(&mut self, key: u64, event: SessionEvent, cx: &mut Context<Self>) {
-        let saving = self.saving_threads();
         let Some(thread) = self.thread_mut(key) else { return };
         thread.apply(&event);
-        if saving {
-            crate::persist::record(&mut thread.unsaved, &event);
-            self.save_thread(key, cx);
-        }
+        let id = thread.id.clone();
+        self.host.record_event(&id, &event);
+        self.save_thread(key, cx);
     }
 
     /// A turn ended: what its edits wrote, as it is now (to tell your later changes from Claude's).
