@@ -37,6 +37,9 @@ cask clears macOS's download mark so it opens normally.
   sending a message in it. Done threads are grouped by when they were done (Today, Yesterday, Previous 7 Days,
   Previous 30 Days, then by month and year), and deleted after 30 days (Settings ▸ Threads: 7, 30 or 90 days, or never).
   To delete one sooner, for good, right-click its row ▸ Delete Thread…, or press ⌘⌫ while reading it; Space asks first.
+- **Drafts.** What you leave unsent in a thread's composer (text, pictures, pasted text, files, a
+  quote) stays with that thread, through restarts and while it's done, until you send it. A new
+  thread with only a draft isn't listed, but if it's the one shown when Space quits, Space opens on it.
 - **Titles** come from the agent's model after your first message. A name you give (⌘R) stays.
 - **The sidebar** lists pinned threads first, then the rest, each newest first (by when it was
   made: writing in one doesn't move it, so ⌘1–9 keep their rows), the rest under the same date

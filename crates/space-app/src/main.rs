@@ -29,6 +29,7 @@ mod native_edit;
 mod dev;
 #[cfg(feature = "dev")]
 mod devscript;
+mod drafts;
 mod notify;
 mod persist;
 mod queue;

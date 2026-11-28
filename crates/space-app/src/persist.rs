@@ -159,6 +159,8 @@ impl SpaceApp {
                 }
             };
             let _ = this.update(cx, |this, cx| {
+                // Drafts of threads that are gone go too.
+                this.drafts.keep_only(&saved.iter().map(|m| m.id.as_str()).collect());
                 if std::mem::take(&mut this.last_folder) {
                     this.use_last_folder(&saved, cx);
                 }
@@ -191,7 +193,7 @@ impl SpaceApp {
             return;
         };
         let home = std::mem::replace(&mut self.project_dir, dir.clone());
-        let fresh: Vec<u64> = self.threads.iter().filter(|t| t.is_empty() && t.draft.is_empty() && t.cwd == home).map(|t| t.key).collect();
+        let fresh: Vec<u64> = self.threads.iter().filter(|t| t.is_empty() && !t.has_draft() && t.cwd == home).map(|t| t.key).collect();
         for key in fresh {
             self.move_empty_thread(key, dir.clone(), cx);
         }
@@ -330,6 +332,8 @@ impl SpaceApp {
         self.put_away_side_chats(key, &id, cx);
         let ix = self.threads.iter().position(|t| t.key == key)?;
         let thread = self.threads.remove(ix);
+        // Its draft waits for it to be opened again (while it's still the shown one, if it is).
+        self.keep_draft(&thread, cx);
         self.close_thread_terminals(key, cx);
         if let Some(session) = &thread.session {
             if session.is_running() {
@@ -493,6 +497,9 @@ impl SpaceApp {
         thread.renamed = meta.renamed;
         thread.pinned_ms = meta.pinned_ms;
         thread.unloaded = true;
+        if let Some(draft) = self.drafts.take(&meta.id) {
+            crate::drafts::restore(&mut thread, draft, &mut self.next_image_id);
+        }
         thread.meta = Some(meta);
         thread
     }
@@ -524,6 +531,7 @@ pub(crate) fn expired(meta: &ThreadMeta, cutoff: u64) -> bool {
 impl SpaceApp {
     /// Delete what was saved of thread `id`, and of its side chat.
     pub(crate) fn remove_saved(&mut self, id: String, cx: &mut Context<Self>) {
+        self.drafts.forget(&id);
         for side in self.saved_sides.remove(&id).unwrap_or_default() {
             self.remove_saved(side.id, cx);
         }

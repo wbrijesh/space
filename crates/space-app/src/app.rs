@@ -534,6 +534,8 @@ pub struct SpaceApp {
     pub(crate) saved_sides: crate::side_chat::SavedSides,
     /// A side chat just deleted, for a moment, for Undo.
     pub(crate) deleted_side: Option<crate::side_chat::Deleted>,
+    /// Composer drafts kept across restarts (see `drafts`).
+    pub(crate) drafts: crate::drafts::Drafts,
 }
 
 impl SpaceApp {
@@ -628,14 +630,17 @@ impl SpaceApp {
         })
         .detach();
 
-        // Quitting: save what the threads haven't yet, then stop the plugins, each before what
-        // it requires.
-        let quit = cx.on_app_quit(|this, _| {
+        // Quitting: save what the threads haven't yet and the drafts, then stop the plugins,
+        // each before what it requires.
+        let quit = cx.on_app_quit(|this, cx| {
             this.save_all_now();
+            this.save_drafts(cx);
             this.host.shutdown();
             async {}
         });
 
+        // Drafts are kept beside the settings file.
+        let drafts = crate::drafts::Drafts::load(options.settings_path.as_ref().and_then(|p| Some(p.parent()?.join("drafts.json"))));
         // Back from System Settings (or anywhere): the notification permission may have changed.
         // Either way, re-render so the host knows whether you're watching a thread.
         let settings = SettingsStore::load(options.settings_path);
@@ -791,13 +796,18 @@ impl SpaceApp {
             side_chats: HashMap::new(),
             saved_sides: Default::default(),
             deleted_side: None,
+            drafts,
         };
         this.watch_agent_idle(cx);
         this.watch_midnight(cx);
         this.refresh_open_in(cx);
         #[cfg(feature = "dev")]
         crate::reload::start(cx);
+        let just_a_new_thread = options.seed.is_empty();
         this.seed_threads(options.seed, options.select, window, cx);
+        if just_a_new_thread {
+            this.open_new_draft(window, cx);
+        }
         this.start_services(cx);
         this.load_saved_threads(cx);
         this.ensure_agent(cx);
@@ -994,7 +1004,7 @@ impl SpaceApp {
             // A new thread left untouched (nothing typed, attached or open in a terminal) goes:
             // it isn't listed, so nothing would lead back to it.
             if let Some(prev) = left
-                && self.thread(prev).is_some_and(|t| t.is_empty() && t.draft.trim().is_empty() && t.attachments.is_empty() && t.images.is_empty() && t.pastes.is_empty() && t.quote.is_none())
+                && self.thread(prev).is_some_and(|t| t.is_empty() && !t.has_draft())
                 && !self.has_terminals(prev)
             {
                 self.drop_thread(prev, cx);
@@ -1005,6 +1015,7 @@ impl SpaceApp {
             {
                 self.drop_thread(prev, cx);
             }
+            self.save_drafts(cx);
         }
         if let Some(t) = self.thread_mut(key) {
             t.unread = 0;
@@ -1092,9 +1103,10 @@ impl SpaceApp {
         let fresh = Thread::new(key, dir);
         let thread = self.thread_mut(key).expect("thread exists");
         let draft = std::mem::take(&mut thread.draft);
+        let (attachments, images, pastes, quote) = (std::mem::take(&mut thread.attachments), std::mem::take(&mut thread.images), std::mem::take(&mut thread.pastes), thread.quote.take());
         let (mode, confirmed) = (thread.mode.take(), std::mem::take(&mut thread.confirmed));
         *thread = fresh;
-        thread.draft = draft;
+        (thread.draft, thread.attachments, thread.images, thread.pastes, thread.quote) = (draft, attachments, images, pastes, quote);
         thread.mode = mode;
         thread.confirmed = confirmed;
         self.create_session(key, cx);
@@ -1432,6 +1444,8 @@ impl Render for SpaceApp {
         // thread you're watching (Settings and other apps: none).
         let watching = self.current().and_then(|t| t.session.as_ref()).map(|s| s.id().to_string());
         self.host.set_watching(watching.filter(|_| !self.show_settings && window.is_window_active()));
+        // And where a changed draft is noticed, to be written.
+        self.save_drafts_soon(cx);
         crate::view::render_root(self, window, cx)
     }
 }

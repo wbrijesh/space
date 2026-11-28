@@ -117,6 +117,14 @@ pub fn save(p: &Prepared, dir: &Path) -> std::io::Result<ImageRef> {
     Ok(ImageRef { path, mime: p.mime.to_string(), width: p.width, height: p.height, name: p.name.clone() })
 }
 
+/// An image kept by [`save`], read back as it was prepared (`None` if it's gone or unreadable).
+pub fn load_saved(r: &ImageRef) -> Option<Prepared> {
+    let bytes: Arc<[u8]> = fs::read(&r.path).map_err(|e| tracing::warn!("{}: {e}", r.path.display())).ok()?.into();
+    let sha256 = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let mime = if r.mime == "image/png" { "image/png" } else { "image/jpeg" };
+    Some(Prepared { bytes, mime, width: r.width, height: r.height, sha256, name: r.name.clone() })
+}
+
 /// Write `bytes` as `dir/name` unless that file is there already (attachments are named by the
 /// sha256 of their bytes): a temp file in `dir`, synced, then renamed; owner-only.
 pub fn write_once(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {

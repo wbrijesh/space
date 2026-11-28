@@ -210,6 +210,11 @@ impl Thread {
         self.state.items.is_empty() && self.queued.is_none() && self.meta.is_none()
     }
 
+    /// Something is in its composer (its text as last left; the shown thread's is the input's).
+    pub fn has_draft(&self) -> bool {
+        !self.draft.trim().is_empty() || !self.attachments.is_empty() || !self.images.is_empty() || !self.pastes.is_empty() || self.quote.is_some()
+    }
+
     pub fn title(&self) -> String {
         self.name
             .clone()
@@ -647,6 +652,8 @@ impl SpaceApp {
         // Another message: the last rewind stays.
         self.forget_undo(key);
         self.dispatch(key, when, running, message, cx);
+        // Sent (or queued): its draft is gone.
+        self.save_drafts(cx);
     }
 
     /// Continue after a failed turn (its error card's button): "Continue" goes out as a message,
