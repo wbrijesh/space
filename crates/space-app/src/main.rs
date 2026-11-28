@@ -18,7 +18,6 @@
 
 mod app;
 mod attach;
-mod build_info;
 mod check;
 mod find;
 mod fit;
@@ -112,7 +111,7 @@ fn parse_args() -> Result<Args> {
             "--gallery" => gallery = true,
             "--check-plugins" => check_plugins = true,
             "-V" | "--version" => {
-                println!("Space {}", build_info::get().version);
+                println!("Space {}", space_core::build_info::current().version);
                 std::process::exit(0);
             }
             "--scenario" => scenario = Some(args.next().context("--scenario needs a name (or `list`)")?),

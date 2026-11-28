@@ -1,7 +1,10 @@
 #!/usr/bin/env sh
-# Describe a local build, as `build.txt` beside its executable (read by the app's About and by
-# `scripts/dev-apps.sh status`):
-#   version=0.1.6 +2 · a95ab81 · edited   the last release, commits since it, the commit, edits
+# Describe a development build, as `build.txt` beside its executable (read by
+# space_core::build_info, the app's About, and `scripts/dev-apps.sh status`). A release has none:
+# it knows it's a release from its build (`just release` sets SPACE_RELEASE=1).
+#   commit=<full commit>                   what it was built from (its version is the first 7)
+#   checkout=<repo root>                   where, to follow that checkout for new commits
+#   edited=true|false                      whether the checkout had uncommitted edits
 #   built=24 Nov 2026, 00:41               when
 #   source=<commit>-<hash of the edits>    exactly what was built, to tell whether it's current
 #   binary=<mtime of the executable>       which build of the binary this describes
@@ -18,18 +21,11 @@ source_id() {
 if [ "${1:-}" = "--source" ]; then source_id; exit 0; fi
 
 exe="$1"
-cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
-desc="$(git describe --tags --match 'v[0-9]*' --abbrev=7 --dirty=-edited 2>/dev/null || true)"
-edited=""
-case "$desc" in *-edited) edited=" · edited"; desc="${desc%-edited}" ;; esac
-case "$desc" in
-    "") version="$cargo_version · $(git rev-parse --short=7 HEAD)$edited" ;;
-    *-*-g*)
-        sha="${desc##*-g}"; rest="${desc%-g*}"; n="${rest##*-}"; tag="${rest%-*}"
-        version="${tag#v} +$n · $sha$edited" ;;
-    *) version="${desc#v}$edited" ;;
-esac
-echo "version=$version"
+edited=false
+[ -n "$(git status --porcelain)" ] && edited=true
+echo "commit=$(git rev-parse HEAD)"
+echo "checkout=$root"
+echo "edited=$edited"
 echo "built=$(date '+%-d %b %Y, %H:%M')"
 echo "source=$(source_id)"
 echo "binary=$(stat -f %m "$exe")"

@@ -225,9 +225,9 @@ pub struct SettingsPage {
     keep_done: Option<Option<u32>>,
     /// What a two-finger swipe shows and hides (an index of [`SWIPE_CHOICES`]).
     swipe: usize,
-    /// About: "0.1.6", or a local build's "0.1.6 +2 · a95ab81 · edited".
+    /// About: a release's "0.1.8", or a development build's short commit "a1b2c3d".
     version: SharedString,
-    /// About: when a local build was made.
+    /// About: when a development build was made, and whether from edits ("24 Nov 2026, 00:41 · edited").
     built: Option<SharedString>,
     /// The page shown (the sidebar lists them).
     tab: SettingsTab,
@@ -324,7 +324,7 @@ impl SettingsPage {
         self
     }
 
-    /// The build, for About: its version line, and when a local build was made.
+    /// The build, for About: its version, and when a development build was made.
     pub fn build(mut self, version: impl Into<SharedString>, built: Option<String>) -> Self {
         self.version = version.into();
         self.built = built.map(Into::into);
@@ -964,7 +964,7 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                 }),
                 page("developer", |_, _| SettingsPage::new(ready()).tab(SettingsTab::Developer).fields(bundled())),
                 page("about", |_, _| {
-                    SettingsPage::new(ready()).tab(SettingsTab::About).build("0.1.6 +2 · a95ab81 · edited", Some("Today at 14:02".into()))
+                    SettingsPage::new(ready()).tab(SettingsTab::About).build("a95ab81", Some("24 Nov 2026, 14:02 · edited".into()))
                 }),
             ]),
         ComponentPreview::new(Area::Settings, "Typed plugin setting", "A value the plugin checks before it's saved; secrets are masked.")

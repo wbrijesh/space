@@ -11,6 +11,7 @@
 //! # Ok(()) }
 //! ```
 
+pub mod build_info;
 mod convert;
 pub mod discovery;
 pub mod grants;

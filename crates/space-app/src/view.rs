@@ -1106,7 +1106,7 @@ fn settings(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<SpaceApp>)
         .modes(app.permission_modes.clone(), s.new_threads.permission_mode.clone())
         .fields(fields)
         .plugins(plugin_rows)
-        .build(crate::build_info::get().version.clone(), crate::build_info::get().built.clone())
+        .build(space_core::build_info::current().version.clone(), space_core::build_info::current().detail())
         .tab(app.current_settings_tab())
         .handlers(handlers);
     div()

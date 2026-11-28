@@ -119,7 +119,9 @@ status() {
             printf '%11s%s\n' "" "started outside dev-apps: build unknown   → just apps-update"
             continue
         fi
-        printf '%11s%s · built %s\n' "" "$(field "$info" version)" "$(field "$info" built)"
+        local edited=""
+        [ "$(field "$info" edited)" = true ] && edited=" · edited"
+        printf '%11s%s%s · built %s\n' "" "$(field "$info" commit | cut -c1-7)" "$edited" "$(field "$info" built)"
         if [ "$(field "$info" binary)" != "$built_binary" ]; then
             printf '%11s%s\n' "" "✗ stale: a newer build exists   → just apps-update"
         elif [ "$(field "$info" source)" != "$now_source" ]; then

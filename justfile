@@ -67,10 +67,12 @@ size-check:
     if [ "${kb:-0}" -gt 41943040 ]; then echo "warning: target/ is $((kb / 1048576)) GB; run \`just clean\`" >&2; fi
 
 # Without dev tooling (no gallery, scenarios, clock controls or scripts); plugins inside the
-# app, ad-hoc signed, zipped for the cask. For shipping and judging real performance, not daily use
+# app, ad-hoc signed, zipped for the cask. For shipping and judging real performance, not daily use.
+# The only release build: SPACE_RELEASE=1 makes it one (space_core::build_info), versioned by
+# Cargo.toml; every other build is a development build, versioned by its commit
 # Release build: target/release/Space.app and Space-<version>-arm64.zip
 release:
-    cargo build --release --workspace --no-default-features
+    SPACE_RELEASE=1 cargo build --release --workspace --no-default-features
     bun install
     mkdir -p target/release
     cd target && bun build --compile --minify ../plugins/space-ts.ts --outfile release/space-ts
