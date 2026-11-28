@@ -109,4 +109,5 @@ async fn a_turn_outlives_its_app_and_the_next_app_follows_it() {
 
     // And B can go on in it.
     assert_eq!(session.prompt("hello").await.unwrap(), "end_turn");
+    server.host().shutdown();
 }

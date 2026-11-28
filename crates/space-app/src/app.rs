@@ -651,6 +651,11 @@ impl SpaceApp {
                         break;
                     }
                 }
+                // Quit Server stops everything, this app too.
+                if this.update(cx, |this, _| this.host.server_quitting()).unwrap_or(false) {
+                    cx.update(|cx| cx.quit());
+                    return;
+                }
                 tracing::info!("the server went away; waiting for it to come back");
                 let _ = this.update(cx, |this, cx| {
                     this.banner = Some("Reconnecting to the Space server…".into());

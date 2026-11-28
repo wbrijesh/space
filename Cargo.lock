@@ -6697,9 +6697,13 @@ name = "space-server"
 version = "0.1.6"
 dependencies = [
  "anyhow",
+ "block2 0.6.2",
  "dirs 6.0.0",
  "futures",
  "libc",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "serde",
  "serde_json",
  "space-core",

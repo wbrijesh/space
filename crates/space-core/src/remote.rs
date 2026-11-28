@@ -28,6 +28,8 @@ pub const EVENT: &str = "event";
 pub const STATE: &str = "state";
 /// Notification: [`TerminalData`].
 pub const TERMINAL_DATA: &str = "terminal.data";
+/// Notification: the server is quitting (Quit Server): the app quits too.
+pub const QUITTING: &str = "server.quitting";
 
 /// What the app reads without asking: a copy kept current by [`STATE`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

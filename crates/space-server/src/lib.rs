@@ -22,6 +22,8 @@ use space_plugin::rpc::{self, Peer, RpcError};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 pub mod keeper_host;
+#[cfg(target_os = "macos")]
+pub mod menubar;
 
 /// How long a quitting server waits for its last writes.
 pub const FLUSH_TIMEOUT: Duration = Duration::from_secs(3);
@@ -287,6 +289,23 @@ impl Server {
         }
     }
 
+    /// Quit Server: tell the apps, finish writing, then stop the keeper and everything with it.
+    pub async fn quit(&self) {
+        for conn in self.conns() {
+            conn.notify(remote::QUITTING, ());
+        }
+        self.host.flush_saves(FLUSH_TIMEOUT).await;
+        match &self.on_quit {
+            Some(quit) => quit(),
+            None => self.host.shutdown(),
+        }
+    }
+
+    /// How many sessions have a turn running.
+    pub fn working(&self) -> usize {
+        self.live_sessions().iter().filter(|s| s.running).count()
+    }
+
     /// What an app reads without asking.
     pub fn state(&self) -> HostState {
         let host = &self.host;
@@ -519,11 +538,7 @@ impl Server {
                 ok(welcome)
             }
             "server.quit" => {
-                host.flush_saves(FLUSH_TIMEOUT).await;
-                match &self.on_quit {
-                    Some(quit) => quit(),
-                    None => host.shutdown(),
-                }
+                self.quit().await;
                 ok(())
             }
             "host.start_services" => {

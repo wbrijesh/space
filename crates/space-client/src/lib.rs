@@ -52,6 +52,8 @@ struct Inner {
     alive: Mutex<HashSet<String>>,
     /// The app is quitting: sessions dropped now aren't released (the server keeps them).
     closing: AtomicBool,
+    /// The server said it's quitting (Quit Server).
+    server_quitting: AtomicBool,
     connected: watch::Sender<bool>,
     /// The shared server's socket.
     socket: Mutex<Option<PathBuf>>,
@@ -87,6 +89,7 @@ impl Host {
             running: Mutex::new(welcome.sessions.iter().filter(|s| s.running).map(|s| s.session_id.clone()).collect()),
             alive: Mutex::new(welcome.agents.iter().map(|a| a.plugin_id.clone()).collect()),
             closing: AtomicBool::new(false),
+            server_quitting: AtomicBool::new(false),
             welcome,
             connected,
             socket: Mutex::new(None),
@@ -123,6 +126,11 @@ impl Host {
     /// Whether the connection ended.
     pub fn is_disconnected(&self) -> bool {
         !*self.inner.connected.borrow()
+    }
+
+    /// Whether the server said it's quitting (Quit Server): the app quits too.
+    pub fn server_quitting(&self) -> bool {
+        self.inner.server_quitting.load(Ordering::SeqCst)
     }
 
     /// Whether a shared server answers again (after this connection ended).
@@ -415,6 +423,7 @@ impl Inner {
                 }
                 let _ = events.send(event);
             }
+            remote::QUITTING => self.server_quitting.store(true, Ordering::SeqCst),
             remote::STATE => match serde_json::from_value::<HostState>(params) {
                 Ok(state) => *self.state.lock().unwrap() = state,
                 Err(e) => tracing::warn!("unreadable state from the server: {e}"),
