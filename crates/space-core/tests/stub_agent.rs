@@ -31,6 +31,7 @@ fn host(root: &Path) -> (Host, EventReceiver) {
         secrets: space_core::Secrets::new("dev.brijesh.space.test"),
         held_recheck: space_core::HELD_RECHECK,
         space_dir: None,
+        keeper: None,
     };
     Host::new(tokio::runtime::Handle::current(), options)
 }

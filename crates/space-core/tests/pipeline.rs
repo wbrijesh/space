@@ -56,6 +56,7 @@ fn host_rechecking(root: &Path, recheck: Duration) -> (Host, EventReceiver) {
         secrets: Secrets::new(TEST_KEYCHAIN),
         held_recheck: recheck,
         space_dir: None,
+        keeper: None,
     };
     Host::new(tokio::runtime::Handle::current(), options)
 }

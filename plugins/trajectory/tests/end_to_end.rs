@@ -37,6 +37,7 @@ fn setup() -> (tempfile::TempDir, Host, space_core::EventReceiver) {
         secrets: Secrets::new("dev.brijesh.space.test.trajectory"),
         held_recheck: Duration::from_secs(60),
         space_dir: Some(tmp.path().join("space")),
+        keeper: None,
     };
     let (host, events) = Host::new(tokio::runtime::Handle::current(), options);
     (tmp, host, events)

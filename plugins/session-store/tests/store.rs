@@ -42,6 +42,7 @@ fn host(root: &Path) -> (Host, EventReceiver) {
         secrets: Secrets::new("dev.brijesh.space.test.session-store"),
         held_recheck: Duration::from_secs(60),
         space_dir: Some(root.join("space")),
+        keeper: None,
     };
     Host::new(tokio::runtime::Handle::current(), options)
 }

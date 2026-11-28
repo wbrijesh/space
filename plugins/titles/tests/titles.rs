@@ -40,6 +40,7 @@ fn host(root: &Path) -> Host {
         secrets: Secrets::new("dev.brijesh.space.test.titles"),
         held_recheck: Duration::from_secs(60),
         space_dir: None,
+        keeper: None,
     };
     Host::new(tokio::runtime::Handle::current(), options).0
 }

@@ -633,6 +633,7 @@ pub fn prepare(scenario: &Scenario, project_dir: &Path) -> Result<(HostOptions, 
         held_recheck: space_core::HELD_RECHECK,
         // The store's threads: never `~/.space`.
         space_dir: scenario.store.then(|| std::env::temp_dir().join(format!("space-scenario-store-{}", scenario.name))),
+        keeper: None,
     };
     if let Some(dir) = host.space_dir.as_ref().filter(|_| !scenario.saved.is_empty()) {
         write_saved(&dir.join("threads"), &scenario.saved, project_dir)?;

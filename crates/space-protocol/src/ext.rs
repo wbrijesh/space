@@ -317,6 +317,22 @@ pub struct Steered {
     pub id: String,
 }
 
+/// `_keeper/orphanReply` (keeper → client notification): the agent answered a request an earlier
+/// host sent (the `session/prompt` of a turn that ran across a host restart); the keeper hands
+/// the answer on as this, since the request's id means nothing to this host.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcNotification)]
+#[notification(method = "_keeper/orphanReply")]
+#[serde(rename_all = "camelCase")]
+pub struct KeeperOrphanReply {
+    pub method: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<serde_json::Value>,
+}
+
 /// `_space/retry` (agent → client notification): a model request waits out a bad network
 /// (`state`; absent: nothing waits any more), or a request that failed after part of its reply
 /// streamed is sent again, so that part leaves the transcript (`discard`).

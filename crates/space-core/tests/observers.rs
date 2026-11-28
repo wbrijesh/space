@@ -41,6 +41,7 @@ fn host(root: &Path) -> (Host, EventReceiver) {
         secrets: Secrets::new(TEST_KEYCHAIN),
         held_recheck: Duration::from_secs(60),
         space_dir: None,
+        keeper: None,
     };
     Host::new(tokio::runtime::Handle::current(), options)
 }

@@ -157,6 +157,9 @@ pub struct HostOptions {
     /// (`plugin-grants.json`), and plugins are told it (the session store keeps threads in
     /// it). `None`: nothing is kept on disk.
     pub space_dir: Option<PathBuf>,
+    /// Start agents under this keeper, so they outlive the host ([`space_keeper`]); `None`:
+    /// agents are this process's children and end with it.
+    pub keeper: Option<space_keeper::KeeperClient>,
 }
 
 /// Plugin approvals, in [`HostOptions::space_dir`].
@@ -175,6 +178,7 @@ impl HostOptions {
             secrets: Secrets::default(),
             held_recheck: HELD_RECHECK,
             space_dir: None,
+            keeper: None,
         }
     }
 }

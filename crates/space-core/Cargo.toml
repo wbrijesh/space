@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 space-protocol.workspace = true
 space-plugin.workspace = true
+space-keeper.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 serde.workspace = true

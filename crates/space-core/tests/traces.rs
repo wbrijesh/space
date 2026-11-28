@@ -45,6 +45,7 @@ fn host(bundled: &Path, user: &Path, space_dir: &Path) -> (Host, EventReceiver) 
         secrets: Secrets::new(TEST_KEYCHAIN),
         held_recheck: Duration::from_secs(60),
         space_dir: Some(space_dir.to_path_buf()),
+        keeper: None,
     };
     Host::new(tokio::runtime::Handle::current(), options)
 }

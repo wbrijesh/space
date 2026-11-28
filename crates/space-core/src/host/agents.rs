@@ -15,8 +15,9 @@ use space_protocol::ext::{
 };
 use space_protocol::service::HistoryItem;
 use space_protocol::trace::{ContextFact, TraceBatch, TraceEvent};
+use space_keeper::{AgentEvent, AgentPipe, KeeperClient, SpawnSpec};
 use space_protocol::{
-    Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, ForkOf, PROTOCOL_VERSION, PreExecute, RewindResult, RewindSession, SpaceStatus,
+    Complete, CompleteResult, Confine, ConfineResult, ConfigureSession, ForkOf, KeeperOrphanReply, PROTOCOL_VERSION, PreExecute, RewindResult, RewindSession, SpaceStatus,
     SteerImage, SteerSession, SteerText, Retry, Steered, UnsteerSession,
 };
 use tokio::sync::oneshot;
@@ -26,7 +27,7 @@ use super::pipeline::{SessionMeta, pre_execute};
 use super::{Host, HostEvent, HostInner, PluginStatus, Refused, check_protocol, exit_status, start_failure};
 use crate::{convert, now_ms};
 use crate::discovery::DiscoveredPlugin;
-use crate::process::{self, PluginProcess};
+use crate::process::{self, ExitKind, LogBuffer, PluginProcess};
 use crate::session::{TextRef, UserInput, PermissionDecision, PermissionOption, PermissionRequest, SessionEvent, SessionId, ToolCallPatch};
 
 type Conn = acp::v1::ConnectionTo<Agent>;
@@ -63,6 +64,9 @@ pub(super) struct Shared {
     dead: AtomicBool,
     /// Messages sent to steer a running turn, by session, until the agent delivers them.
     steers: Mutex<HashMap<SessionId, Vec<PendingSteer>>>,
+    /// Turns an earlier host started that are still running (an adopted agent's): their end
+    /// arrives as a [`KeeperOrphanReply`].
+    orphan_turns: Mutex<HashSet<SessionId>>,
 }
 
 /// A steering message the agent hasn't handed to the model yet.
@@ -77,6 +81,21 @@ struct PendingPermission {
 }
 
 impl Shared {
+    /// The agent answered a request an earlier host sent: a turn that ran across the restart
+    /// ends here.
+    fn on_orphan_reply(&self, reply: KeeperOrphanReply) {
+        let (Some(id), "session/prompt") = (reply.session_id, reply.method.as_str()) else {
+            tracing::debug!("`{}` answered {} from an earlier host", self.plugin_id, reply.method);
+            return;
+        };
+        self.orphan_turns.lock().unwrap().remove(&id);
+        let response = match (reply.result, reply.error) {
+            (Some(result), _) => serde_json::from_value::<schema::PromptResponse>(result).map_err(|e| anyhow!("unreadable turn end: {e}")),
+            (None, error) => Err(anyhow!("session/prompt failed: {}", error.map(|e| e.to_string()).unwrap_or_default())),
+        };
+        turn_ended(&self.host, &id, response.as_ref().map_err(|e| anyhow!("{e:#}")));
+    }
+
     /// The agent handed a steering message to the model: it joins the transcript here.
     fn on_steered(&self, steered: Steered) {
         let pending = {
@@ -180,9 +199,21 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
         loading: Mutex::new(HashSet::new()),
         dead: AtomicBool::new(false),
         steers: Mutex::new(HashMap::new()),
+        orphan_turns: Mutex::new(HashSet::new()),
     });
 
     let launch = host.launch(&plugin_id);
+    if let Some(keeper) = host.options.keeper.clone() {
+        let spec = process::resolve(&plugin, &host.options.project_dir)?;
+        let name = format!("{plugin_id}#{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let env = spec.env.into_iter().map(|(k, v)| (k, v.to_string_lossy().into_owned())).collect();
+        let pipe = keeper
+            .spawn(&name, SpawnSpec { program: spec.program.clone(), args: spec.args.clone(), cwd: spec.cwd, env })
+            .await
+            .with_context(|| format!("failed to start plugin `{plugin_id}`: {} {}", spec.program.display(), spec.args.join(" ")))?;
+        let (process, reader, writer) = kept(&shared, keeper, pipe, launch);
+        return connect(host, shared, plugin_id, process, reader, writer).await;
+    }
     let spawned = {
         let log_host = host.clone();
         let log_id = plugin_id.clone();
@@ -199,14 +230,150 @@ async fn start_agent(host: Arc<HostInner>, plugin: DiscoveredPlugin) -> Result<A
             },
         )?
     };
-    let process = spawned.process;
+    let process = AgentProcess::Local(spawned.process);
+    connect(host, shared, plugin_id, process, Box::new(spawned.stdout), Box::new(spawned.stdin)).await
+}
 
+type Reader = Box<dyn tokio::io::AsyncRead + Unpin + Send>;
+type Writer = Box<dyn tokio::io::AsyncWrite + Unpin + Send>;
+
+/// An agent held by the keeper: its pipe as the connection's reader and writer, and its
+/// stderr and exit reported as a child's are.
+fn kept(shared: &Arc<Shared>, keeper: KeeperClient, pipe: AgentPipe, launch: u64) -> (AgentProcess, Reader, Writer) {
+    let AgentPipe { name, io, mut events, info, .. } = pipe;
+    let logs = LogBuffer::new(2000);
+    for line in info.iter().flat_map(|i| &i.stderr) {
+        logs.push(line.clone());
+    }
+    let killed = Arc::new(AtomicBool::new(false));
+    {
+        let (shared, keeper, name, logs, killed) = (shared.clone(), keeper.clone(), name.clone(), logs.clone(), killed.clone());
+        tokio::spawn(async move {
+            while let Some(event) = events.recv().await {
+                let status = match event {
+                    AgentEvent::Stderr(line) => {
+                        logs.push(line.clone());
+                        shared.host.emit(HostEvent::PluginLog { plugin_id: shared.plugin_id.clone(), line });
+                        continue;
+                    }
+                    AgentEvent::Exited(code) => {
+                        // Forget it: it has ended.
+                        keeper.kill(&name);
+                        let kind = if killed.load(Ordering::SeqCst) { ExitKind::Killed } else { ExitKind::Exited(code) };
+                        exit_status(kind, &logs.tail(20))
+                    }
+                    AgentEvent::Lost if killed.load(Ordering::SeqCst) => PluginStatus::Stopped,
+                    AgentEvent::Lost => PluginStatus::Crashed("the keeper holding it went away".into()),
+                };
+                shared.dead.store(true, Ordering::SeqCst);
+                if shared.host.is_current(&shared.plugin_id, launch) {
+                    shared.host.emit_exit(&shared.plugin_id, status);
+                }
+                break;
+            }
+        });
+    }
+    let (reader, writer) = tokio::io::split(io);
+    (AgentProcess::Kept { keeper, name, logs, killed }, Box::new(reader), Box::new(writer))
+}
+
+impl Host {
+    /// Take over an agent the keeper held for an earlier host (a [`space_keeper::KeeperClient::connect`]
+    /// pipe). Its turns still running end as they would have; continue its sessions with
+    /// [`AgentHandle::adopt_session`].
+    pub async fn adopt_agent(&self, pipe: AgentPipe) -> Result<AgentHandle> {
+        let keeper = self.inner.options.keeper.clone().context("this host has no keeper")?;
+        let plugin_id = pipe.name.split('#').next().unwrap_or_default().to_string();
+        let info = pipe.info.clone().unwrap_or_else(|| space_keeper::AgentInfo { agent: pipe.name.clone(), pid: pipe.pid, exited: None, open: Vec::new(), stderr: Vec::new() });
+        if info.exited.is_some() || self.plugin(&plugin_id).is_none() {
+            keeper.kill(&pipe.name);
+            bail!("`{}` can't be taken over", pipe.name);
+        }
+        let host = self.inner.clone();
+        let shared = Arc::new(Shared {
+            host: host.clone(),
+            plugin_id: plugin_id.clone(),
+            next_permission: AtomicU64::new(1),
+            permissions: Mutex::new(HashMap::new()),
+            loading: Mutex::new(HashSet::new()),
+            dead: AtomicBool::new(false),
+            steers: Mutex::new(HashMap::new()),
+            orphan_turns: Mutex::new(info.open.iter().filter(|r| r.method == "session/prompt").filter_map(|r| r.session_id.clone()).collect()),
+        });
+        let launch = host.launch(&plugin_id);
+        let rt = host.rt.clone();
+        let result = rt
+            .spawn(async move {
+                let (process, reader, writer) = kept(&shared, keeper, pipe, launch);
+                connect(host, shared, plugin_id, process, reader, writer).await
+            })
+            .await
+            .map_err(|e| anyhow!("adopt task failed: {e}"))
+            .and_then(|r| r);
+        match &result {
+            Ok(agent) => self.inner.emit_status(agent.plugin_id(), PluginStatus::Running),
+            Err(e) => tracing::warn!("taking over an agent: {e:#}"),
+        }
+        result
+    }
+}
+
+/// How an agent process is held.
+pub(super) enum AgentProcess {
+    /// This process's child.
+    Local(PluginProcess),
+    /// The keeper's: it outlives this host unless stopped.
+    Kept { keeper: KeeperClient, name: String, logs: LogBuffer, killed: Arc<AtomicBool> },
+}
+
+impl AgentProcess {
+    fn kill(&self) {
+        match self {
+            AgentProcess::Local(p) => p.kill(),
+            AgentProcess::Kept { keeper, name, killed, .. } => {
+                killed.store(true, Ordering::SeqCst);
+                keeper.kill(name);
+            }
+        }
+    }
+
+    fn logs(&self) -> &LogBuffer {
+        match self {
+            AgentProcess::Local(p) => &p.logs,
+            AgentProcess::Kept { logs, .. } => logs,
+        }
+    }
+}
+
+impl Drop for AgentProcess {
+    /// Dropping an agent stops it, as with a child. A host that crashes or exits drops nothing,
+    /// so the keeper's agents go on.
+    fn drop(&mut self) {
+        if let AgentProcess::Kept { .. } = self {
+            self.kill();
+        }
+    }
+}
+
+/// The ACP client connection over an agent's pipes, and its `initialize` (an adopted agent's
+/// keeper answers that from what the agent said the first time).
+async fn connect(host: Arc<HostInner>, shared: Arc<Shared>, plugin_id: String, process: AgentProcess, reader: Reader, writer: Writer) -> Result<AgentHandle> {
     // Run the ACP client connection on the runtime; hand its context back out.
     let (conn_tx, conn_rx) = oneshot::channel::<Conn>();
-    let transport = ByteStreams::new(spawned.stdin.compat_write(), spawned.stdout.compat());
+    let transport = ByteStreams::new(writer.compat_write(), reader.compat());
     let driver = Client
         .v1()
         .name("space")
+        .on_receive_notification(
+            {
+                let shared = shared.clone();
+                async move |reply: KeeperOrphanReply, _cx| {
+                    shared.on_orphan_reply(reply);
+                    Ok(())
+                }
+            },
+            acp::on_receive_notification!(),
+        )
         .on_receive_notification(
             {
                 let shared = shared.clone();
@@ -392,8 +559,8 @@ fn session_meta(side_of: Option<&str>, fork: Option<&ForkOf>) -> Option<schema::
     (!meta.is_empty()).then_some(meta)
 }
 
-fn acp_error(what: &str, e: acp::Error, process: &PluginProcess) -> anyhow::Error {
-    let tail = process.logs.tail(5).join("\n");
+fn acp_error(what: &str, e: acp::Error, process: &AgentProcess) -> anyhow::Error {
+    let tail = process.logs().tail(5).join("\n");
     if tail.is_empty() {
         anyhow!("{what} failed: {e}")
     } else {
@@ -410,7 +577,7 @@ pub struct AgentHandle {
 pub(super) struct AgentInner {
     plugin_id: String,
     conn: Conn,
-    process: PluginProcess,
+    process: AgentProcess,
     shared: Arc<Shared>,
     agent_name: Option<String>,
     /// The agent can load a session again (ACP `loadSession`).
@@ -441,7 +608,7 @@ impl AgentHandle {
 
     /// Recent stderr lines.
     pub fn logs(&self) -> Vec<String> {
-        self.inner.process.logs.snapshot()
+        self.inner.process.logs().snapshot()
     }
 
     /// Kill the plugin process.
@@ -570,6 +737,19 @@ impl AgentHandle {
     pub fn resolve_permission(&self, request_id: u64, decision: PermissionDecision) -> Result<()> {
         self.inner.shared.resolve_permission(request_id, decision)
     }
+
+    /// Go on with session `session_id`, which this agent (adopted with [`Host::adopt_agent`])
+    /// still has open: nothing is asked of the agent.
+    pub fn adopt_session(&self, session_id: &str, cwd: impl Into<PathBuf>, thread_id: Option<&str>) -> Session {
+        self.session(session_id.to_string(), cwd.into(), thread_id)
+    }
+
+    /// Sessions whose turn an earlier host started and that are still running.
+    pub fn running_turns(&self) -> Vec<SessionId> {
+        let mut ids: Vec<_> = self.inner.shared.orphan_turns.lock().unwrap().iter().cloned().collect();
+        ids.sort();
+        ids
+    }
 }
 
 /// An ACP session on an agent. Cheap to clone.
@@ -600,7 +780,7 @@ impl Session {
     }
 
     pub fn is_running(&self) -> bool {
-        self.inner.running.load(Ordering::SeqCst)
+        self.inner.running.load(Ordering::SeqCst) || self.inner.agent.inner.shared.orphan_turns.lock().unwrap().contains(&self.inner.id)
     }
 
     /// Set the session's permission mode (an entry id of the `permission-modes` catalog).
@@ -658,7 +838,7 @@ impl Session {
             })
             .collect::<Result<Vec<_>>>()?;
         let text_blocks = texts.iter().map(|t| text_block(t, self.inner.agent.accepts_embedded_text())).collect::<Result<Vec<_>>>()?;
-        if self.inner.running.swap(true, Ordering::SeqCst) {
+        if self.inner.agent.inner.shared.orphan_turns.lock().unwrap().contains(&self.inner.id) || self.inner.running.swap(true, Ordering::SeqCst) {
             bail!("a prompt is already running in this session");
         }
         let host = self.inner.agent.inner.shared.host.clone();
@@ -722,24 +902,8 @@ impl Session {
             .and_then(|r| r);
         self.inner.running.store(false, Ordering::SeqCst);
 
-        match result {
-            Ok(response) => {
-                let stop_reason = convert::wire_str(&response.stop_reason);
-                // What the turn used, if the agent says (`_meta["space/usage"]`).
-                let usage = response
-                    .meta
-                    .as_ref()
-                    .and_then(|m| m.get(USAGE_META_KEY))
-                    .and_then(|u| serde_json::from_value(u.clone()).map_err(|e| tracing::debug!("turn usage: {e}")).ok());
-                host.emit_session(&id, SessionEvent::TurnEnded { stop_reason: stop_reason.clone(), at_ms: Some(now_ms()), usage });
-                Ok(stop_reason)
-            }
-            Err(e) => {
-                host.emit_session(&id, SessionEvent::Error { message: format!("{e:#}") });
-                host.emit_session(&id, SessionEvent::TurnEnded { stop_reason: "error".into(), at_ms: Some(now_ms()), usage: None });
-                Err(e)
-            }
-        }
+        turn_ended(&host, &id, result.as_ref().map_err(|e| anyhow!("{e:#}")));
+        result.map(|response| convert::wire_str(&response.stop_reason))
     }
 
     /// `_space/session/steer`: a message for the running turn, delivered after its current step
@@ -879,4 +1043,24 @@ impl Session {
         Ok(status)
     }
 
+}
+
+/// A turn's `session/prompt` settled: say so in the session, with what it used.
+fn turn_ended(host: &HostInner, id: &str, result: Result<&schema::PromptResponse>) {
+    match result {
+        Ok(response) => {
+            let stop_reason = convert::wire_str(&response.stop_reason);
+            // What the turn used, if the agent says (`_meta["space/usage"]`).
+            let usage = response
+                .meta
+                .as_ref()
+                .and_then(|m| m.get(USAGE_META_KEY))
+                .and_then(|u| serde_json::from_value(u.clone()).map_err(|e| tracing::debug!("turn usage: {e}")).ok());
+            host.emit_session(id, SessionEvent::TurnEnded { stop_reason, at_ms: Some(now_ms()), usage });
+        }
+        Err(e) => {
+            host.emit_session(id, SessionEvent::Error { message: format!("{e:#}") });
+            host.emit_session(id, SessionEvent::TurnEnded { stop_reason: "error".into(), at_ms: Some(now_ms()), usage: None });
+        }
+    }
 }

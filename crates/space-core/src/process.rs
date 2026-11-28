@@ -93,25 +93,12 @@ pub fn spawn(
     on_log: impl Fn(String) + Send + 'static,
     on_exit: impl FnOnce(ExitKind, Vec<String>) + Send + 'static,
 ) -> Result<Spawned> {
-    let run = &plugin.manifest.run;
-    let program = resolve_program(&run.command, &plugin.dir)?;
-    let mut args = Vec::with_capacity(run.args.len());
-    for arg in &run.args {
-        args.push(resolve_arg(arg, &plugin.dir)?);
-    }
-    let cwd = match run.cwd {
-        RunCwd::Plugin => plugin.dir.clone(),
-        RunCwd::Project => project_dir.to_path_buf(),
-    };
-
+    let ProcessSpec { program, args, cwd, env } = resolve(plugin, project_dir)?;
     let mut cmd = Command::new(&program);
     cmd.args(&args)
         .current_dir(&cwd)
         .env_clear()
-        .envs(inherited_env(&plugin.manifest.env))
-        .envs(&run.env)
-        .env("SPACE_PLUGIN_DIR", &plugin.dir)
-        .env("SPACE_PROJECT_DIR", project_dir)
+        .envs(env)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -156,6 +143,34 @@ pub fn spawn(
     }
 
     Ok(Spawned { process: PluginProcess { pid, logs, kill_tx: Mutex::new(Some(kill_tx)) }, stdin, stdout })
+}
+
+/// How to start a plugin: its program, arguments, folder and whole environment.
+#[derive(Debug, Clone)]
+pub struct ProcessSpec {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub cwd: PathBuf,
+    pub env: Vec<(String, std::ffi::OsString)>,
+}
+
+/// Resolve `plugin`'s `[run]` table as [`spawn`] runs it.
+pub fn resolve(plugin: &DiscoveredPlugin, project_dir: &Path) -> Result<ProcessSpec> {
+    let run = &plugin.manifest.run;
+    let program = resolve_program(&run.command, &plugin.dir)?;
+    let mut args = Vec::with_capacity(run.args.len());
+    for arg in &run.args {
+        args.push(resolve_arg(arg, &plugin.dir)?);
+    }
+    let cwd = match run.cwd {
+        RunCwd::Plugin => plugin.dir.clone(),
+        RunCwd::Project => project_dir.to_path_buf(),
+    };
+    let mut env = inherited_env(&plugin.manifest.env);
+    env.extend(run.env.iter().map(|(k, v)| (k.clone(), v.into())));
+    env.push(("SPACE_PLUGIN_DIR".into(), plugin.dir.clone().into()));
+    env.push(("SPACE_PROJECT_DIR".into(), project_dir.to_path_buf().into()));
+    Ok(ProcessSpec { program, args, cwd, env })
 }
 
 /// What every plugin gets of Space's environment; more only by name in its manifest's `env`.

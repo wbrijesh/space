@@ -34,6 +34,7 @@ async fn claude_agent_starts_from_the_bun_executable() {
         secrets: Secrets::new("dev.brijesh.space.test.space-ts"),
         held_recheck: Duration::from_secs(60),
         space_dir: None,
+        keeper: None,
     };
     let (host, _events) = Host::new(tokio::runtime::Handle::current(), options);
     let agent = tokio::time::timeout(Duration::from_secs(30), host.start_agent("claude")).await.expect("starts in time").unwrap();

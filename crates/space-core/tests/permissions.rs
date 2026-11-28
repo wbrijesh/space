@@ -29,6 +29,7 @@ fn host(bundled: &Path, user: Option<PathBuf>, space_dir: Option<PathBuf>) -> (H
         secrets: Secrets::new(TEST_KEYCHAIN),
         held_recheck: Duration::from_secs(60),
         space_dir,
+        keeper: None,
     };
     Host::new(tokio::runtime::Handle::current(), options)
 }
