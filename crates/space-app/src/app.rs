@@ -28,7 +28,7 @@ use space_core::{
 use space_ui::components::settings::FieldCheck;
 
 pub use space_ui::actions::{
-    CloseSettings, MarkDone, CyclePermissionMode, FocusComposer, NextThread, PreviousThread, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious, UndoRewind, CompleteCommand,
+    CloseSettings, MarkDone, DeleteThread, CyclePermissionMode, FocusComposer, NextThread, PreviousThread, GoBack, GoForward, NewThread, OpenSettings, Quit, RecallNext, RecallPrevious, UndoRewind, CompleteCommand,
     ScrollToBottom,
     ToggleSidebar,
     ToggleTrajectory, OpenInLastApp,
@@ -187,6 +187,12 @@ pub fn run(host: Host, events: EventReceiver, launch: Launch) {
             KeyBinding::new("cmd-shift-enter", MaximizePane, None),
             KeyBinding::new("cmd-shift-enter", MaximizePane, Some("Terminal")),
             KeyBinding::new("cmd-w", MarkDone, None),
+            // ⌘⌫ deletes the done thread being read. Text fields keep their own ⌘⌫ (delete to
+            // the line's start): bound after, at the same depth, so they win; an empty composer
+            // passes it on (`view.rs`). The terminal sends it to the shell.
+            KeyBinding::new("cmd-backspace", DeleteThread, None),
+            KeyBinding::new("cmd-backspace", input::DeleteToBeginningOfLine, Some("Input")),
+            KeyBinding::new("cmd-backspace", gpui::NoAction, Some("Terminal")),
             KeyBinding::new("cmd-r", RenameThread, None),
             KeyBinding::new("cmd-alt-down", NextThread, None),
             KeyBinding::new("cmd-alt-up", PreviousThread, None),

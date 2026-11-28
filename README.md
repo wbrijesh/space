@@ -20,7 +20,7 @@ cask clears macOS's download mark so it opens normally.
 
 | | |
 |---|---|
-| **Threads** | ⌘N new · ⌘W close · ⌘R rename · ⇧⌘P pin / unpin (or right-click a row) · ⌘O open its folder in the app used last · ⌘[ / ⌘] back / forward · ⌘⌥↑ / ⌘⌥↓ previous / next · hold ⌘ and type a row's number to jump (the numbers show after 0.3 s of holding) · ⌘B sidebar |
+| **Threads** | ⌘N new · ⌘W close · ⌘R rename · ⇧⌘P pin / unpin (or right-click a row) · ⌘⌫ delete the done thread you're reading · ⌘O open its folder in the app used last · ⌘[ / ⌘] back / forward · ⌘⌥↑ / ⌘⌥↓ previous / next · hold ⌘ and type a row's number to jump (the numbers show after 0.3 s of holding) · ⌘B sidebar |
 | **Composer** | ⏎ send · ⇧⏎ newline · ↑ / ↓ your earlier messages · `/` the agent's commands (↑ / ↓ pick, Tab completes, ⏎ runs, Esc closes) · ⌘L focus · Esc stops the agent · a paste over 4,096 characters becomes a "Pasted text" attachment (click to read it) · a quote from the transcript sits above the input (× removes it) |
 | **While the agent works** | ⏎ queues a message for when it's done · ⌘⏎ sends it into the running turn, after the current step |
 | **Transcript** | ⌘F find · ⌘G / ⇧⌘G next / previous · ⌘↓ scroll to the bottom · ⇧⌘T the trajectory (Esc back to the chat) · select text in a message, then **Quote** to answer it (the agent gets it as a blockquote) |
@@ -36,6 +36,7 @@ cask clears macOS's download mark so it opens normally.
   there opens it to read, and it stays done; its row's restore button reopens it, and so does
   sending a message in it. Done threads are grouped by when they were done (Today, Yesterday, Previous 7 Days,
   Previous 30 Days, then by month and year), and deleted after 30 days (Settings ▸ Threads: 7, 30 or 90 days, or never).
+  To delete one sooner, for good, right-click its row ▸ Delete Thread…, or press ⌘⌫ while reading it; Space asks first.
 - **Titles** come from the agent's model after your first message. A name you give (⌘R) stays.
 - **The sidebar** lists pinned threads first, then the rest, each newest first (by when it was
   made: writing in one doesn't move it, so ⌘1–9 keep their rows), the rest under the same date

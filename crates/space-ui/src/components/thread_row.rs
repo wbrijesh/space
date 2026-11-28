@@ -1,7 +1,7 @@
 //! Sidebar thread row: one line with the thread title and an activity indicator; on hover an
 //! archive button marks it done. Right-click for Pin, Rename Thread… and Mark as Done. A done
 //! thread's row (under the Done header) is dimmer: a click opens it to read, and on hover a
-//! restore button reopens it.
+//! restore button reopens it; right-click for Reopen Thread and Delete Thread….
 
 use gpui::assets::IconName;
 use gpui::component::Icon;
@@ -13,7 +13,7 @@ use super::menu::{ContextItem, context_menu};
 use super::tip::TipExt as _;
 use super::widgets::{icon_button, status_dot};
 use crate::ClickHandler;
-use crate::actions::{MarkDone, RenameThread, TogglePinThread};
+use crate::actions::{DeleteThread, MarkDone, RenameThread, TogglePinThread};
 use crate::theme::{color, radius, size, text};
 
 /// What the right edge of a row shows.
@@ -68,6 +68,8 @@ pub struct ThreadRow {
     on_done: Option<ClickHandler>,
     /// A done thread's: reopen it (the restore button on hover).
     on_reopen: Option<ClickHandler>,
+    /// A done thread's: delete it for good (its menu).
+    on_delete: Option<ClickHandler>,
     on_rename: Option<ClickHandler>,
     /// Pin or unpin it: whether it's pinned, whether it can be (it's saved), and the handler.
     on_pin: Option<(bool, bool, ClickHandler)>,
@@ -88,6 +90,7 @@ impl ThreadRow {
             on_click: None,
             on_done: None,
             on_reopen: None,
+            on_delete: None,
             on_rename: None,
             on_pin: None,
             shortcut: None,
@@ -105,7 +108,7 @@ impl ThreadRow {
         self
     }
 
-    /// A done thread's row, listed under Done (a click opens it to read; no menu).
+    /// A done thread's row, listed under Done (a click opens it to read).
     pub fn done(mut self, done: bool) -> Self {
         self.done = done;
         self
@@ -155,6 +158,12 @@ impl ThreadRow {
     /// archive button).
     pub fn on_reopen(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
         self.on_reopen = Some(std::rc::Rc::new(f));
+        self
+    }
+
+    /// A done row's: delete it for good, from its menu's Delete Thread… (which asks first).
+    pub fn on_delete(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
+        self.on_delete = Some(std::rc::Rc::new(f));
         self
     }
 }
@@ -246,7 +255,7 @@ impl RenderOnce for ThreadRow {
             .children(done)
             .children(self.shortcut.map(|(n, matches)| shortcut_badge(n, matches)))
             .when_some(self.on_click, |d, f| d.on_click(move |e, w, cx| f(e, w, cx)));
-        let items = row_menu(self.on_pin, self.on_rename, self.on_done);
+        let items = if self.done { done_menu(self.on_reopen, self.on_delete) } else { row_menu(self.on_pin, self.on_rename, self.on_done) };
         if items.is_empty() {
             return row.into_any_element();
         }
@@ -309,6 +318,22 @@ fn row_menu(on_pin: Option<(bool, bool, ClickHandler)>, on_rename: Option<ClickH
     }
     if let Some(f) = on_done {
         items.push(ContextItem::new("Mark as Done", pick(f)).shortcut(&MarkDone));
+    }
+    items
+}
+
+/// A done row's right-click menu: Reopen Thread, then, apart and in red, Delete Thread….
+fn done_menu(on_reopen: Option<ClickHandler>, on_delete: Option<ClickHandler>) -> Vec<ContextItem> {
+    let pick = |f: ClickHandler| move |w: &mut Window, cx: &mut App| f(&ClickEvent::default(), w, cx);
+    let mut items = Vec::new();
+    if let Some(f) = on_reopen {
+        items.push(ContextItem::new("Reopen Thread", pick(f)));
+    }
+    if let Some(f) = on_delete {
+        if !items.is_empty() {
+            items.push(ContextItem::separator());
+        }
+        items.push(ContextItem::new("Delete Thread…", pick(f)).shortcut(&DeleteThread).danger());
     }
     items
 }
@@ -409,6 +434,17 @@ pub fn previews() -> Vec<crate::preview::ComponentPreview> {
                         .gap_1()
                         .child(ThreadRow::new("menu-row", "Fix the failing smoke test in space-core").force_hover(true))
                         .child(div().pl_8().child(super::menu::context_menu_preview(&row_menu(Some((false, true, noop.clone())), Some(noop.clone()), Some(noop)), Some(1), window, cx)))
+                        .into_any_element()
+                })
+                .width(size::SIDEBAR_W - px(20.)),
+                Example::new("done, right-click menu", |window, cx| {
+                    let noop: ClickHandler = std::rc::Rc::new(|_, _, _| {});
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(ThreadRow::new("done-menu-row", "Terminal plugin with alacritty").done(true).force_hover(true).on_reopen(|_, _, _| {}))
+                        .child(div().pl_8().child(super::menu::context_menu_preview(&done_menu(Some(noop.clone()), Some(noop)), Some(2), window, cx)))
                         .into_any_element()
                 })
                 .width(size::SIDEBAR_W - px(20.)),

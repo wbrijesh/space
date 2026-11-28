@@ -36,7 +36,7 @@ use space_ui::theme::{color, size, text};
 use space_ui::ClickHandler;
 
 use crate::app::{
-    CloseSettings, ClosePaneTab, MarkDone, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizePane, NewPaneTab, NewThread,
+    CloseSettings, ClosePaneTab, DeleteThread, MarkDone, CyclePermissionMode, NextThread, PreviousThread, FocusComposer, GoBack, GoForward, MaximizePane, NewPaneTab, NewThread,
     NextPaneTab, OpenSettings, PreviousPaneTab, Quit, ScrollToBottom, SpaceApp, ToggleSidebar, ToggleRightPane, ShowTerminal, ShowFiles, ShowSideChat, ShowChanges, ToggleTrajectory,
     OpenFind, FindNext, FindPrevious, CloseFind, RenameThread, TogglePinThread, UndoRewind,
 };
@@ -173,6 +173,7 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .track_focus(&app.focus)
         .on_action(cx.listener(|this, _: &NewThread, window, cx| this.new_thread(None, window, cx)))
         .on_action(cx.listener(|this, _: &MarkDone, window, cx| this.mark_current_done(window, cx)))
+        .on_action(cx.listener(|this, _: &DeleteThread, window, cx| this.delete_current_done(window, cx)))
         .on_action(cx.listener(|this, _: &RenameThread, window, cx| this.rename_current_thread(window, cx)))
         .on_action(cx.listener(|this, _: &TogglePinThread, _, cx| this.toggle_pin_current(cx)))
         .on_action(cx.listener(|this, _: &space_ui::actions::OpenInLastApp, _, cx| this.open_thread_folder(None, cx)))
@@ -280,6 +281,14 @@ pub fn render_root(app: &mut SpaceApp, window: &mut Window, cx: &mut Context<Spa
         .capture_action(cx.listener(|this, _: &gpui::component::input::Undo, window, cx| {
             if this.input.read(cx).focus_handle(cx).is_focused(window) && this.undo_key(true, window, cx) {
                 cx.stop_propagation();
+            }
+        }))
+        // ⌘⌫ in the composer deletes the done thread being read while nothing is typed (with
+        // text, it deletes to the line's start, as in any text field).
+        .capture_action(cx.listener(|this, _: &gpui::component::input::DeleteToBeginningOfLine, window, cx| {
+            if this.input.read(cx).focus_handle(cx).is_focused(window) && this.input.read(cx).value().is_empty() && this.reading_done().is_some() {
+                cx.stop_propagation();
+                this.delete_current_done(window, cx);
             }
         }))
         .on_action(cx.listener(|this, _: &UndoRewind, window, cx| {
@@ -485,7 +494,7 @@ fn sidebar(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> impl IntoElement {
     // when each was marked done. A click opens one to read (it stays here, selected); its
     // restore button reopens it. None (or threads not saved): no header.
     let done = app.done_sections();
-    let reading = app.current().filter(|t| t.done_ms.is_some() && !app.show_settings).map(|t| t.id.clone());
+    let reading = app.reading_done();
     if !done.is_empty() {
         rows.push(
             done_header(done.len(), app.done_open, listed.is_empty())
@@ -494,12 +503,13 @@ fn sidebar(app: &SpaceApp, cx: &mut Context<SpaceApp>) -> impl IntoElement {
         );
         if app.done_open {
             rows.extend(done.into_iter().enumerate().map(|(ix, (meta, header))| {
-                let (id, reopen) = (meta.id.clone(), meta.id.clone());
+                let (id, reopen, delete) = (meta.id.clone(), meta.id.clone(), meta.id.clone());
                 let row = ThreadRow::new(SharedString::from(format!("done-{}", meta.id)), meta.title.clone())
                     .done(true)
                     .selected(reading.as_deref() == Some(meta.id.as_str()))
                     .on_click(cx.listener(move |this, _, w, cx| this.view_done_thread(&id, w, cx)))
-                    .on_reopen(cx.listener(move |this, _, w, cx| this.reopen_thread(&reopen, w, cx)));
+                    .on_reopen(cx.listener(move |this, _, w, cx| this.reopen_thread(&reopen, w, cx)))
+                    .on_delete(cx.listener(move |this, _, w, cx| this.delete_done(delete.clone(), w, cx)));
                 match header {
                     Some(label) => div().child(section_header(label, ix == 0)).child(row).into_any_element(),
                     None => row.into_any_element(),

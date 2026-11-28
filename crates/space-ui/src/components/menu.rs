@@ -4,7 +4,8 @@
 //! same. The app keeps which menu is open; a click outside or Esc closes it.
 //!
 //! [`context_menu`] is the right-click menu, in the same card and rows, with each item's
-//! shortcut on the right as macOS menus show it.
+//! shortcut on the right as macOS menus show it, separators between groups, and a destructive
+//! item's label in red.
 
 use std::rc::Rc;
 
@@ -146,6 +147,10 @@ pub struct ContextItem {
     on_pick: PickHandler,
     /// Shown dimmed, and picking it does nothing.
     disabled: bool,
+    /// Destructive (Delete…): its label in red.
+    danger: bool,
+    /// Not an item: a line between groups of them.
+    separator: bool,
 }
 
 /// What picking a context menu item does.
@@ -153,7 +158,18 @@ pub type PickHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
 impl ContextItem {
     pub fn new(label: impl Into<SharedString>, on_pick: impl Fn(&mut Window, &mut App) + 'static) -> Self {
-        Self { label: label.into(), action: None, on_pick: Rc::new(on_pick), disabled: false }
+        Self { label: label.into(), action: None, on_pick: Rc::new(on_pick), disabled: false, danger: false, separator: false }
+    }
+
+    /// A line between groups of items.
+    pub fn separator() -> Self {
+        Self { separator: true, ..Self::new("", |_, _| {}) }
+    }
+
+    /// A destructive item (Delete…): its label in red.
+    pub fn danger(mut self) -> Self {
+        self.danger = true;
+        self
     }
 
     /// Dim the item and make it inert (it can't apply here).
@@ -224,6 +240,9 @@ fn context_menu_card(
     cx: &mut App,
 ) -> Div {
     let rows = items.iter().enumerate().map(|(ix, item)| {
+        if item.separator {
+            return separator().into_any_element();
+        }
         // macOS spaces a shortcut's glyphs apart (⌘ R), which reads easier at a small size.
         let keys = item.action.as_ref().and_then(|a| shortcut_label(a.as_ref(), window));
         let (pick, state) = (item.on_pick.clone(), state.clone());
@@ -243,7 +262,8 @@ fn context_menu_card(
                 if item.disabled {
                     d.text_color(color::text_3()).cursor_default()
                 } else {
-                    d.cursor_pointer()
+                    d.when(item.danger, |d| d.text_color(color::red()))
+                        .cursor_pointer()
                         .hover(|s| s.bg(color::menu_highlight()))
                         .when(highlight == Some(ix), |d| d.bg(color::menu_highlight()))
                         .on_click(move |_, window, cx| {

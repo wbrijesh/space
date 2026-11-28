@@ -5,6 +5,7 @@ gpui::actions!(
     [
         NewThread,
         MarkDone,
+        DeleteThread,
         RenameThread,
         TogglePinThread,
         OpenInLastApp,

@@ -411,6 +411,65 @@ impl SpaceApp {
         Some(key)
     }
 
+    /// The id of the done thread open to read, if that's what's shown.
+    pub(crate) fn reading_done(&self) -> Option<String> {
+        self.current().filter(|t| t.done_ms.is_some() && !self.show_settings).map(|t| t.id.clone())
+    }
+
+    /// ⌘⌫: delete the done thread being read (nothing anywhere else).
+    pub(crate) fn delete_current_done(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.reading_done() {
+            self.delete_done(id, window, cx);
+        }
+    }
+
+    /// A done row's menu, or ⌘⌫ while reading it: delete done thread `id` for good, once you
+    /// confirm (there's no undo).
+    pub(crate) fn delete_done(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(meta) = self.done_threads.iter().find(|m| m.id == id) else { return };
+        let title = &meta.title;
+        let answer = window.prompt(PromptLevel::Warning, &format!("Delete \u{201c}{title}\u{201d}?"), Some("This can't be undone."), &["Delete", "Cancel"], cx);
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await == Ok(0) {
+                let _ = this.update_in(cx, |this, window, cx| this.delete_done_now(&id, window, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// Delete done thread `id`: off the Done list, its saved files (and its side chat's) gone.
+    /// Read when it went, it's left as any thread being read is, for the thread you came from
+    /// (or the last one listed, or a new one).
+    pub(crate) fn delete_done_now(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ix) = self.done_threads.iter().position(|m| m.id == id) else { return };
+        self.done_threads.remove(ix);
+        // Marked done just now: nothing is left to undo.
+        if self.rewind.done.as_ref().is_some_and(|d| d.id == id) {
+            self.rewind.done = None;
+            self.rewind.notice = self.rewind.notice.take().filter(|n| n.kind != crate::rewind::NoticeKind::Done);
+        }
+        if let Some(key) = self.threads.iter().find(|t| t.id == id).map(|t| t.key) {
+            self.drop_thread(key, cx);
+            if self.selected.is_none() {
+                // The thread you came from (taken off Back, so Back doesn't lead to it again),
+                // else the last one listed, else a new one.
+                let mut back = None;
+                while let Some(k) = self.back.pop() {
+                    if self.thread(k).is_some() {
+                        back = Some(k);
+                        break;
+                    }
+                }
+                match back.or_else(|| self.threads.last().map(|t| t.key)) {
+                    Some(next) => self.select_inner(next, false, window, cx),
+                    None => self.new_thread(None, window, cx),
+                }
+            }
+        }
+        self.remove_saved(id.to_string(), cx);
+        cx.notify();
+    }
+
     /// The composer's placeholder says sending reopens the thread while a done one is open to read.
     pub(crate) fn sync_composer_placeholder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let reopens = self.current().is_some_and(|t| t.done_ms.is_some());
